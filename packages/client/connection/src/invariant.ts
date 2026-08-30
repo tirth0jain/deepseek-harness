@@ -15,11 +15,11 @@ export const name = 'client-connection-invariant'
 export const inject = ['invariants']
 
 /**
- * No runtime invariant: browser-session verification reads the credential
- * record asynchronously at the request that authorizes work, while the
- * credentials companion owns record commit-event lifetime. Stream/reconnect
- * sequencing and rpcId round-trip discipline are exercised directly by
- * behavior specs, and route register/dispose symmetry is
+ * No runtime invariant: browser-session authentication is disabled in this
+ * fork, so there is no credential record to verify; the Host/Origin trust
+ * fence is pure request-header policy exercised directly by behavior specs.
+ * Stream/reconnect sequencing and rpcId round-trip discipline are exercised
+ * directly by behavior specs, and route register/dispose symmetry is
  * audited by the webserver companion.
  */
 const install: InvariantInstaller = () => {}

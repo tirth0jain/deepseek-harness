@@ -5,7 +5,7 @@
  * the built frontend dist (workspace knowledge of this bundle, never user
  * config), mounts the `frontend-static` fallback owner over it, registers the
  * harness-source and web-surface prompt sections, the bash-visible web runtime
- * variable, the process-token URL line, and the default-browser handoff. The
+ * variable, the clean URL line, and the default-browser handoff. The
  * model and shell retain the clean URL. App command-line values arrive through
  * the `webStartup` service expressions in the bundle patch.
  * @module @deepseek-ai/dsh-web-app
@@ -268,7 +268,8 @@ export function apply(ctx: Context, config: Config): void {
       const announceReady = (): void => {
         if (ANNOUNCED_ROOTS.has(connectionCtx.root)) return
         const webUrl = localWebUrl(connectionCtx)
-        const authenticatedUrl = connectionCtx.connection.authenticatedUrl(webUrl)
+        // Browser authentication is disabled: the URL needs no launch token.
+        const readyUrl = connectionCtx.connection.authenticatedUrl(webUrl)
         // Reuse the exact LAN snapshot provided to the /api trust fence.
         const lanCandidate = runtime.lanAddresses[0]
         const port = connectionCtx.webServer.port
@@ -277,11 +278,11 @@ export function apply(ctx: Context, config: Config): void {
           : connectionCtx.connection.authenticatedUrl(`http://${lanCandidate}:${String(port)}`)
         ANNOUNCED_ROOTS.add(connectionCtx.root)
         if (config.printUrl) {
-          console.log(`dsh web: ${authenticatedUrl}${lanUrl === undefined ? '' : ` (LAN: ${lanUrl})`}`)
+          console.log(`dsh web: ${readyUrl}${lanUrl === undefined ? '' : ` (LAN: ${lanUrl})`}`)
         }
         if (handoffBrowser) {
           console.log('dsh web: opening the default browser; pass --no-open to disable')
-          void internals.openBrowser(authenticatedUrl).catch((error: unknown) => {
+          void internals.openBrowser(readyUrl).catch((error: unknown) => {
             const reason = error instanceof Error ? error.message : String(error)
             console.error(`web-app: could not open the default browser because ${reason}; use the dsh web URL printed at startup`)
           })

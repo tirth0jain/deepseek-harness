@@ -82,9 +82,9 @@ export interface ConnectionTrustRequest {
 }
 
 /** HTTP status returned before dispatch, or undefined when the request may proceed. */
-export type ConnectionRequestRejection = 401 | 403 | undefined
+export type ConnectionRequestRejection = 403 | undefined
 
-/** Root/index request facts used by the browser-token exchange. */
+/** Root/index request facts used by the index-serve gate. */
 export interface ConnectionIndexRequest extends ConnectionTrustRequest {
   readonly method?: string | undefined
   readonly url?: string | undefined
@@ -166,20 +166,21 @@ export interface HostConnectionHandle {
   /**
    * Compose exact Fetch routes and the shared-channel RPC interceptor.
    * @param channel - shared channel mounted by Connection.
-   * @returns Fetch handler for trusted, authenticated requests.
+   * @returns Fetch handler for trusted requests.
    */
   createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
 
   /**
-   * Apply Connection's Host/Origin checks and browser authentication to
-   * another Web route.
+   * Apply Connection's Host/Origin checks to another Web route. Browser
+   * authentication is disabled, so only the fence can reject.
    * @param request - request headers from the HTTP or upgrade request.
    * @returns rejection status, or undefined when the route may accept the request.
    */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection
 
   /**
-   * Authenticate one frontend index request, owning a token redirect or 401.
+   * Decide whether one frontend index request may be served. Always true:
+   * browser authentication is disabled.
    * @param request - root or configured-index HTTP request.
    * @param response - response owned when the result is false.
    * @returns true only when the frontend may serve index.html.
@@ -187,9 +188,9 @@ export interface HostConnectionHandle {
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean
 
   /**
-   * Add the fresh process token to an ordinary Web application URL.
+   * Return the Web application URL unchanged. No launch token is minted.
    * @param baseUrl - clean canonical browser origin.
-   * @returns root URL accepted by {@link authorizeIndex} for initial login.
+   * @returns the same URL, accepted by {@link authorizeIndex} for index serving.
    */
   authenticatedUrl(baseUrl: string): string
 }

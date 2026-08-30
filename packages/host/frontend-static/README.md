@@ -41,7 +41,7 @@ Compose this plugin in a browser-facing host that serves the built Web shell: it
 
 Requests are served from the dist root (the directory containing `distIndex`). The dist root and the configured index path render `index.html` with HTTP 200; any other existing file is served directly with its MIME type, and unknown extensions ship as `application/octet-stream`. A path that resolves outside the root is rejected with 403, so a crafted path cannot read files above the dist. An absent or non-file target inside the dist root — a missing file, a directory, or a missing configured index — returns an empty 404. Non-GET/HEAD requests without a matching named route are answered 405. Every successful index response is rendered through the webserver's `renderIndex`, so the boot manifest reaches the page on `/` and on the configured index path.
 
-Root and configured-index responses call `ctx.connection.authorizeIndex` before reading HTML. A valid process token receives a 303 redirect plus the persistent browser cookie; an existing valid cookie serves the index; every other index request receives the Connection-owned 401 response. Non-index files remain public static assets. Connection owns the token, cookie, expiry, and signing-record semantics.
+Root and configured-index responses call `ctx.connection.authorizeIndex` before reading HTML. In this fork browser authentication is disabled, so that gate is a no-op: every index request is served, and the root URL needs no token. Non-index files remain public static assets. The index gate's shape is owned by Connection.
 
 ### Observable failures
 

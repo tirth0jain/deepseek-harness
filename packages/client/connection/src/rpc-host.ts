@@ -64,7 +64,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * Provide the Host half over the active HTTP server.
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
-   * @param browserAuth - process token and persistent browser-session owner.
+   * @param browserAuth - no-op authenticator retained for the HostConnectionHandle shape.
    */
   constructor(
     ctx: Context,
@@ -92,18 +92,18 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
   }
 
-  /** Apply the configured Host/Origin fence, then browser authentication. */
+  /** Apply the configured Host/Origin fence; browser authentication is disabled. */
   requestRejection(request: ConnectionTrustRequest): ConnectionRequestRejection {
     if (!isTrustedApiRequest(request, this.trustedHosts)) return 403
-    return this.browserAuth.isAuthenticated(request) ? undefined : 401
+    return undefined
   }
 
-  /** Authenticate an index request through the process-token exchange or cookie. */
+  /** Always admit the frontend index: browser authentication is disabled. */
   authorizeIndex(request: ConnectionIndexRequest, response: ConnectionIndexResponse): boolean {
     return this.browserAuth.authorizeIndex(request, response)
   }
 
-  /** Add this process's launch token to the clean application URL. */
+  /** Return the clean application URL unchanged: no launch token is minted. */
   authenticatedUrl(baseUrl: string): string {
     return this.browserAuth.authenticatedUrl(baseUrl)
   }
@@ -163,7 +163,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
         const rejection = this.requestRejection(req)
         if (rejection !== undefined) {
           res.writeHead(rejection)
-          res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+          res.end('forbidden')
           return
         }
         await bridge(req, res, fetchHandler)

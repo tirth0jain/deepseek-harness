@@ -356,15 +356,6 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
       expect(web.stdout).toContain('--port <port>')
       expect(web.stdout).not.toContain('dsh web: http://')
 
-      const wildcardHost = await runBuiltBin(['web', '--host', '0.0.0.0'], {
-        DSH_HOME: home,
-        DSH_TELEMETRY_DISABLED: '1',
-      })
-      expect(wildcardHost.code).toBe(1)
-      expect(wildcardHost.stdout).toBe('')
-      expect(wildcardHost.stderr).toContain('--host 0.0.0.0 permitted for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
-      expect(wildcardHost.stderr).not.toContain('dsh web: http://')
-
       const headlessHelp = await runBuiltBin(['--profile', 'headless', '--help'], {
         DSH_HOME: home,
         DSH_TELEMETRY_DISABLED: '1',
@@ -399,6 +390,47 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
       rmSync(home, { recursive: true, force: true })
     }
   }, SPAWN_TIMEOUT_MS * 3 + 30_000)
+
+  it('binds the web profile to 0.0.0.0 and publishes a clean URL without any launch token', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'dsh-built-web-wildcard-'))
+    const child = execa(process.execPath, [dshBin, '--profile', 'web', '--host', '0.0.0.0', '--port', '0', '--no-open'], {
+      cwd: home,
+      reject: false,
+      timeout: SPAWN_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+      env: {
+        ...process.env,
+        DSH_HOME: home,
+        DSH_TELEMETRY_DISABLED: '1',
+      },
+      extendEnv: false,
+    })
+    const stdoutLines = createInterface({ input: child.stdout, crlfDelay: Infinity })[Symbol.asyncIterator]()
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+    try {
+      // The web profile prints its URL only after the Loader tree settles.
+      let line: IteratorResult<string>
+      for (;;) {
+        line = await stdoutLines.next()
+        if (line.done) throw new Error(`web profile stdout closed before the URL line; stderr=${stderr}`)
+        if (line.value.includes('dsh web: http://')) break
+      }
+      const url = line.value.match(/dsh web: (http:\/\/[^ )]+)/u)?.[1]
+      if (url === undefined) throw new Error(`web profile printed an unparsable URL line: ${line.value}`)
+      expect(url).not.toContain('?token=')
+      const lanUrl = line.value.match(/LAN: (http:\/\/[^)]+)/u)?.[1]
+      if (lanUrl !== undefined) expect(lanUrl).not.toContain('?token=')
+      // The loopback URL must serve the index without any credential exchange.
+      const response = await fetch(url)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/html')
+    } finally {
+      child.kill('SIGKILL')
+      await child.catch(() => {})
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, SPAWN_TIMEOUT_MS + 30_000)
 
   it('reports SDK startup failure when stdin reaches EOF first', async () => {
     const home = mkdtempSync(join(tmpdir(), 'dsh-built-sdk-startup-failure-'))

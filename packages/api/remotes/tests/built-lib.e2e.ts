@@ -61,7 +61,6 @@ describe.skipIf(!requiredArtifacts)('Goal Remote built LIB chain', () => {
       const { Session, SessionId } = await import(urls.session)
 
       const routes = []
-      const credentialRecords = new Map()
       const host = new Context()
       host.provide('webServer', {
         register(route) {
@@ -70,15 +69,6 @@ describe.skipIf(!requiredArtifacts)('Goal Remote built LIB chain', () => {
         },
         tapIndex() { return () => {} },
         port: 0,
-      })
-      host.provide('credentials', {
-        readRecord(key) { return Promise.resolve(credentialRecords.get(key)) },
-        async modifyRecord(key, mutate) {
-          const current = credentialRecords.get(key)
-          const next = await mutate(current)
-          if (next !== undefined) credentialRecords.set(key, next)
-          return next ?? current
-        },
       })
       await host.plugin({ inject: connectionHost.inject, apply: connectionHost.apply })
       await host.plugin(TypertRegistry)
@@ -117,10 +107,10 @@ describe.skipIf(!requiredArtifacts)('Goal Remote built LIB chain', () => {
       }
       const server = createServer((request, response) => {
         if ((request.url ?? '/').startsWith('/?')) {
-          if (host.connection.authorizeIndex(request, response)) {
-            response.writeHead(200, { 'content-type': 'text/html' })
-            response.end('<body>shell</body>')
-          }
+          // Browser authentication is disabled: the index serves without a
+          // token exchange, so any root path is the shell.
+          response.writeHead(200, { 'content-type': 'text/html' })
+          response.end('<body>shell</body>')
           return
         }
         void routes[0].handler(request, response)
@@ -129,16 +119,6 @@ describe.skipIf(!requiredArtifacts)('Goal Remote built LIB chain', () => {
       const address = server.address()
       if (address === null || typeof address === 'string') throw new Error('HTTP server has no TCP address')
       const origin = 'http://127.0.0.1:' + String(address.port)
-      const login = await fetch(host.connection.authenticatedUrl(origin), { redirect: 'manual' })
-      const setCookie = login.headers.get('set-cookie')
-      if (login.status !== 303 || setCookie === null) throw new Error('browser token exchange failed')
-      const cookie = setCookie.split(';', 1)[0]
-      const hostFetch = globalThis.fetch
-      globalThis.fetch = (input, init = {}) => {
-        const headers = new Headers(init.headers)
-        headers.set('cookie', cookie)
-        return hostFetch(input, { ...init, headers })
-      }
 
       const handoffs = new Map()
       globalThis.window = {
