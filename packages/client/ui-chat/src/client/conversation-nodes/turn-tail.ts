@@ -5,7 +5,7 @@ import type {
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import { isAppendSurfaceEvent } from '@deepseek-ai/dsh-session/surface'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
-import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
+import { deriveApproximateTurnTokenUsage, deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import type {
   AssistantChatData, FinalAssistantChatData, TurnTailChatData,
 } from '../contract/chat-nodes.ts'
@@ -160,9 +160,16 @@ function tailData(context: ConversationNodeContext<TurnTailState>): TurnTailChat
     }
   }
   const metrics = deriveTurnMetrics(finalized.map(candidate => candidate.finalNode)).get(end.event.data.turn)
+  // Strict exact accounting first; when the lifecycle cannot be proven but the
+  // turn still reported usage samples, fall back to a best-effort aggregate
+  // marked approximate so the tokens stay visible instead of vanishing.
   const tokenUsage = context.start?.event.type === 'turn/start'
     ? deriveTurnTokenUsage(context.matches.map(match => match.event).filter(isSessionEvent))
     : undefined
+  const approximateTokenUsage = tokenUsage === undefined && context.start?.event.type === 'turn/start'
+    ? deriveApproximateTurnTokenUsage(context.matches.map(match => match.event).filter(isSessionEvent))
+    : undefined
+  const resolvedTokenUsage = tokenUsage ?? approximateTokenUsage
   return {
     turn: end.event.data.turn,
     seq: end.event.seq,
@@ -171,7 +178,7 @@ function tailData(context: ConversationNodeContext<TurnTailState>): TurnTailChat
     branchUnavailable: closing === null || latestTranscriptSeq !== closing.finalNode.seq,
     ...metrics?.ttftMs === undefined ? {} : { ttftMs: metrics.ttftMs },
     ...metrics?.tokensPerSecond === undefined ? {} : { tokensPerSecond: metrics.tokensPerSecond },
-    ...tokenUsage === undefined ? {} : { tokenUsage },
+    ...resolvedTokenUsage === undefined ? {} : { tokenUsage: resolvedTokenUsage },
   }
 }
 

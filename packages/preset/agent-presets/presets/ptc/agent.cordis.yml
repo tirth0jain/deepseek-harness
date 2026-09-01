@@ -250,10 +250,14 @@
     allowParallelInProgress: true
 
 # The `web` service and its search provider stay in the host composition; only
-# the model-facing tool is per-session.
+# the model-facing tool is per-session. `search` is disabled: the shipped
+# DeepSeek search backend is not usable on this deployment (no DEEPSEEK_API_KEY),
+# and web search runs through the Bright Data MCP tools instead. `fetch` stays
+# on for direct URL retrieval.
 - id: tool-web
   name: '@deepseek-ai/dsh-tool-web'
   config:
+    search: false
     fetch: true
     searchTimeoutMs: 60000
 

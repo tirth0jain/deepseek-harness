@@ -3,18 +3,31 @@ import { describe, expect, it } from 'vitest'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { apply as applyHost } from '../src/index.ts'
 import { apply, inject } from '../src/client/index.ts'
+import { AttachButton } from '../src/client/AttachButton.tsx'
 import { ComposerAttachments } from '../src/client/ComposerAttachments.tsx'
 import { MessageImages } from '../src/client/MessageImages.tsx'
 
 async function bench() {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
+  // The attach entry's inject resolves the session scope lazily; a stub that
+  // answers no scope keeps the entry registrable without a full session tree.
+  ctx.provide('sessions', { scope: () => undefined } as never)
   ctx.slots.register({
     name: 'root',
     children: {
+      'conversation.composer.bar': { kind: 'single', scope: 'session-maybe' },
       'conversation.input.attachments': { kind: 'single', scope: 'session-maybe' },
       'conversation.message.images': { kind: 'single', scope: 'session' },
       'conversation.trajectory.images': { kind: 'single', scope: 'session' },
+    },
+  } as never, () => null)
+  // The composer bar owns the tool-row seats (left/right), mirroring the
+  // ui-conversation registration.
+  ctx.slots.register({
+    name: 'conversation.composer.bar',
+    children: {
+      'conversation.input.left': { kind: 'list', scope: 'session' },
     },
   } as never, () => null)
   const fiber = ctx.plugin({ inject: [...inject], apply })
@@ -29,7 +42,11 @@ describe('attachment plugin', () => {
 
   it('registers all entries and removes them with the plugin fiber', async () => {
     const { ctx, fiber } = await bench()
-    expect(inject).toEqual(['slots'])
+    expect(inject).toEqual(['slots', 'sessions'])
+    expect(ctx.slots.entries('conversation.input.left')).toMatchObject([{
+      locale: 'conversation',
+      component: AttachButton,
+    }])
     expect(ctx.slots.entries('conversation.input.attachments')).toMatchObject([{
       locale: 'conversation',
       component: ComposerAttachments,
@@ -45,6 +62,7 @@ describe('attachment plugin', () => {
 
     await fiber.dispose()
 
+    expect(ctx.slots.entries('conversation.input.left')).toHaveLength(0)
     expect(ctx.slots.entries('conversation.input.attachments')).toHaveLength(0)
     expect(ctx.slots.entries('conversation.message.images')).toHaveLength(0)
     expect(ctx.slots.entries('conversation.trajectory.images')).toHaveLength(0)

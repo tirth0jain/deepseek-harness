@@ -83,8 +83,6 @@ interface BenchOptions {
   command?: (line: string) => Promise<boolean>
   accessory?: React.ReactNode
   overlay?: React.ReactNode
-  leftItems?: React.ReactNode
-  rightItems?: React.ReactNode
   attachments?: readonly ComposerAttachment[]
   addImages?: (files: readonly File[]) => string | null
   commandMenuOpen?: boolean
@@ -197,8 +195,6 @@ function bench(over?: BenchOptions) {
     ...(over?.placeholder !== undefined ? { placeholder: over.placeholder } : {}),
     ...(over?.accessory !== undefined ? { accessory: over.accessory } : {}),
     ...(over?.overlay !== undefined ? { overlay: over.overlay } : {}),
-    ...(over?.leftItems !== undefined ? { leftItems: over.leftItems } : {}),
-    ...(over?.rightItems !== undefined ? { rightItems: over.rightItems } : {}),
   }
   const view = render(<InputBar {...props} />)
   const textarea = view.container.querySelector<HTMLDivElement>('[data-composer-input]')!
@@ -1279,15 +1275,15 @@ describe('strips and variants', () => {
     expect(view.container.querySelector('[class*="hero"]')).not.toBeNull()
   })
 
-  it('renders overlay anchor and left/right slot items', () => {
-    const { view } = bench({
+  it('renders the overlay anchor and dispatches the tool-row seats', () => {
+    const { view, slotCalls } = bench({
       overlay: <i data-testid="ov" />,
-      leftItems: <i data-testid="li" />,
-      rightItems: <i data-testid="ri" />,
     })
     expect(view.getByTestId('ov')).toBeTruthy()
-    expect(view.getByTestId('li')).toBeTruthy()
-    expect(view.getByTestId('ri')).toBeTruthy()
+    // The composer bar renders its own tool-row seats (left/right) now; they
+    // dispatch with the {locked} owner and render empty without entries.
+    expect(slotCalls.map(call => call.key)).toContain('conversation.input.left')
+    expect(slotCalls.map(call => call.key)).toContain('conversation.input.right')
   })
 })
 
@@ -1300,7 +1296,8 @@ describe('command launcher chrome and control seats', () => {
     // Every seat dispatched, nothing rendered (render passes may repeat; the
     // seat set is the contract).
     expect([...new Set(slotCalls.map(c => c.key))]).toEqual([
-      'conversation.input.attachments', 'conversation.input.plan', 'conversation.input.model',
+      'conversation.input.attachments', 'conversation.input.left',
+      'conversation.input.plan', 'conversation.input.right', 'conversation.input.model',
     ])
     expect(view.queryByLabelText('Plan mode')).toBeNull()
     expect(view.queryByLabelText('Model')).toBeNull()

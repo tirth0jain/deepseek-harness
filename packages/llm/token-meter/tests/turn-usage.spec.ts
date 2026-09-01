@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { deriveTurnTokenUsage } from '../src/turn-usage.ts'
+import { deriveApproximateTurnTokenUsage, deriveTurnTokenUsage } from '../src/turn-usage.ts'
 
 function event(seq: number, type: string, data: unknown): SessionEvent {
   return { seq, time: seq, type, data } as unknown as SessionEvent
@@ -393,5 +393,82 @@ describe('deriveTurnTokenUsage', () => {
   it('requires the complete turn window', () => {
     expect(deriveTurnTokenUsage(completeAttempt(message(3, usage())).slice(1))).toBeUndefined()
     expect(deriveTurnTokenUsage(completeAttempt(message(3, usage())).slice(0, -1))).toBeUndefined()
+  })
+})
+
+describe('deriveApproximateTurnTokenUsage', () => {
+  it('aggregates observed usage samples from an incomplete lifecycle', () => {
+    const result = deriveApproximateTurnTokenUsage([
+      event(1, 'turn/start', { turn: 1 }),
+      message(2, usage({ inputTokens: 30, outputTokens: 5, totalTokens: 45, cacheReadTokens: 10 })),
+      event(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ])
+    expect(result).toEqual({
+      uncachedInputTokens: 30,
+      outputTokens: 5,
+      totalTokens: 45,
+      cacheReadTokens: 10,
+      routes: [{ provider: 'deepseek', model: 'deepseek-chat' }],
+      approximate: true,
+    })
+  })
+
+  it('sums streaming usage chunks even without step boundaries', () => {
+    const result = deriveApproximateTurnTokenUsage([
+      event(1, 'turn/start', { turn: 1 }),
+      event(2, 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'usage', usage: usage() } }),
+      event(3, 'assistant/chunk', {
+        turn: 1,
+        step: 1,
+        chunk: { type: 'usage', usage: usage({ inputTokens: 40, outputTokens: 10, totalTokens: 100, cacheReadTokens: 50 }) },
+      }),
+    ])
+    expect(result).toMatchObject({
+      uncachedInputTokens: 140,
+      outputTokens: 30,
+      totalTokens: 270,
+      cacheReadTokens: 100,
+      approximate: true,
+    })
+  })
+
+  it('returns undefined when no valid usage sample exists', () => {
+    expect(deriveApproximateTurnTokenUsage([
+      event(1, 'turn/start', { turn: 1 }),
+      message(2),
+      event(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ])).toBeUndefined()
+    expect(deriveApproximateTurnTokenUsage([])).toBeUndefined()
+  })
+
+  it('skips invalid usage samples while keeping valid ones', () => {
+    const result = deriveApproximateTurnTokenUsage([
+      message(2, usage({ inputTokens: -1 })),
+      message(3, usage()),
+    ])
+    expect(result).toMatchObject({ uncachedInputTokens: 100, outputTokens: 20, totalTokens: 170, approximate: true })
+  })
+
+  it('preserves distinct attributed routes across samples', () => {
+    const result = deriveApproximateTurnTokenUsage([
+      message(2, usage(), 'deepseek', 'deepseek-chat'),
+      message(3, usage({ inputTokens: 5, outputTokens: 5, totalTokens: 20, cacheReadTokens: 10 }), 'openai', 'gpt-5', 2),
+    ])
+    expect(result?.routes).toEqual([
+      { provider: 'deepseek', model: 'deepseek-chat' },
+      { provider: 'openai', model: 'gpt-5' },
+    ])
+    expect(result?.approximate).toBe(true)
+  })
+
+  it('fails closed when aggregation overflows a safe integer', () => {
+    const attempt = usage({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: undefined,
+      totalTokens: Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1,
+    })
+    const result = deriveApproximateTurnTokenUsage([message(1, attempt), message(2, attempt)])
+    expect(result).toBeUndefined()
   })
 })

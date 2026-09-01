@@ -65,7 +65,12 @@ export interface TurnTokenUsageRoute {
   readonly model: string
 }
 
-/** Exact provider-reported token accounting for every attempt in one completed Turn. */
+/**
+ * Provider-reported token accounting for every attempt in one completed Turn.
+ * When `approximate` is true the buckets are a best-effort aggregate of the
+ * usage samples observed in the turn — the lifecycle was not provable, so the
+ * numbers may be incomplete and should be read as approximate.
+ */
 export interface TurnTokenUsage {
   /** Sum of uncached prompt input across all attempts. */
   readonly uncachedInputTokens: number
@@ -80,6 +85,11 @@ export interface TurnTokenUsage {
   readonly reasoningTokens?: number
   /** Present only when every billed attempt has provider/model attribution. */
   readonly routes?: readonly TurnTokenUsageRoute[]
+  /**
+   * True when the strict lifecycle proof failed and the buckets are a
+   * best-effort aggregate of observed usage samples.
+   */
+  readonly approximate?: boolean
 }
 
 /** Turn-local footer row that owns actions and optional feature contributions. */

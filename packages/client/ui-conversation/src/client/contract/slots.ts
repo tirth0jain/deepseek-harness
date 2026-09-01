@@ -130,9 +130,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /** Ambient entries below the composer card. */
     'conversation.composer.dock': { kind: 'list'; scope: 'session'; owner: InputZone }
     /** Compact controls at the left of the composer tool row. */
-    'conversation.input.left': { kind: 'list'; scope: 'session'; owner: InputZone }
+    'conversation.input.left': { kind: 'list'; scope: 'session'; owner: InputControlOwnerProps }
     /** Compact controls before the composer submit action. */
-    'conversation.input.right': { kind: 'list'; scope: 'session'; owner: InputZone }
+    'conversation.input.right': { kind: 'list'; scope: 'session'; owner: InputControlOwnerProps }
     /** Resident composer body, including the no-Session inert state. */
     'conversation.composer.bar': { kind: 'single'; scope: 'session-maybe'; owner: ComposerBarOwnerProps }
     /** Optional draft-image rail and drop target. */
@@ -293,6 +293,7 @@ export type ComposerBarProps =
   PropsRuntime<'conversation.composer.bar'>
   & PropsRenderSlots<
     'conversation.input.attachments' | 'conversation.input.plan' | 'conversation.input.model'
+    | 'conversation.input.left' | 'conversation.input.right'
   >
   & InjectFace<ComposerBarInjected>
   & PropsLocale<'conversation'>
@@ -323,7 +324,6 @@ export type ConversationSlotProps =
     | 'conversation.composer' | 'conversation.composer.bar'
     | 'conversation.input.overlay'
     | 'conversation.input.dock' | 'conversation.composer.dock'
-    | 'conversation.input.left' | 'conversation.input.right'
     | 'conversation.hero.brand.mark'
     | 'conversation.hero.workspace'
     | 'conversation.hero.agentPreset'

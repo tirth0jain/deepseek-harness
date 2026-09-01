@@ -121,6 +121,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Approximate-usage marker: a small "~"/"约" prefix before the total in the
+   dialog heading, signalling the buckets are a best-effort aggregate. */
+.approxMarker {
+  margin-right: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+  font-variant-numeric: normal;
+}
+
 /* Section-heading glyph seated left of the section name. */
 .titleLabel {
   display: inline-flex;
@@ -161,5 +170,17 @@
 
 .reasoning {
   color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+/* Cost row: the USD value with a small tier/window annotation. */
+.cost {
+  font-variant-numeric: tabular-nums;
+}
+
+.costTier {
+  margin-left: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
   white-space: nowrap;
 }

@@ -21,7 +21,7 @@ describe('TurnUsagePanel', () => {
       outputTokens: 5_800,
       reasoningTokens: 42,
       totalTokens: 15_800,
-      routes: [{ provider: 'deepseek', model: 'deepseek-chat' }],
+      routes: [{ provider: 'deepseek', model: 'deepseek/deepseek-v4-flash' }],
     }
     const view = render(<TurnUsagePanel usage={usage} t={t} />)
 
@@ -41,7 +41,9 @@ describe('TurnUsagePanel', () => {
     expect(dialog.firstChild?.textContent).toBe('Turn usage15,800 tok')
     const details = dialog.querySelector('[data-turn-usage-details]') as HTMLElement
     expect(details).toBeTruthy()
-    expect(details.textContent).toContain('Provider / modeldeepseek/deepseek-chat')
+    expect(details.textContent).toContain('Provider / modeldeepseek/deepseek/deepseek-v4-flash')
+    expect(details.textContent).toContain('Cost')
+    expect(details.textContent).toContain('$')
     expect(details.textContent).toContain('Cache hit49.4%')
     expect(details.textContent).toContain('Uncached input5,060 tok')
     expect(details.textContent).toContain('Cached input4,940 tok')
@@ -62,10 +64,25 @@ describe('TurnUsagePanel', () => {
     expect(trigger.textContent).toBe('Usage 150 tok')
     fireEvent.click(trigger)
     expect(view.queryByText('Provider / model')).toBeNull()
+    expect(view.queryByText('Cost')).toBeNull()
     expect(view.queryByText('Cache hit')).toBeNull()
     expect(view.queryByText('Cached input')).toBeNull()
     expect(view.queryByText('Cache write')).toBeNull()
     expect(view.queryByText(/reasoning/)).toBeNull()
+  })
+
+  it('marks approximate usage with the ~ prefix in the dialog heading', () => {
+    const usage: TurnTokenUsage = {
+      uncachedInputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+      approximate: true,
+    }
+    const view = render(<TurnUsagePanel usage={usage} t={t} />)
+    fireEvent.click(view.getByRole('button'))
+    const dialog = view.getByRole('dialog')
+    expect(dialog.firstChild?.textContent).toBe('Turn usage~150 tok')
+    expect(dialog.querySelector('[title]')?.getAttribute('title')).toContain('approximate')
   })
 
   it('keeps a partial cache hit below 100 in the dialog and closes on Escape or outside pointerdown', () => {

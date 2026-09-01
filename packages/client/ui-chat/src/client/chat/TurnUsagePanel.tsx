@@ -12,6 +12,10 @@ import type { TurnTokenUsage } from '../contract/chat-nodes.ts'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { formatLatencySeconds, formatRunDuration, formatTokensPerSecond } from './message-chrome.ts'
 import { formatCacheHitPercent, formatExactTokens, formatTokens } from './token-format.ts'
+import {
+  GOAT_MODEL_RATES, currentGoatRates, estimateTurnCostForRoutes, formatUsd,
+  type GoatModelRate,
+} from './goat-pricing.ts'
 import css from './TurnUsagePanel.module.css'
 
 export interface TurnUsagePanelProps {
@@ -98,12 +102,33 @@ function useStatDialog(): StatDialogSeat {
  */
 export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  const [rates, setRates] = useState<Readonly<Record<string, GoatModelRate>>>(GOAT_MODEL_RATES)
+
+  // Refresh the pricing table from commandcode.ai on first open. The fetch is
+  // best-effort and cached for 6 hours; any failure keeps the built-in table.
+  // Test runs skip the network (vitest sets NODE_ENV=test; production builds
+  // bake in 'production', so the check collapses to false there).
+  useEffect(() => {
+    if (!open) return
+    if (process.env.NODE_ENV === 'test') return
+    let cancelled = false
+    void currentGoatRates().then((next) => {
+      if (!cancelled) setRates(next)
+    })
+    return () => { cancelled = true }
+  }, [open])
 
   const cacheHit = usage.cacheReadTokens === undefined
     ? null
     : formatCacheHitPercent(usage.cacheReadTokens, usage.totalTokens - usage.outputTokens, 1)
   const total = formatCompactCount(usage.totalTokens, t)
   const routes = usage.routes?.map(route => `${route.provider}/${route.model}`).join(', ') ?? ''
+  const cost = estimateTurnCostForRoutes(rates, usage.routes, {
+    uncachedInputTokens: usage.uncachedInputTokens,
+    ...usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens },
+    ...usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens },
+    outputTokens: usage.outputTokens,
+  })
 
   return (
     <span ref={rootRef} className={css.root}>
@@ -130,7 +155,14 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
               <IconDatabaseOutline16 />
               {t('message.turnUsage.title')}
             </span>
-            <span className={css.titleValue}>{formatExactCount(usage.totalTokens, t)}</span>
+            <span className={css.titleValue}>
+              {usage.approximate === true && (
+                <span className={css.approxMarker} title={t('message.turnUsage.approxHint')}>
+                  {t('message.turnUsage.approx')}
+                </span>
+              )}
+              {formatExactCount(usage.totalTokens, t)}
+            </span>
           </div>
           <div className={css.titleRule} aria-hidden />
           <dl className={css.details} data-turn-usage-details>
@@ -138,6 +170,21 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
               <>
                 <dt>{t('message.turnUsage.model')}</dt>
                 <dd className={css.route}>{routes}</dd>
+              </>
+            )}
+            {cost !== null && (
+              <>
+                <dt>{t('message.turnUsage.cost')}</dt>
+                <dd className={css.cost}>
+                  {formatUsd(cost.usd)}
+                  {cost.windows !== undefined && (
+                    <span className={css.costTier}>
+                      {cost.tier === 'peak'
+                        ? t('message.turnUsage.peak', { windows: cost.windows })
+                        : t('message.turnUsage.offPeak', { windows: cost.windows })}
+                    </span>
+                  )}
+                </dd>
               </>
             )}
             {cacheHit !== null && (

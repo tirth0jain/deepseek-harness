@@ -1,0 +1,52 @@
+/* Composer tool-row attach control: mirrors the + commands button (28px
+   circle, selector fill, primary glyph, solid hover) so the paperclip reads
+   as its sibling. */
+
+.root {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.attach {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-specific-selector);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.attach svg {
+  width: 15px;
+  height: 15px;
+}
+
+.attach:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid);
+}
+
+.attach:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The file picker is programmatically opened; it must never occupy layout or
+   receive focus. */
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}

@@ -8,7 +8,14 @@ export interface TurnTokenUsageRoute {
   readonly model: string
 }
 
-/** Exact provider-reported token accounting for every attempt in one completed Turn. */
+/**
+ * Exact provider-reported token accounting for every attempt in one completed
+ * Turn. When `approximate` is true the buckets are a best-effort aggregate of
+ * the usage samples present in the turn's events — the lifecycle could not be
+ * proven end-to-end (interrupted turn, pagination gap, missing boundary), so
+ * the numbers may under-count attempts that reported no usage and should be
+ * read as approximate, not billed totals.
+ */
 export interface TurnTokenUsage {
   /** Sum of uncached prompt input across all attempts. */
   readonly uncachedInputTokens: number
@@ -23,6 +30,12 @@ export interface TurnTokenUsage {
   readonly reasoningTokens?: number
   /** Present only when every billed attempt has provider/model attribution. */
   readonly routes?: readonly TurnTokenUsageRoute[]
+  /**
+   * True when the strict lifecycle proof failed and this is a best-effort
+   * aggregate of the usage samples that were observed (never set on the
+   * provably-exact path).
+   */
+  readonly approximate?: boolean
 }
 
 interface NormalizedAttempt {
@@ -268,4 +281,36 @@ export function deriveTurnTokenUsage(events: readonly SessionEvent[]): TurnToken
   }
 
   return invalid || !sawEnd || state.kind !== 'idle' ? undefined : aggregateAttempts(attempts)
+}
+
+/**
+ * Best-effort aggregate of the usage samples observed in a Turn's events.
+ *
+ * Unlike {@link deriveTurnTokenUsage}, this never requires the lifecycle to be
+ * provable: every valid usage sample (from streaming `assistant/chunk` usage
+ * or final `assistant/message` usage, with a route when the message names
+ * one) is normalized and summed. A turn whose strict proof failed but that
+ * still reported some usage therefore shows its observed tokens, marked
+ * `approximate`, instead of hiding them entirely.
+ *
+ * @param events - Turn-local durable events (strict derivation already failed).
+ * @returns approximate aggregate usage, or undefined when no valid sample exists.
+ */
+export function deriveApproximateTurnTokenUsage(events: readonly SessionEvent[]): TurnTokenUsage | undefined {
+  const attempts: NormalizedAttempt[] = []
+  for (const event of events) {
+    if (event.type === 'assistant/chunk') {
+      if (event.data.chunk.type !== 'usage') continue
+      const normalized = normalizeUsage(event.data.chunk.usage)
+      if (normalized !== undefined) attempts.push(normalized)
+      continue
+    }
+    if (event.type === 'assistant/message') {
+      if (event.data.usage === undefined) continue
+      const normalized = normalizeUsage(event.data.usage, messageRoute(event.data.message))
+      if (normalized !== undefined) attempts.push(normalized)
+    }
+  }
+  const aggregate = aggregateAttempts(attempts)
+  return aggregate === undefined ? undefined : { ...aggregate, approximate: true }
 }
