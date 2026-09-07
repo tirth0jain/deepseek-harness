@@ -29,7 +29,7 @@ export type { ReconnectConfig, ResolvedReconnectPolicy } from './connection.ts'
 export const name = 'mcp-client'
 
 /** Services required by this plugin. */
-export const inject = ['tools']
+export const inject = []
 
 /** Default timeout for individual MCP tool calls (ms). */
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
