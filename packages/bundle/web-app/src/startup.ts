@@ -57,23 +57,24 @@ Examples:
   dsh --profile web                          serve on the composed host and port
   dsh --profile web --no-open                serve without opening a browser
   dsh --profile web --port 8080              serve on another port
+  dsh --profile web --host 0.0.0.0           bind all interfaces (LAN / reverse proxy);
+                                             browsers must still pass the /api trust fence
 `)
 }
 
 /**
  * Parse and provide the Web invocation as an ordinary Cordis service. The
  * command's action publishes the flags this invocation named; `--host 0.0.0.0`
- * or a non-numeric `--port` is a usage error, so on rejection (and on `--help`)
- * nothing is provided.
+ * is accepted (binding all interfaces, e.g. behind a LAN reverse proxy; the
+ * /api browser-trust fence still requires a loopback, derived LAN, or
+ * declared `--trusted-host` authority), and a non-numeric `--port` is a usage
+ * error. On rejection (and on `--help`) nothing is provided.
  * @param ctx - plugin context carrying the command line.
  */
 export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0') {
-      program.error('error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
-    }
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
     }
