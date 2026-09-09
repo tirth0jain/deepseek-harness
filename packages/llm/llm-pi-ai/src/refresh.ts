@@ -17,10 +17,11 @@
  *   than trusted, so a transient gateway hiccup cannot erase the stored
  *   catalog.
  * - A model the listing adds gets exactly the fields the listing discloses
- *   (id, display name, capacities), plus the route's
- *   `defaultReasoningEfforts` when one is declared. Nothing is invented: a
- *   listing entry with an id alone stays an id alone, and resolution fills
- *   its remaining facts from the route's `defaultContextWindow`,
+ *   (id, display name, capacities) and nothing else — reasoning efforts are
+ *   never auto-added, because no listing endpoint reports them; declare them
+ *   per model on the Models page for the models that need them. A listing
+ *   entry with an id alone stays an id alone, and resolution fills its
+ *   remaining facts from the route's `defaultContextWindow`,
  *   `defaultMaxTokens`, and `defaultInput`.
  *
  * The endpoint is the only truth consulted — never the installed pi-ai
@@ -34,7 +35,7 @@ import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { discoverModels } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
-import type { PiAiModelProfile, PiAiReasoningEfforts } from './config.ts'
+import type { PiAiModelProfile } from './config.ts'
 
 /**
  * Minimum interval between two automatic refreshes of the same route.
@@ -48,15 +49,6 @@ import type { PiAiModelProfile, PiAiReasoningEfforts } from './config.ts'
  */
 export const AUTO_REFRESH_MIN_INTERVAL_MS = 30_000
 
-/** The route-level facts an automatic refresh merges under. */
-export interface CatalogRefreshDefaults {
-  /**
-   * Reasoning efforts stored onto models the listing adds; existing entries
-   * are never touched. Mirrors the route profile's `defaultReasoningEfforts`.
-   */
-  defaultReasoningEfforts?: PiAiReasoningEfforts
-}
-
 /**
  * Merge one endpoint listing into the route's stored model list.
  *
@@ -64,19 +56,18 @@ export interface CatalogRefreshDefaults {
  * listing can only replace a stored capacity with one it discloses. A stored
  * model the listing no longer serves is dropped — retirement is the
  * gateway's call, and the listing is the only truth consulted. New models
- * are appended in listing order with the fields the listing discloses and
- * the default reasoning efforts, if any. The result is the exact list a
+ * are appended in listing order with exactly the fields the listing
+ * discloses; reasoning efforts are never invented onto them, since no
+ * listing endpoint reports per-model efforts. The result is the exact list a
  * refresh stores — nothing else reshapes it, so equality between the result
  * and the stored list is what makes a refresh a no-op.
  * @param current - the route's stored model entries, in stored order.
  * @param listed - the endpoint's current listing, in endpoint order.
- * @param defaults - route-level facts applied to newly listed models.
  * @returns the merged list, stored shape (no resolved defaults added).
  */
 export function mergeListedIntoConfigured(
   current: readonly PiAiModelProfile[],
   listed: readonly LlmDiscoveredModel[],
-  defaults: CatalogRefreshDefaults = {},
 ): PiAiModelProfile[] {
   const listedById = new Map(listed.map(model => [model.id, model]))
   const merged: PiAiModelProfile[] = []
@@ -108,11 +99,6 @@ export function mergeListedIntoConfigured(
     if (model.name !== undefined && model.name !== model.id) entry.name = model.name
     if (model.contextWindow !== undefined) entry.contextWindow = model.contextWindow
     if (model.maxTokens !== undefined) entry.maxTokens = model.maxTokens
-    if (defaults.defaultReasoningEfforts !== undefined) {
-      // Detached: the stored section must never share the profile object, and
-      // a later profile edit must not rewrite what a refresh already stored.
-      entry.reasoningEfforts = { ...defaults.defaultReasoningEfforts }
-    }
     merged.push(entry)
     mergedIds.add(model.id)
   }
@@ -129,8 +115,6 @@ export interface ProviderCatalogRefreshRequest {
   baseURL: string
   /** The route's currently stored model entries. */
   currentModels: readonly PiAiModelProfile[]
-  /** Route-level facts for newly listed models. */
-  defaults?: CatalogRefreshDefaults
   /** Host-owned headers and credential resolution, when the route has any. */
   storedProfile?: () => StoredModelDiscoveryProfile | undefined
   /** Store the merged list; called exactly when the merge changed it. */
@@ -199,7 +183,7 @@ export async function refreshProviderCatalog(
       models: [...request.currentModels],
     }
   }
-  const models = mergeListedIntoConfigured(request.currentModels, listed, request.defaults)
+  const models = mergeListedIntoConfigured(request.currentModels, listed)
   const currentById = new Map(request.currentModels.map(model => [model.id, model]))
   const mergedIds = new Set(models.map(model => model.id))
   const added: string[] = []

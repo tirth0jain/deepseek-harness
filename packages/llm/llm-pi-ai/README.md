@@ -82,7 +82,6 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `defaultContextWindow` | `262,144` | Capacity fallback for undescribed models |
 | `defaultMaxTokens` | `32,768` | Output-cap fallback for undescribed models |
 | `autoRefresh` | `false` | Re-interrogate `{baseURL}/models` on every web page load and store the merged catalog |
-| `defaultReasoningEfforts` | none | Efforts stored onto models `autoRefresh` adds; `false` or omission adds them non-reasoning |
 | `requestImagePixelBudget` | `4,194,304` | Total-pixel budget for each deterministic request image |
 | `requestImageMaxBytes` | `1 MiB` | Encoded-byte target for each request image before base64 expansion |
 | `maxRequestImageBytes` | `20 MiB` | Aggregate base64 image-payload bound with oldest-first offload |
@@ -114,7 +113,7 @@ The plugin answers "which models can this provider serve?" for a route a configu
 
 ### Refresh catalogs automatically on web page loads
 
-A route with `autoRefresh: true` is re-interrogated at its own listing URL on every web page load, and the merged result is stored into the `llm-pi-ai` user settings section — so a gateway that gains or retires models, or corrects a context window, is reflected in `settings.yaml` without hand-editing. The refresh deliberately refuses to invent facts: the endpoint is the only truth consulted, and a field the listing does not disclose never replaces a stored one. An already-listed model keeps every field the deployment wrote; a model the listing no longer serves is dropped from the stored list (retirement is the gateway's call), while an *empty* listing is refused as ambiguous so a transient gateway hiccup cannot erase the catalog; a model the listing adds gets the fields the listing discloses and — when the route declares one — the `defaultReasoningEfforts` map, with its remaining facts falling to the route's `defaultContextWindow`, `defaultMaxTokens`, and `defaultInput` at resolution. The stored list is written only when the merge actually changed it, so an unchanged listing costs one endpoint read and no settings write; refreshes are throttled per route (one listing request per page-load burst) and coalesce in flight, so a slow gateway can never pile up interrogations or hold up the page response. A route without a readable listing (an unlistable protocol, no baseURL, or `modelOverrides` beside the stored list) is declined with a warning instead of failing on every load. The trigger is the webserver index tap, so headless compositions — which have no web page loads to hook — never refresh, and a route without the flag is never interrogated.
+A route with `autoRefresh: true` is re-interrogated at its own listing URL on every web page load, and the merged result is stored into the `llm-pi-ai` user settings section — so a gateway that gains or retires models, or corrects a context window, is reflected in `settings.yaml` without hand-editing. The refresh deliberately refuses to invent facts: the endpoint is the only truth consulted, and a field the listing does not disclose never replaces a stored one. An already-listed model keeps every field the deployment wrote; a model the listing no longer serves is dropped from the stored list (retirement is the gateway's call), while an *empty* listing is refused as ambiguous so a transient gateway hiccup cannot erase the catalog; a model the listing adds gets exactly the fields the listing discloses (id, display name, capacities) — reasoning efforts are never auto-added, because no listing endpoint reports them, so set them per model on the Models page for the models that need them — with its remaining facts falling to the route's `defaultContextWindow`, `defaultMaxTokens`, and `defaultInput` at resolution. The stored list is written only when the merge actually changed it, so an unchanged listing costs one endpoint read and no settings write; refreshes are throttled per route (one listing request per page-load burst) and coalesce in flight, so a slow gateway can never pile up interrogations or hold up the page response. A route without a readable listing (an unlistable protocol, no baseURL, or `modelOverrides` beside the stored list) is declined with a warning instead of failing on every load. The trigger is the webserver index tap, so headless compositions — which have no web page loads to hook — never refresh, and a route without the flag is never interrogated.
 
 ```yaml
 acme-gateway:
@@ -122,11 +121,6 @@ acme-gateway:
   api: openai-completions
   baseURL: https://gateway.acme.example/v1
   autoRefresh: true
-  defaultReasoningEfforts:
-    off:
-    low: low
-    high: high
-    max: max
 ```
 
 ### Failures and recovery

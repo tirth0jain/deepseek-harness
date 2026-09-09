@@ -33,12 +33,9 @@
  *         api: openai-completions
  *         baseURL: https://gateway.acme.example/v1
  *         # Re-interrogate {baseURL}/models on every web page load and store
- *         # the merged catalog; models the gateway adds also get these efforts.
+ *         # the merged catalog; added models carry only what the listing
+ *         # discloses (reasoning efforts are set per model, never auto-added).
  *         autoRefresh: true
- *         defaultReasoningEfforts:
- *           off:
- *           high: high
- *           max: max
  *         # Reasoning dialect for a URL pi-ai cannot recognize.
  *         compat:
  *           thinkingFormat: deepseek
@@ -344,9 +341,6 @@ export function apply(ctx: Context, config: Config): void {
           ...api === undefined ? {} : { api },
           baseURL,
           currentModels,
-          ...profile.defaultReasoningEfforts === false || profile.defaultReasoningEfforts === undefined
-            ? {}
-            : { defaults: { defaultReasoningEfforts: profile.defaultReasoningEfforts } },
           ...storedProfile === undefined ? {} : { storedProfile: () => storedProfile },
           persist: async (models) => {
             await settings.update(NS, { providers: { [provider]: { models: [...models] } } })

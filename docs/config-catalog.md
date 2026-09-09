@@ -1152,32 +1152,23 @@ export interface PiAiProviderProfile {
    * (output caps, modalities, reasoning) are never invented. Already-listed
    * entries keep every field the deployment wrote, and a field the listing
    * now discloses replaces the stored one; a model the listing no longer
-   * serves stays, since a curated entry may name an alias the endpoint does
-   * not echo. A model the listing adds gets the fields the listing discloses
-   * plus the route's {@link defaultReasoningEfforts} when one is declared;
-   * its remaining facts fall to the route's `defaultContextWindow`,
-   * `defaultMaxTokens`, and `defaultInput` at resolution.
+   * serves is dropped, because retirement is the gateway's call. A model
+   * the listing adds gets exactly the fields the listing discloses (id,
+   * display name, capacities) — reasoning efforts are never auto-added,
+   * since no listing endpoint reports them; declare them per model on the
+   * Models page for the models that need them. A model's remaining facts
+   * fall to the route's `defaultContextWindow`, `defaultMaxTokens`, and
+   * `defaultInput` at resolution. An empty successful listing is refused
+   * as ambiguous rather than trusted, so a transient gateway hiccup cannot
+   * erase the stored catalog.
    *
    * Web-page loads are throttled per route, so burst refreshes coalesce
    * behind one listing request. A route whose listing this build cannot read
    * (a protocol with no `/models` endpoint, or a route without a baseURL) is
-   * skipped with a warning. Automatic refreshes never delete or rename a
-   * stored entry, and nothing runs unless this flag is set; headless
+   * skipped with a warning. Nothing runs unless this flag is set; headless
    * compositions have no web page loads to hook and never refresh.
    */
   autoRefresh?: boolean
-  /**
-   * Reasoning efforts stored onto a model this route's {@link autoRefresh}
-   * *adds*. Existing entries are never touched by it, so this is where a
-   * deployment states "everything this gateway serves reasons at these
-   * levels" once instead of editing every new entry by hand. `false` — or
-   * omitting the field — adds new models as non-reasoning (the pi-ai default
-   * for a catalog-less route). Declared as a union of the same shape the
-   * model entries use, because schemastery would otherwise materialize an
-   * absent dict as `{}` and there is no spelling of "leave it alone" that is
-   * an empty object.
-   */
-  defaultReasoningEfforts?: false | PiAiReasoningEfforts
   /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
@@ -1292,16 +1283,6 @@ export interface PiAiModelProfile {
 export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
 
 /**
- * Selectable reasoning efforts for one model: each key is a level the model
- * offers (and selectors show), and its value is the wire spelling dispatch
- * sends for it. `off` alone may leave its value empty — "supported, send
- * nothing" — because for most providers not thinking is the parameter's
- * absence; every other declared level must name a wire value. A level absent
- * from the dict is not offered.
- */
-export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | null>>
-
-/**
  * pi-ai wire-compatibility switches, set on the route (its models' default) or
  * per model (winning over the route, field by field).
  *
@@ -1396,6 +1377,16 @@ export interface PiAiCompatProfile {
 /** One request modality a pi-ai model may accept. */
 export type PiAiModality = Model<Api>['input'][number]
 
+/**
+ * Selectable reasoning efforts for one model: each key is a level the model
+ * offers (and selectors show), and its value is the wire spelling dispatch
+ * sends for it. `off` alone may leave its value empty — "supported, send
+ * nothing" — because for most providers not thinking is the parameter's
+ * absence; every other declared level must name a wire value. A level absent
+ * from the dict is not offered.
+ */
+export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | null>>
+
 /** One reasoning-dispatch wire format a profile may name. */
 export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFormat']>
 
@@ -1405,7 +1396,7 @@ export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['
 
 Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:255`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:246`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 

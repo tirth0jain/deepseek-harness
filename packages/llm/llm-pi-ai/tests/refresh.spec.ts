@@ -27,9 +27,9 @@ async function listingServer(body: string): Promise<{ url: string; paths: string
 }
 
 describe('mergeListedIntoConfigured', () => {
-  it('keeps stored entries and appends listing additions with disclosed fields', () => {
+  it('keeps stored entries and appends listing additions with disclosed fields only', () => {
     const stored = [
-      { id: 'old', name: 'Old Model', contextWindow: 100, maxTokens: 50 },
+      { id: 'old', name: 'Old Model', contextWindow: 100, maxTokens: 50, reasoningEfforts: { off: null, high: 'high' } as const },
       { id: 'stale', contextWindow: 9 },
     ]
     const listed = [
@@ -37,18 +37,18 @@ describe('mergeListedIntoConfigured', () => {
       { id: 'fresh', name: 'Fresh Model', contextWindow: 300, maxTokens: 400 },
       { id: 'bare' },
     ]
-    const merged = mergeListedIntoConfigured(stored, listed, {
-      defaultReasoningEfforts: { off: null, high: 'high', max: 'max' },
-    })
-    // Stored order first; the listing only replaced the disclosed capacity
-    // and never renamed the stored entry. 'stale' is retired and dropped.
+    const merged = mergeListedIntoConfigured(stored, listed)
+    // Stored order first; the listing only replaced the disclosed capacity,
+    // never renamed the stored entry, and never touched its curated efforts.
+    // 'stale' is retired and dropped. Additions carry ONLY disclosed fields —
+    // no reasoning efforts are invented onto them.
     expect(merged).toEqual([
-      { id: 'old', name: 'Old Model', contextWindow: 200, maxTokens: 50 },
-      // Listing order for additions; the listing's name, both disclosed
-      // capacities, and the route's default efforts.
-      { id: 'fresh', name: 'Fresh Model', contextWindow: 300, maxTokens: 400,
-        reasoningEfforts: { off: null, high: 'high', max: 'max' } },
-      { id: 'bare', reasoningEfforts: { off: null, high: 'high', max: 'max' } },
+      { id: 'old', name: 'Old Model', contextWindow: 200, maxTokens: 50,
+        reasoningEfforts: { off: null, high: 'high' } },
+      // Listing order for additions; the listing's name and both disclosed
+      // capacities, nothing more.
+      { id: 'fresh', name: 'Fresh Model', contextWindow: 300, maxTokens: 400 },
+      { id: 'bare' },
     ])
   })
 
@@ -62,21 +62,14 @@ describe('mergeListedIntoConfigured', () => {
     expect(mergeListedIntoConfigured(current, [])).toEqual([])
   })
 
-  it('does not copy the default efforts reference into stored entries', () => {
-    const defaults = { defaultReasoningEfforts: { off: null, high: 'high' } }
-    const merged = mergeListedIntoConfigured([], [{ id: 'a' }], defaults)
-    expect(merged[0]?.reasoningEfforts).toEqual(defaults.defaultReasoningEfforts)
-    expect((merged[0] as { reasoningEfforts: object }).reasoningEfforts).not.toBe(defaults.defaultReasoningEfforts)
-  })
-
-  it('adds no reasoningEfforts when the route declares none', () => {
+  it('adds no reasoningEfforts onto additions', () => {
     const merged = mergeListedIntoConfigured([], [{ id: 'a', name: 'A' }])
     expect(merged).toEqual([{ id: 'a', name: 'A' }])
   })
 
   it('stores nothing that the listing did not disclose onto an id-only addition', () => {
-    const merged = mergeListedIntoConfigured([], [{ id: 'bare' }], { defaultReasoningEfforts: { off: null } })
-    expect(merged).toEqual([{ id: 'bare', reasoningEfforts: { off: null } }])
+    const merged = mergeListedIntoConfigured([], [{ id: 'bare' }])
+    expect(merged).toEqual([{ id: 'bare' }])
   })
 })
 
@@ -182,19 +175,19 @@ describe('refreshProviderCatalog', () => {
     expect(server.paths).toEqual(['/models'])
   })
 
-  it('applies default reasoning efforts to additions while keeping stored ones', async () => {
+  it('keeps stored reasoning efforts and adds none to new models', async () => {
     const server = await listingServer(JSON.stringify({ data: [{ id: 'new' }, { id: 'old' }] }))
     const stored = [{ id: 'old', reasoningEfforts: { off: null, high: 'ultra' } as const }]
     const outcome = await refreshProviderCatalog({
       provider: 'acme-gateway',
       baseURL: server.url,
       currentModels: stored,
-      defaults: { defaultReasoningEfforts: { off: null, high: 'high', max: 'max' } },
       persist: async () => {},
     })
     expect(outcome.models).toEqual([
       { id: 'old', reasoningEfforts: { off: null, high: 'ultra' } },
-      { id: 'new', reasoningEfforts: { off: null, high: 'high', max: 'max' } },
+      // The refresh never invents efforts for a model the endpoint only lists.
+      { id: 'new' },
     ])
   })
 
