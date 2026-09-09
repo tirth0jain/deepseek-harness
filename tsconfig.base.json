@@ -424,6 +424,7 @@
       "@deepseek-ai/dsh-web": ["./packages/web/web/src"],
       "@deepseek-ai/dsh-web-app": ["./packages/bundle/web-app/src"],
       "@deepseek-ai/dsh-web-fetch-http": ["./packages/web/web-fetch-http/src"],
+      "@deepseek-ai/dsh-web-search-brightdata": ["./packages/web/web-search-brightdata/src"],
       "@deepseek-ai/dsh-web-search-deepseek": ["./packages/web/web-search-deepseek/src"],
       "@deepseek-ai/dsh-web-search-exa": ["./packages/web/web-search-exa/src"],
       "@deepseek-ai/dsh-web-search-perplexity": ["./packages/web/web-search-perplexity/src"],
