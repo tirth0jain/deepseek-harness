@@ -41,16 +41,25 @@ describe('mergeListedIntoConfigured', () => {
       defaultReasoningEfforts: { off: null, high: 'high', max: 'max' },
     })
     // Stored order first; the listing only replaced the disclosed capacity
-    // and never renamed the stored entry.
+    // and never renamed the stored entry. 'stale' is retired and dropped.
     expect(merged).toEqual([
       { id: 'old', name: 'Old Model', contextWindow: 200, maxTokens: 50 },
-      { id: 'stale', contextWindow: 9 },
       // Listing order for additions; the listing's name, both disclosed
       // capacities, and the route's default efforts.
       { id: 'fresh', name: 'Fresh Model', contextWindow: 300, maxTokens: 400,
         reasoningEfforts: { off: null, high: 'high', max: 'max' } },
       { id: 'bare', reasoningEfforts: { off: null, high: 'high', max: 'max' } },
     ])
+  })
+
+  it('drops every stored model the listing no longer serves', () => {
+    const current = [
+      { id: 'a', contextWindow: 10 },
+      { id: 'b', contextWindow: 20 },
+      { id: 'c', contextWindow: 30 },
+    ]
+    expect(mergeListedIntoConfigured(current, [{ id: 'b' }])).toEqual([{ id: 'b', contextWindow: 20 }])
+    expect(mergeListedIntoConfigured(current, [])).toEqual([])
   })
 
   it('does not copy the default efforts reference into stored entries', () => {
@@ -187,5 +196,38 @@ describe('refreshProviderCatalog', () => {
       { id: 'old', reasoningEfforts: { off: null, high: 'ultra' } },
       { id: 'new', reasoningEfforts: { off: null, high: 'high', max: 'max' } },
     ])
+  })
+
+  it('reports and persists models the gateway retired', async () => {
+    const server = await listingServer(JSON.stringify({ data: [{ id: 'live' }] }))
+    const persist = vi.fn(async () => {})
+    const outcome = await refreshProviderCatalog({
+      provider: 'acme-gateway',
+      baseURL: server.url,
+      currentModels: [{ id: 'live' }, { id: 'retired', contextWindow: 5 }],
+      persist,
+    })
+    expect(outcome.changed).toBe(true)
+    expect(outcome.removed).toEqual(['retired'])
+    expect(outcome.kept).toEqual(['live'])
+    expect(outcome.models).toEqual([{ id: 'live' }])
+    expect(persist).toHaveBeenCalledWith([{ id: 'live' }])
+  })
+
+  it('refuses an empty listing and leaves the stored catalog untouched', async () => {
+    const server = await listingServer(JSON.stringify({ data: [] }))
+    const persist = vi.fn(async () => {})
+    const stored = [{ id: 'keep-me', contextWindow: 5 }]
+    const outcome = await refreshProviderCatalog({
+      provider: 'acme-gateway',
+      baseURL: server.url,
+      currentModels: stored,
+      persist,
+    })
+    expect(outcome.empty).toBe(true)
+    expect(outcome.changed).toBe(false)
+    expect(outcome.removed).toEqual([])
+    expect(outcome.models).toEqual(stored)
+    expect(persist).not.toHaveBeenCalled()
   })
 })

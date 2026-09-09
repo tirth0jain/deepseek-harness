@@ -352,9 +352,13 @@ export function apply(ctx: Context, config: Config): void {
             await settings.update(NS, { providers: { [provider]: { models: [...models] } } })
           },
         })
-        if (outcome.changed) {
+        if (outcome.empty) {
+          ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" answered with an empty model`
+            + ' listing; keeping the stored catalog — check the gateway if this persists')
+        } else if (outcome.changed) {
           ctx.logger.info(`llm-pi-ai: autoRefresh provider "${provider}" — now ${String(outcome.models.length)}`
-            + ` models (${String(outcome.added.length)} added, ${String(outcome.updated.length)} updated)`)
+            + ` models (${String(outcome.added.length)} added, ${String(outcome.updated.length)} updated,`
+            + ` ${String(outcome.removed.length)} removed)`)
         }
       })().catch((error: unknown) => {
         ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" refresh failed:`

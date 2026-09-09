@@ -126,17 +126,18 @@ export interface PiAiProviderProfile {
    * (output caps, modalities, reasoning) are never invented. Already-listed
    * entries keep every field the deployment wrote, and a field the listing
    * now discloses replaces the stored one; a model the listing no longer
-   * serves stays, since a curated entry may name an alias the endpoint does
-   * not echo. A model the listing adds gets the fields the listing discloses
-   * plus the route's {@link defaultReasoningEfforts} when one is declared;
-   * its remaining facts fall to the route's `defaultContextWindow`,
-   * `defaultMaxTokens`, and `defaultInput` at resolution.
+   * serves is dropped, because retirement is the gateway's call. A model
+   * the listing adds gets the fields the listing discloses plus the route's
+   * {@link defaultReasoningEfforts} when one is declared; its remaining
+   * facts fall to the route's `defaultContextWindow`, `defaultMaxTokens`,
+   * and `defaultInput` at resolution. An empty successful listing is
+   * refused as ambiguous rather than trusted, so a transient gateway hiccup
+   * cannot erase the stored catalog.
    *
    * Web-page loads are throttled per route, so burst refreshes coalesce
    * behind one listing request. A route whose listing this build cannot read
    * (a protocol with no `/models` endpoint, or a route without a baseURL) is
-   * skipped with a warning. Automatic refreshes never delete or rename a
-   * stored entry, and nothing runs unless this flag is set; headless
+   * skipped with a warning. Nothing runs unless this flag is set; headless
    * compositions have no web page loads to hook and never refresh.
    */
   autoRefresh?: boolean

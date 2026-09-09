@@ -5,14 +5,17 @@
  * listing — the same `GET {baseURL}/models` interrogation the configuration
  * surface's "fetch available models" action uses, with the same bounded read
  * and the same field spellings — and merges what the listing discloses into
- * the route's stored `models` list. The merge is deliberately conservative:
+ * the route's stored `models` list. The merge rules:
  *
  * - An already-listed model keeps every field the deployment wrote. A
  *   capacity the listing now discloses replaces the stored one; a capacity
  *   it does not disclose leaves the stored one alone.
- * - A model the listing no longer serves stays: a curated entry may name an
- *   alias the endpoint does not echo, and deleting a stored entry is a
- *   decision, not a listing side effect.
+ * - A model the listing no longer serves is **dropped from the stored
+ *   list**: retirement is the gateway's call, and a refresh never
+ *   resurrects a retired model. Only a listing that was actually read
+ *   counts — an empty successful listing is refused as ambiguous rather
+ *   than trusted, so a transient gateway hiccup cannot erase the stored
+ *   catalog.
  * - A model the listing adds gets exactly the fields the listing discloses
  *   (id, display name, capacities), plus the route's
  *   `defaultReasoningEfforts` when one is declared. Nothing is invented: a
@@ -58,9 +61,11 @@ export interface CatalogRefreshDefaults {
  * Merge one endpoint listing into the route's stored model list.
  *
  * Stored entries keep their order and every field the deployment wrote; the
- * listing can only replace a stored capacity with one it discloses. New
- * models are appended in listing order with the fields the listing discloses
- * and the default reasoning efforts, if any. The result is the exact list a
+ * listing can only replace a stored capacity with one it discloses. A stored
+ * model the listing no longer serves is dropped — retirement is the
+ * gateway's call, and the listing is the only truth consulted. New models
+ * are appended in listing order with the fields the listing discloses and
+ * the default reasoning efforts, if any. The result is the exact list a
  * refresh stores — nothing else reshapes it, so equality between the result
  * and the stored list is what makes a refresh a no-op.
  * @param current - the route's stored model entries, in stored order.
@@ -74,28 +79,31 @@ export function mergeListedIntoConfigured(
   defaults: CatalogRefreshDefaults = {},
 ): PiAiModelProfile[] {
   const listedById = new Map(listed.map(model => [model.id, model]))
-  const seen = new Set<string>()
   const merged: PiAiModelProfile[] = []
+  const mergedIds = new Set<string>()
   // Stored order first, so a merge that changes nothing but capacities keeps
   // the file stable and a merge that adds models puts them after what the
   // deployment already curated.
   for (const entry of current) {
+    // A stored model the listing no longer carries is retired; only the
+    // listing's own ids survive the merge.
     const disclosed = listedById.get(entry.id)
+    if (disclosed === undefined) continue
     const next: PiAiModelProfile = { ...entry }
-    if (disclosed?.contextWindow !== undefined && disclosed.contextWindow !== entry.contextWindow) {
+    if (disclosed.contextWindow !== undefined && disclosed.contextWindow !== entry.contextWindow) {
       next.contextWindow = disclosed.contextWindow
     }
-    if (disclosed?.maxTokens !== undefined && disclosed.maxTokens !== entry.maxTokens) {
+    if (disclosed.maxTokens !== undefined && disclosed.maxTokens !== entry.maxTokens) {
       next.maxTokens = disclosed.maxTokens
     }
     merged.push(next)
-    seen.add(entry.id)
+    mergedIds.add(entry.id)
   }
   // The listing's own order for what it adds. The stored entry wins naming
   // for a model that already exists, so a display-name change on an existing
   // id is kept as the deployment wrote it.
   for (const model of listed) {
-    if (seen.has(model.id)) continue
+    if (mergedIds.has(model.id)) continue
     const entry: PiAiModelProfile = { id: model.id }
     if (model.name !== undefined && model.name !== model.id) entry.name = model.name
     if (model.contextWindow !== undefined) entry.contextWindow = model.contextWindow
@@ -106,14 +114,14 @@ export function mergeListedIntoConfigured(
       entry.reasoningEfforts = { ...defaults.defaultReasoningEfforts }
     }
     merged.push(entry)
-    seen.add(model.id)
+    mergedIds.add(model.id)
   }
   return merged
 }
 
 /** One automatic refresh of one provider route. */
 export interface ProviderCatalogRefreshRequest {
-  /** Provider route key, for diagnostics and the discovery request. */
+  /** Provider route key, for diagnostics. */
   provider: string
   /** Wire protocol; absent asks the listing as OpenAI Chat Completions, like discovery. */
   api?: string
@@ -133,10 +141,20 @@ export interface ProviderCatalogRefreshRequest {
 export interface ProviderCatalogRefreshOutcome {
   /** Whether the stored list changed (and `persist` was called). */
   changed: boolean
+  /**
+   * Whether the endpoint answered with an empty listing, which is refused as
+   * ambiguous: nothing was merged, nothing was stored, and the stored list
+   * survives unchanged. A gateway that retired every model is indistinguishable
+   * from one that failed to enumerate, so only the caller decides what "no
+   * models at all" means for its route.
+   */
+  empty: boolean
   /** Model ids the listing added to the stored list. */
   added: readonly string[]
   /** Model ids whose stored fields the listing's disclosures replaced. */
   updated: readonly string[]
+  /** Model ids the listing no longer serves and the merge therefore dropped. */
+  removed: readonly string[]
   /** Model ids present before and after, unchanged. */
   kept: readonly string[]
   /** The merged list, whether or not it was stored. */
@@ -148,9 +166,12 @@ export interface ProviderCatalogRefreshOutcome {
  *
  * Interrogates the endpoint exactly like discovery, merges the listing into
  * the currently stored entries, and stores the result only when it changed.
- * Nothing here is throttled or scheduled — the caller decides when a refresh
- * is due — and every failure is thrown for the caller to contain, so a
- * refresh can never take a page load down with it.
+ * An empty listing is refused before the merge — retirement of *every* model
+ * is indistinguishable from a gateway failure to enumerate, so the stored
+ * list survives unchanged and the outcome reports `empty`. Nothing here is
+ * throttled or scheduled — the caller decides when a refresh is due — and
+ * every failure is thrown for the caller to contain, so a refresh can never
+ * take a page load down with it.
  * @param request - route facts, stored list, and the persist call.
  * @returns what the refresh did.
  */
@@ -167,10 +188,23 @@ export async function refreshProviderCatalog(
     { baseURL: request.baseURL, ...request.api === undefined ? {} : { api: request.api } },
     request.storedProfile,
   )
+  if (listed.length === 0) {
+    return {
+      changed: false,
+      empty: true,
+      added: [],
+      updated: [],
+      removed: [],
+      kept: request.currentModels.map(model => model.id),
+      models: [...request.currentModels],
+    }
+  }
   const models = mergeListedIntoConfigured(request.currentModels, listed, request.defaults)
   const currentById = new Map(request.currentModels.map(model => [model.id, model]))
+  const mergedIds = new Set(models.map(model => model.id))
   const added: string[] = []
   const updated: string[] = []
+  const removed: string[] = []
   const kept: string[] = []
   for (const model of models) {
     const before = currentById.get(model.id)
@@ -182,9 +216,12 @@ export async function refreshProviderCatalog(
       updated.push(model.id)
     }
   }
+  for (const stored of request.currentModels) {
+    if (!mergedIds.has(stored.id)) removed.push(stored.id)
+  }
   // A refreshed route that lost nothing still re-checks its listing; an
   // unchanged result is exactly what makes the write a no-op.
   const changed = !deepEqualJson(models, request.currentModels)
   if (changed) await request.persist(models)
-  return { changed, added, updated, kept, models }
+  return { changed, empty: false, added, updated, removed, kept, models }
 }
