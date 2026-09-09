@@ -42,6 +42,9 @@
       "path": "../../settings/settings"
     },
     {
+      "path": "../../host/webserver"
+    },
+    {
       "path": "../../util/timeout"
     },
     {

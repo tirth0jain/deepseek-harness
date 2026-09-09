@@ -115,6 +115,44 @@ export interface PiAiProviderProfile {
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
+   * Refresh this route's model catalog from its endpoint on every web page
+   * load: the route is re-interrogated at its model-listing URL and the
+   * merged result is stored into the `llm-pi-ai` user settings section, so a
+   * gateway that gains or retires models, or corrects a context window, is
+   * reflected without hand-editing `settings.yaml`.
+   *
+   * Only the endpoint itself is ever consulted — nothing here consults the
+   * installed pi-ai catalog, and capacities the listing does not disclose
+   * (output caps, modalities, reasoning) are never invented. Already-listed
+   * entries keep every field the deployment wrote, and a field the listing
+   * now discloses replaces the stored one; a model the listing no longer
+   * serves stays, since a curated entry may name an alias the endpoint does
+   * not echo. A model the listing adds gets the fields the listing discloses
+   * plus the route's {@link defaultReasoningEfforts} when one is declared;
+   * its remaining facts fall to the route's `defaultContextWindow`,
+   * `defaultMaxTokens`, and `defaultInput` at resolution.
+   *
+   * Web-page loads are throttled per route, so burst refreshes coalesce
+   * behind one listing request. A route whose listing this build cannot read
+   * (a protocol with no `/models` endpoint, or a route without a baseURL) is
+   * skipped with a warning. Automatic refreshes never delete or rename a
+   * stored entry, and nothing runs unless this flag is set; headless
+   * compositions have no web page loads to hook and never refresh.
+   */
+  autoRefresh?: boolean
+  /**
+   * Reasoning efforts stored onto a model this route's {@link autoRefresh}
+   * *adds*. Existing entries are never touched by it, so this is where a
+   * deployment states "everything this gateway serves reasons at these
+   * levels" once instead of editing every new entry by hand. `false` — or
+   * omitting the field — adds new models as non-reasoning (the pi-ai default
+   * for a catalog-less route). Declared as a union of the same shape the
+   * model entries use, because schemastery would otherwise materialize an
+   * absent dict as `{}` and there is no spelling of "leave it alone" that is
+   * an empty object.
+   */
+  defaultReasoningEfforts?: false | PiAiReasoningEfforts
+  /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
    * field. What neither sets keeps the installed catalog entry's value, then
@@ -322,6 +360,8 @@ const profile = z.object({
   baseURL: z.string(),
   models: z.array(modelProfile),
   modelOverrides: z.dict(modelOverride),
+  autoRefresh: z.boolean().default(false),
+  defaultReasoningEfforts: z.union([z.const(false), reasoningEfforts]),
   compat: compatProfile,
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),

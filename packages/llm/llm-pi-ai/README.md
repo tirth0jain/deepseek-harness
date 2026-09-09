@@ -81,6 +81,8 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `compat` | catalog detection | Wire-compatibility switches for unrecognized endpoints |
 | `defaultContextWindow` | `262,144` | Capacity fallback for undescribed models |
 | `defaultMaxTokens` | `32,768` | Output-cap fallback for undescribed models |
+| `autoRefresh` | `false` | Re-interrogate `{baseURL}/models` on every web page load and store the merged catalog |
+| `defaultReasoningEfforts` | none | Efforts stored onto models `autoRefresh` adds; `false` or omission adds them non-reasoning |
 | `requestImagePixelBudget` | `4,194,304` | Total-pixel budget for each deterministic request image |
 | `requestImageMaxBytes` | `1 MiB` | Encoded-byte target for each request image before base64 expansion |
 | `maxRequestImageBytes` | `20 MiB` | Aggregate base64 image-payload bound with oldest-first offload |
@@ -109,6 +111,23 @@ Profiles are re-read once per operation through the optional settings seam: the 
 ### Discover models from endpoints
 
 The plugin answers "which models can this provider serve?" for a route a configuration surface is editing or drafting. A route the installed catalog ships is answered from that catalog with no network call; only a route the catalog does not describe is interrogated over the wire. `openai-completions` and `openai-responses` use `GET {baseURL}/models` with bearer auth, while `anthropic-messages` uses native `GET /v1/models?limit=1000` semantics with `x-api-key` and `anthropic-version`; its listing URL accepts the API root with or without a trailing `/v1` because gateway documentation publishes both spellings, and only that listing URL normalizes the segment, so model requests receive the configured `baseURL` unchanged. A named configured route supplies its stored credential and profile `headers` inside the Host, so deployment headers configured through `settings.yaml` or Cordis config reach model discovery without becoming discovery-request or Models-page fields; a key typed into the form still wins over the stored credential. The parser accepts either the standard `data` array or an enriched `models` map, normalizing each candidate's id, display name, context window, and output-token cap; Anthropic's `max_input_tokens` and `max_tokens` feed the same capacity fields, a map key remains the request id even when its entry names a different canonical id, primitive-valued map properties are ignored, and a missing display name falls back to that request id. The reply is candidate metadata a surface may offer for adoption — nothing is stored, and `settings.yaml` remains the only thing that decides what a route serves.
+
+### Refresh catalogs automatically on web page loads
+
+A route with `autoRefresh: true` is re-interrogated at its own listing URL on every web page load, and the merged result is stored into the `llm-pi-ai` user settings section — so a gateway that gains or retires models, or corrects a context window, is reflected in `settings.yaml` without hand-editing. The refresh deliberately refuses to invent facts: the endpoint is the only truth consulted, and a field the listing does not disclose never replaces a stored one. An already-listed model keeps every field the deployment wrote; a model the listing no longer serves is kept (a curated entry may name an alias the endpoint does not echo); a model the listing adds gets the fields the listing discloses and — when the route declares one — the `defaultReasoningEfforts` map, with its remaining facts falling to the route's `defaultContextWindow`, `defaultMaxTokens`, and `defaultInput` at resolution. The stored list is written only when the merge actually changed it, so an unchanged listing costs one endpoint read and no settings write; refreshes are throttled per route (one listing request per page-load burst) and coalesce in flight, so a slow gateway can never pile up interrogations or hold up the page response. A route without a readable listing (an unlistable protocol, no baseURL, or `modelOverrides` beside the stored list) is declined with a warning instead of failing on every load. The trigger is the webserver index tap, so headless compositions — which have no web page loads to hook — never refresh, and a route without the flag is never interrogated.
+
+```yaml
+acme-gateway:
+  apiKeyEnv: ACME_GATEWAY_API_KEY
+  api: openai-completions
+  baseURL: https://gateway.acme.example/v1
+  autoRefresh: true
+  defaultReasoningEfforts:
+    off:
+    low: low
+    high: high
+    max: max
+```
 
 ### Failures and recovery
 
@@ -142,6 +161,7 @@ The adapter is built on immutable snapshots and per-operation resolution. Each o
 | [`src/stream.ts`](src/stream.ts) | pi-ai event conversion into harness `StreamChunk` values |
 | [`src/replay.ts`](src/replay.ts) | Versioned `ReplayEnvelope` storage and validation |
 | [`src/discovery.ts`](src/discovery.ts) | Endpoint interrogation for configuration surfaces |
+| [`src/refresh.ts`](src/refresh.ts) | Automatic catalog refresh: listing merge and per-route refresh orchestration |
 
 ### Registration and directory
 

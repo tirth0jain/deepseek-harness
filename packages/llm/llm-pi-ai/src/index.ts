@@ -32,6 +32,13 @@
  *         apiKeyEnv: ACME_GATEWAY_API_KEY
  *         api: openai-completions
  *         baseURL: https://gateway.acme.example/v1
+ *         # Re-interrogate {baseURL}/models on every web page load and store
+ *         # the merged catalog; models the gateway adds also get these efforts.
+ *         autoRefresh: true
+ *         defaultReasoningEfforts:
+ *           off:
+ *           high: high
+ *           max: max
  *         # Reasoning dialect for a URL pi-ai cannot recognize.
  *         compat:
  *           thinkingFormat: deepseek
@@ -59,17 +66,20 @@ import type { Context } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
+import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-fs'
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-settings'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
 import { catalogProviderIds } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
-import type { ResolvedPiAiProviderProfile } from './config.ts'
-import { discoverModels } from './discovery.ts'
+import type { PiAiModelProfile, ResolvedPiAiProviderProfile } from './config.ts'
+import { discoverModels, LISTABLE_PROTOCOLS } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
 import { registerPiAiFlows } from './login.ts'
+import { AUTO_REFRESH_MIN_INTERVAL_MS, refreshProviderCatalog } from './refresh.ts'
 
 export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
@@ -262,6 +272,109 @@ export function apply(ctx: Context, config: Config): void {
     { ...request, ...signal === undefined ? {} : { signal } },
     () => storedDiscoveryProfile(request.provider),
   ))
+  // Automatic catalog refresh on web page loads. Only the browser
+  // composition mounts the trigger (the webserver index tap), and only a
+  // route that opted in with `autoRefresh` is ever interrogated — a headless
+  // composition or a route without the flag costs nothing. The tap never
+  // awaits the refresh, so a slow or failing gateway cannot hold up the page
+  // response it rides on; failures are logged per route and the previous
+  // catalog keeps serving.
+  let settingsProvider: SettingsProvider | undefined
+  const lastRefreshStarted = new Map<string, number>()
+  const refreshInFlight = new Map<string, Promise<void>>()
+  const refreshDeclined = new Set<string>()
+  const refreshAll = (): void => {
+    const settings = settingsProvider
+    if (settings === undefined) return
+    // The raw user section is the merge base: the resolved profiles carry
+    // schema defaults no document stores, and a refresh must never persist
+    // those. describe() detaches the stored document, so the merge below
+    // reads exactly what settings.yaml says.
+    let user: { providers?: Record<string, unknown> } = {}
+    try {
+      user = (settings.describe().find(descriptor => descriptor.ns === NS)?.user ?? {}) as
+        { providers?: Record<string, unknown> }
+    } catch {
+      return
+    }
+    const declared = user.providers as
+      | Record<string, { models?: readonly PiAiModelProfile[]; modelOverrides?: unknown }>
+      | undefined
+    for (const [provider, profile] of profiles()) {
+      if (profile.autoRefresh !== true) continue
+      const api = profile.api ?? 'openai-completions'
+      const baseURL = profile.baseURL
+      // A route whose listing this build cannot read is declined once per
+      // process, with the reason, instead of failing on every page load.
+      if (baseURL === undefined || baseURL.length === 0 || !LISTABLE_PROTOCOLS.has(api)) {
+        if (!refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          const reason = baseURL === undefined || baseURL.length === 0
+            ? 'has no baseURL to interrogate'
+            : `protocol "${api}" has no model listing this build can read`
+          ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" ${reason}; enter its models by hand`
+            + ' or adjust the route')
+        }
+        continue
+      }
+      // A route carrying modelOverrides beside models is a shape refresh
+      // would collide with (the catalog refuses both), so it is declined too.
+      const stored = declared?.[provider]
+      if (stored?.modelOverrides !== undefined) {
+        if (!refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" also sets modelOverrides, and automatic`
+            + ' refresh writes the models list; disable autoRefresh or drop the overrides')
+        }
+        continue
+      }
+      // Coalesce bursts: an in-flight refresh already covers this load, and a
+      // refresh that started moments ago is still answering this one — the
+      // listing is the same seconds apart.
+      if (refreshInFlight.has(provider)) continue
+      const now = Date.now()
+      const last = lastRefreshStarted.get(provider) ?? 0
+      if (now - last < AUTO_REFRESH_MIN_INTERVAL_MS) continue
+      const currentModels = stored?.models ?? []
+      const storedProfile = storedDiscoveryProfile(provider)
+      lastRefreshStarted.set(provider, now)
+      const run = (async () => {
+        const outcome = await refreshProviderCatalog({
+          provider,
+          ...api === undefined ? {} : { api },
+          baseURL,
+          currentModels,
+          ...profile.defaultReasoningEfforts === false || profile.defaultReasoningEfforts === undefined
+            ? {}
+            : { defaults: { defaultReasoningEfforts: profile.defaultReasoningEfforts } },
+          ...storedProfile === undefined ? {} : { storedProfile: () => storedProfile },
+          persist: async (models) => {
+            await settings.update(NS, { providers: { [provider]: { models: [...models] } } })
+          },
+        })
+        if (outcome.changed) {
+          ctx.logger.info(`llm-pi-ai: autoRefresh provider "${provider}" — now ${String(outcome.models.length)}`
+            + ` models (${String(outcome.added.length)} added, ${String(outcome.updated.length)} updated)`)
+        }
+      })().catch((error: unknown) => {
+        ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" refresh failed:`
+          + ` ${error instanceof Error ? error.message : String(error)}`)
+      })
+      refreshInFlight.set(provider, run)
+      void run.finally(() => { refreshInFlight.delete(provider) })
+    }
+  }
+  // Every index render IS a web page load; the tap is a pure side channel
+  // that must never alter the page, so it starts the refresh and returns the
+  // body untouched. The webServer service only exists in the browser
+  // composition — headless has no page loads to hook — and this inject just
+  // stays pending where it never appears, exactly like the authorization one.
+  ctx.inject(['webServer'], (webCtx) => {
+    ctx.effect(() => webCtx.webServer.tapIndex((html: string) => {
+      refreshAll()
+      return html
+    }), 'llm-pi-ai: autoRefresh on web page load')
+  })
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below. A bare
   // mount (zero routes) is the dormant posture: nothing registers until a
@@ -294,6 +407,7 @@ export function apply(ctx: Context, config: Config): void {
   ensureRegistrationFacts()
 
   ctx.inject(['settings'], (settingsCtx) => {
+    settingsProvider = settingsCtx.settings
     settingsCtx.settings.installSection(ctx, NS, Config, config, {
       // Refuse an unserviceable section where it is written: without this a
       // schema-valid profile the adapter cannot serve would be stored and then
