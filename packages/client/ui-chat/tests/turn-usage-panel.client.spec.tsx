@@ -50,26 +50,43 @@ describe('TurnUsagePanel', () => {
     expect(details.textContent).not.toContain('Total')
   })
 
-  it('renders the estimated amount, and nothing where no rate exists', () => {
-    const priced: TurnTokenUsage = {
+  it('renders the estimated amount with the band it billed in', () => {
+    const usage: TurnTokenUsage = {
       uncachedInputTokens: 10,
       outputTokens: 5,
       totalTokens: 15,
       routes: [{ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' }],
     }
-    const unpriced: TurnTokenUsage = {
-      ...priced,
+    const view = render(
+      <TurnUsagePanel usage={usage} cost={{ amount: 0.004321, bands: ['peak'] }} t={t} />,
+    )
+    fireEvent.click(view.getByRole('button'))
+    // Six decimals: one turn is routinely under a cent, so cents would read $0.00.
+    expect(view.getByRole('dialog').textContent)
+      .toContain('Estimated cost (list price)$0.004321 (peak)')
+  })
+
+  it.each([
+    [['base'] as const, ' (off-peak)'],
+    [['peak'] as const, ' (peak)'],
+    [['peak', 'base'] as const, ' (peak and off-peak)'],
+  ])('names the band a straddling Turn billed in: %j', (bands, note) => {
+    const usage: TurnTokenUsage = { uncachedInputTokens: 10, outputTokens: 5, totalTokens: 15 }
+    const view = render(<TurnUsagePanel usage={usage} cost={{ amount: 0.5, bands: [...bands] }} t={t} />)
+    fireEvent.click(view.getByRole('button'))
+    expect(view.getByRole('dialog').textContent).toContain(`Estimated cost (list price)$0.500000${note}`)
+  })
+
+  it('renders no amount where no rate exists', () => {
+    const usage: TurnTokenUsage = {
+      uncachedInputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
       routes: [{ provider: 'acme', model: 'unpublished' }],
     }
-    const withRate = render(<TurnUsagePanel usage={priced} cost={0.004321} t={t} />)
-    fireEvent.click(withRate.getByRole('button'))
-    // Six decimals: one turn is routinely under a cent, so cents would read $0.00.
-    expect(withRate.getByRole('dialog').textContent)
-      .toContain('Estimated cost (list price)$0.004321')
-    cleanup()
-    const withoutRate = render(<TurnUsagePanel usage={unpriced} t={t} />)
-    fireEvent.click(withoutRate.getByRole('button'))
-    expect(withoutRate.getByRole('dialog').textContent).not.toContain('Estimated cost')
+    const view = render(<TurnUsagePanel usage={usage} t={t} />)
+    fireEvent.click(view.getByRole('button'))
+    expect(view.getByRole('dialog').textContent).not.toContain('Estimated cost')
   })
 
   it('omits unavailable optional facts instead of inventing values', () => {

@@ -327,6 +327,10 @@ export interface LlmModelContext {
  * defaulting to zero: "this route does not charge for cache writes" and
  * "nobody published a rate" are different facts, and only the first may be
  * multiplied into a total.
+ *
+ * The fields above are the rate's base band. A tariff that raises the same
+ * rate inside recurring windows states those windows in {@link LlmModelCost.peak},
+ * and an estimate read against a moment inside one applies that band instead.
  */
 export interface LlmModelCost {
   /** Uncached prompt tokens. */
@@ -337,6 +341,39 @@ export interface LlmModelCost {
   cacheRead?: number
   /** Prompt tokens written to the provider's prompt cache. */
   cacheWrite?: number
+  /**
+   * Second band this rate moves to inside recurring windows, when the tariff
+   * publishes one. Absent means every moment prices at the fields above: a
+   * flat card is the absence of a band, not a window that never opens.
+   */
+  peak?: LlmModelCostPeak
+}
+
+/** Weekday names a rate window may name, in UTC. */
+export type LlmModelCostWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
+/** One recurring window in which a route's rate moves to its peak band. */
+export interface LlmModelCostPeakWindow {
+  /** Days the window opens on; a day it does not name stays on the base band. */
+  readonly days: readonly LlmModelCostWeekday[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  readonly start: string
+  /** Window end, `HH:MM` UTC, exclusive, later in the same day than the start. */
+  readonly end: string
+}
+
+/**
+ * The band a route's published rate moves to inside recurring windows.
+ *
+ * A tariff that doubles its peak is stated once as a factor rather than as a
+ * second table of prices: the ratio is what the card publishes, so an edit to
+ * the base band cannot leave the two bands describing different tariffs.
+ */
+export interface LlmModelCostPeak {
+  /** Factor applied to every rate of the base band while a window is open. */
+  readonly multiplier: number
+  /** Windows the peak band is in force in, in UTC; an unlisted moment is base band. */
+  readonly windows: readonly LlmModelCostPeakWindow[]
 }
 
 /** Display metadata for one adapter-owned reasoning effort. */

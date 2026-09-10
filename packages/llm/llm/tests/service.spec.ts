@@ -18,6 +18,8 @@ import LlmRuntime, {
 } from '@deepseek-ai/dsh-llm'
 import type {
   LlmModelContext,
+  LlmModelCost,
+  LlmModelCostPeak,
   LlmModelInfo,
   LlmModelReasoningInfo,
   LlmProviderInfo,
@@ -694,6 +696,62 @@ describe('LlmRuntime', () => {
     expect(resolved.context).toEqual({ contextWindow: 32_000 })
     await expect(ctx.llm.resolveModelInfo('route', 'other')).resolves.toEqual({
       provider: 'route', id: 'other', name: 'other',
+    })
+  })
+
+  it('detaches an adapter-reported peak band and refuses one it cannot place', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    const windows = [{ days: ['mon'] as const, start: '01:00', end: '04:00' }]
+    const source: LlmModelCost = { input: 0.15, output: 0.6, peak: { multiplier: 2, windows } }
+    const adapter = new class extends ScriptedAdapter {
+      override resolveModel(): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider: 'route', id: 'model', name: 'Model', cost: source,
+        })
+      }
+    }(SCRIPT)
+    ctx.llm.registerAdapter(['route'], adapter)
+
+    const resolved = await ctx.llm.resolveModelInfo('route', 'model')
+    expect(resolved.cost).toEqual({ input: 0.15, output: 0.6, peak: { multiplier: 2, windows } })
+    // Detached: the resolution is a snapshot, so a later mutation of the
+    // adapter's own band cannot move a rate a reader is already pricing with.
+    ;(source.peak as { multiplier: number }).multiplier = 9
+    windows[0] = { days: ['mon'], start: '02:00', end: '03:00' }
+    expect(resolved.cost).toEqual({
+      input: 0.15, output: 0.6, peak: { multiplier: 2, windows: [{ days: ['mon'], start: '01:00', end: '04:00' }] },
+    })
+  })
+
+  it.each([
+    [{ multiplier: 0, windows: [{ days: ['mon'], start: '01:00', end: '04:00' }] }, 'positive finite'],
+    [{ multiplier: Number.POSITIVE_INFINITY, windows: [{ days: ['mon'], start: '01:00', end: '04:00' }] }, 'positive finite'],
+    [{ multiplier: 2, windows: [] }, 'at least one window'],
+    [{ multiplier: 2, windows: [{ days: [], start: '01:00', end: '04:00' }] }, 'at least one weekday'],
+    [{ multiplier: 2, windows: [{ days: ['monday'], start: '01:00', end: '04:00' }] }, 'not a weekday name'],
+    [{ multiplier: 2, windows: [{ days: ['mon'], start: '1:00', end: '04:00' }] }, 'HH:MM in UTC'],
+    [{ multiplier: 2, windows: [{ days: ['mon'], start: '04:00', end: '01:00' }] }, 'does not end after it starts'],
+  ] as const)('refuses an adapter peak band it cannot place: %j', async (peak, message) => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    const adapter = new class extends ScriptedAdapter {
+      override resolveModel(): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider: 'route',
+          id: 'model',
+          name: 'Model',
+          // Each case states a band an adapter could plausibly hand over, so
+          // the cast is to the shape being validated, not past it.
+          cost: { input: 0.15, output: 0.6, peak: peak as LlmModelCostPeak },
+        })
+      }
+    }(SCRIPT)
+    ctx.llm.registerAdapter(['route'], adapter)
+
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
+      code: 'INVALID_MODEL_COST',
+      message: expect.stringContaining(message) as unknown as string,
     })
   })
 

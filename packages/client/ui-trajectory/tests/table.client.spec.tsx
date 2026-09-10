@@ -1178,14 +1178,72 @@ describe('TrajectoryTable estimated cost', () => {
       <TrajectoryTable
         turns={turns}
         {...FOLD_PROPS}
-        requestNumbers={[{ ...request, cost: 0.00088, cumulativeCost: 0.00176 }]}
+        requestNumbers={[{
+          ...request,
+          cost: 0.00088,
+          costBand: 'base',
+          cumulativeCost: 0.00176,
+          cumulativeCostBands: ['base'],
+        }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Estimated cost (list price)$0.000880 (off-peak)')
+    expect(text).toContain('Estimated cost (list price)$0.001760 (off-peak)')
+  })
+
+  it('names the peak band a request was billed in', () => {
+    render(
+      <TrajectoryTable
+        turns={turns}
+        {...FOLD_PROPS}
+        requestNumbers={[{ ...request, cost: 0.00176, costBand: 'peak', cumulativeCost: 0.00176 }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    // The amount alone cannot say why it is double; the band note is what does.
+    expect(document.body.textContent).toContain('Estimated cost (list price)$0.001760 (peak)')
+  })
+
+  it('says so when the priced prefix straddled a band boundary', () => {
+    render(
+      <TrajectoryTable
+        turns={turns}
+        {...FOLD_PROPS}
+        requestNumbers={[{
+          ...request,
+          cost: 0.00176,
+          costBand: 'peak',
+          cumulativeCost: 0.00264,
+          cumulativeCostBands: ['peak', 'base'],
+        }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Estimated cost (list price)$0.001760 (peak)')
+    expect(text).toContain('Estimated cost (list price)$0.002640 (peak and off-peak)')
+  })
+
+  it('names no band for a request whose tariff never moves', () => {
+    // A flat rate is not "off-peak": there is no second band to distinguish.
+    render(
+      <TrajectoryTable
+        turns={turns}
+        {...FOLD_PROPS}
+        requestNumbers={[{ ...request, cost: 0.00088, cumulativeCost: 0.00088 }]}
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
     const text = document.body.textContent ?? ''
     expect(text).toContain('Estimated cost (list price)$0.000880')
-    expect(text).toContain('Estimated cost (list price)$0.001760')
+    expect(text).not.toContain('(off-peak)')
+    expect(text).not.toContain('(peak)')
   })
 
   it('renders no amount for a request whose route carried no rate', () => {

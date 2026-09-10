@@ -28,6 +28,7 @@ import {
 import type { TrajectoryVirtualRow } from './trajectory-virtual-rows.ts'
 import type { TrajectoryTurnModel } from './layout.ts'
 import { trajectoryPreviewText } from './trajectory-preview.ts'
+import type { UsageRateBand } from '@deepseek-ai/dsh-token-meter/client'
 import type { TrajectoryKey, TrajectoryTranslate } from './locales.ts'
 import { COMPACTION_INTERRUPTED_ERROR } from './copy-codes.ts'
 import css from './TrajectoryTable.module.css'
@@ -444,8 +445,12 @@ interface TrajectoryRequestNumberBase {
   cumulativeUsage?: TrajectoryUsage
   /** Estimated spend for this request at its route's published rate, USD. */
   cost?: number
+  /** Band that rate was in force in, when the request's route publishes one. */
+  costBand?: UsageRateBand | undefined
   /** Estimated spend over the resident prefix ending at this request, USD. */
   cumulativeCost?: number
+  /** Bands the priced prefix billed in; both entries mean it straddled a boundary. */
+  cumulativeCostBands?: readonly UsageRateBand[]
 }
 
 /** One purpose-discriminated request identity paired with its session-global number. */
@@ -826,13 +831,17 @@ function RequestUsagePanel({
   usage,
   cumulative,
   cost,
+  costBand,
   cumulativeCost,
+  cumulativeCostBands,
   t,
 }: {
   usage: TrajectoryUsage | undefined
   cumulative: TrajectoryUsage | undefined
   cost: number | undefined
+  costBand: UsageRateBand | undefined
   cumulativeCost: number | undefined
+  cumulativeCostBands: readonly UsageRateBand[] | undefined
   t: TrajectoryTranslate
 }) {
   return (
@@ -840,31 +849,64 @@ function RequestUsagePanel({
       <section className={css.usageGroup}>
         <h4 className={css.usageHeading}>{t('usage.thisRequest')}</h4>
         <UsageRows usage={usage} t={t} />
-        <CostRow cost={cost} t={t} />
+        <CostRow cost={cost} bands={costBand === undefined ? undefined : [costBand]} t={t} />
       </section>
       <section className={css.usageGroup}>
         <h4 className={css.usageHeading}>{t('usage.sessionCumulative')}</h4>
         <UsageRows usage={cumulative} t={t} />
-        <CostRow cost={cumulativeCost} t={t} />
+        <CostRow cost={cumulativeCost} bands={cumulativeCostBands} t={t} />
       </section>
     </div>
   )
 }
 
 /**
+ * Name the bands one estimate was billed in, so an amount that is double the
+ * off-peak one for the same tokens says why. A prefix that billed in both says
+ * so rather than picking one band's name for a mixed sum.
+ * @param bands - bands the priced entries fell in, when any were priced.
+ * @param t - owning view's locale seat.
+ * @returns the band note, or undefined when no band was recorded.
+ */
+function costBandNote(
+  bands: readonly UsageRateBand[] | undefined,
+  t: TrajectoryTranslate,
+): string | undefined {
+  if (bands === undefined || bands.length === 0) return undefined
+  const peak = bands.includes('peak')
+  const base = bands.includes('base')
+  if (peak && base) return t('usage.costBand.mixed')
+  if (peak) return t('usage.costBand.peak')
+  if (base) return t('usage.costBand.base')
+  return undefined
+}
+
+/**
  * Estimated spend line under one usage block. Renders nothing without an
  * amount: an unpriced route has no cost to state, and a zero would read as a
  * free request rather than an unknown one.
- * @param props - estimated USD and the owning view's locale seat.
+ * @param props - estimated USD, the bands it billed in, and the owning view's locale seat.
  * @returns the label/value pair, or null when no estimate exists.
  */
-function CostRow({ cost, t }: { cost: number | undefined; t: TrajectoryTranslate }) {
+function CostRow({
+  cost,
+  bands,
+  t,
+}: {
+  cost: number | undefined
+  bands: readonly UsageRateBand[] | undefined
+  t: TrajectoryTranslate
+}) {
   if (cost === undefined) return null
+  const note = costBandNote(bands, t)
   return (
     <dl className={css.overview}>
       <div>
         <dt>{t('usage.estimatedCost')}</dt>
-        <dd>{`$${cost.toFixed(6)}`}</dd>
+        <dd>
+          {`$${cost.toFixed(6)}`}
+          {note !== undefined && <span className={css.usageNote}>{note}</span>}
+        </dd>
       </div>
     </dl>
   )
@@ -2970,7 +3012,9 @@ export function TrajectoryTable({
                 usage={selectedRequestUsage}
                 cumulative={selectedRequestCumulativeUsage}
                 cost={selectedRequestInfo.cost}
+                costBand={selectedRequestInfo.costBand}
                 cumulativeCost={selectedRequestInfo.cumulativeCost}
+                cumulativeCostBands={selectedRequestInfo.cumulativeCostBands}
                 t={t}
               />
             )}

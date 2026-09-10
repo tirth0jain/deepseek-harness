@@ -91,6 +91,8 @@ const price = ctx.tokenMeter.estimateMessage(message)
 | [`src/breakdown-projection.ts`](src/breakdown-projection.ts) | `contextBreakdown` 投影定义 |
 | [`src/client.ts`](src/client.ts) | 面向投影消费方、可安全用于浏览器的客户端接口 |
 | [`src/turn-usage.ts`](src/turn-usage.ts) | 精确逐次尝试与逐 Turn 用量的纯 fold |
+| [`src/usage-cost.ts`](src/usage-cost.ts) | 公开费率折算：桶 × 每百万费率，拒绝费率无法定价的总额 |
+| [`src/rate-schedule.ts`](src/rate-schedule.ts) | 某一时刻落在费率两个档位中的哪一档（峰时窗口，UTC） |
 
 ### Fold 流程
 

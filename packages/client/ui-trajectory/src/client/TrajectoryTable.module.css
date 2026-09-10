@@ -1150,6 +1150,12 @@
   white-space: nowrap;
 }
 
+/* Band note trailing an estimated amount: present, but never competing with it. */
+.usageNote {
+  margin-left: 0.4em;
+  color: var(--dsw-alias-label-tertiary);
+}
+
 .timestampToggle {
   all: unset;
   color: inherit;

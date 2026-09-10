@@ -7,7 +7,10 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace, PropsLocale, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { estimateUsageCost, type UsageRate } from '@deepseek-ai/dsh-token-meter/client'
+import {
+  bandRate, estimateUsageCost, rateBandAt,
+  type UsageRateBand, type UsageRateSchedule,
+} from '@deepseek-ai/dsh-token-meter/client'
 import {
   TrajectoryTable,
   type TrajectoryRequestNumber,
@@ -99,13 +102,13 @@ export interface TrajectoryModelCostState {
     readonly id: string
     readonly models: readonly {
       readonly id: string
-      readonly cost?: UsageRate | undefined
+      readonly cost?: UsageRateSchedule | undefined
     }[]
   }[]
 }
 
 /** Resolve one exact route's published rate, or undefined when it is unpriced. */
-type RateLookup = (provider: string, model: string) => UsageRate | undefined
+type RateLookup = (provider: string, model: string) => UsageRateSchedule | undefined
 
 interface UsageLike {
   inputTokens?: number
@@ -138,23 +141,33 @@ function requestRoute(entry: {
 }
 
 /**
- * Estimate one request's spend from the buckets this view already folds and
- * the route it billed. A request whose route is unrecorded or unpriced reports
- * no amount rather than one priced at some other route's rate.
+ * Estimate one request's spend from the buckets this view already folds, the
+ * route it billed, and the moment it settled. A request whose route is
+ * unrecorded or unpriced reports no amount rather than one priced at some
+ * other route's rate, and one whose settle time is unrecorded prices at the
+ * route's base band rather than guessing a band from the wall clock now.
  * @param usage - disjoint buckets assembled for the request.
  * @param route - the exact route the request billed.
+ * @param at - epoch ms the request completed, when the record states one.
  * @param rateOf - published-rate lookup for one exact route.
- * @returns USD, or undefined when no honest estimate exists.
+ * @returns USD and the band it billed in, or undefined when no honest estimate exists.
  */
 function requestCost(
   usage: TrajectoryUsage | undefined,
   route: { provider: string; model: string } | undefined,
+  at: number | undefined,
   rateOf: RateLookup,
-): number | undefined {
+): { readonly amount: number; readonly band: UsageRateBand | undefined } | undefined {
   if (usage === undefined || route === undefined) return undefined
-  const rate = rateOf(route.provider, route.model)
-  if (rate === undefined) return undefined
-  return estimateUsageCost(usage, rate)
+  const schedule = rateOf(route.provider, route.model)
+  if (schedule === undefined) return undefined
+  const band = at === undefined ? 'base' : rateBandAt(schedule, at)
+  const amount = estimateUsageCost(usage, bandRate(schedule, band))
+  // A flat tariff has no band to name: reporting "off-peak" for a rate that
+  // never moves would state a distinction the route did not make.
+  return amount === undefined
+    ? undefined
+    : { amount, band: schedule.peak === undefined ? undefined : band }
 }
 
 function addUsage(
@@ -302,15 +315,25 @@ export function TrajectoryView({
     const numbered: TrajectoryRequestNumber[] = []
     let cumulativeUsage: TrajectoryUsage | undefined
     let cumulativeCost: number | undefined
+    let cumulativeBands: readonly UsageRateBand[] = []
     for (const [index, entry] of orderedRequests.entries()) {
       const usage = requestUsage(entry.request?.usage ?? entry.node?.usage)
       cumulativeUsage = addUsage(cumulativeUsage, usage)
       // Priced per request, then summed: the cumulative block spans whatever
-      // routes the resident prefix billed, which one rate cannot explain.
-      const cost = requestCost(usage, requestRoute(entry), rateOf)
+      // routes and rate bands the resident prefix billed, which no single rate
+      // explains.
+      const cost = requestCost(
+        usage,
+        requestRoute(entry),
+        entry.request?.completedAt ?? entry.request?.startedAt ?? entry.node?.time,
+        rateOf,
+      )
       cumulativeCost = cost === undefined
         ? cumulativeCost
-        : (cumulativeCost ?? 0) + cost
+        : (cumulativeCost ?? 0) + cost.amount
+      if (cost?.band !== undefined && !cumulativeBands.includes(cost.band)) {
+        cumulativeBands = [...cumulativeBands, cost.band]
+      }
       if (entry.request?.purpose !== 'compaction') {
         const request = entry.request
         const node = entry.node
@@ -342,8 +365,9 @@ export function TrajectoryView({
           ...(requestConfig === undefined ? {} : { requestConfig }),
           ...(usage === undefined ? {} : { usage }),
           ...(cumulativeUsage === undefined ? {} : { cumulativeUsage }),
-          ...(cost === undefined ? {} : { cost }),
+          ...(cost === undefined ? {} : { cost: cost.amount, costBand: cost.band }),
           ...(cumulativeCost === undefined ? {} : { cumulativeCost }),
+          ...(cumulativeBands.length === 0 ? {} : { cumulativeCostBands: cumulativeBands }),
         })
         continue
       }

@@ -1360,6 +1360,16 @@ describe('built-in conversation node Definitions', () => {
       cacheWriteTokens: 1,
       reasoningTokens: 1,
       routes: [{ provider: 'fake', model: 'fake' }],
+      attempts: [{
+        uncachedInputTokens: 10,
+        outputTokens: 4,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 1,
+        // Stamped with the closing message's own time: what places the
+        // attempt on a rate schedule's clock.
+        at: 1_700_000_000_003,
+        route: { provider: 'fake', model: 'fake' },
+      }],
     })
   })
 

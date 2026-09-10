@@ -4,7 +4,7 @@ import type { ChatNodeViewProps, TurnTailOwnerProps } from '../contract/slots.ts
 import { MessageIconActions } from './MessageIconActions.tsx'
 import { TurnTimePanel, TurnUsagePanel } from './TurnUsagePanel.tsx'
 import { assistantText } from './turn-assistant.ts'
-import { turnUsageCost } from './turn-cost.ts'
+import { turnCostEstimate } from './turn-cost.ts'
 import css from './TurnTailNodeView.module.css'
 
 type TurnTailNodeViewProps = ChatNodeViewProps<'turn-tail'>
@@ -33,7 +33,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
   // durable message and contribute no per-message actions.
   const turnCost = data.tokenUsage === undefined
     ? undefined
-    : turnUsageCost(data.tokenUsage, costOf)
+    : turnCostEstimate(data.tokenUsage, costOf)
   const messageId = closing.finalNode.messageId
   const assistantActions = messageId === undefined
     ? null

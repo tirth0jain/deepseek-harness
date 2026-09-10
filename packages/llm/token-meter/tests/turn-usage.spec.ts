@@ -65,9 +65,23 @@ function completeAttempt(...middle: readonly SessionEvent[]): SessionEvent[] {
   ]
 }
 
+/**
+ * The aggregate half of the fold. Every expectation below predates the
+ * per-attempt records, which have their own tests further down: this keeps the
+ * aggregate assertions about buckets and routes, not about record shapes.
+ * @param events - Turn-local durable events.
+ * @returns the fold's buckets and routes, without its per-attempt records.
+ */
+function aggregate(events: readonly SessionEvent[]) {
+  const result = deriveTurnTokenUsage(events)
+  if (result === undefined) return undefined
+  const { attempts: _attempts, ...rest } = result
+  return rest
+}
+
 describe('deriveTurnTokenUsage', () => {
   it('preserves authoritative totals and explicit optional buckets', () => {
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, usage({
+    expect(aggregate(completeAttempt(message(3, usage({
       cacheWriteTokens: 0,
       reasoningTokens: 8,
     }))))).toEqual({
@@ -82,7 +96,7 @@ describe('deriveTurnTokenUsage', () => {
   })
 
   it('derives an exact total only when both cache buckets are present', () => {
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, usage({
+    expect(aggregate(completeAttempt(message(3, usage({
       totalTokens: undefined,
       inputTokens: 10,
       outputTokens: 4,
@@ -90,7 +104,7 @@ describe('deriveTurnTokenUsage', () => {
       cacheWriteTokens: 1,
     }))))?.totalTokens).toBe(17)
 
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, usage({
+    expect(aggregate(completeAttempt(message(3, usage({
       totalTokens: undefined,
       cacheWriteTokens: undefined,
     }))))).toBeUndefined()
@@ -127,7 +141,7 @@ describe('deriveTurnTokenUsage', () => {
       event(6, 'llm/retry-started', { turn: 1, step: 1, retry: 1 }),
       message(7, usage({ inputTokens: 40, outputTokens: 10, totalTokens: 70, cacheReadTokens: 20 })),
     )
-    expect(deriveTurnTokenUsage(events)).toEqual({
+    expect(aggregate(events)).toEqual({
       uncachedInputTokens: 140,
       outputTokens: 30,
       totalTokens: 240,
@@ -147,12 +161,12 @@ describe('deriveTurnTokenUsage', () => {
   })
 
   it('fails closed for missing lifecycle or missing attempt usage', () => {
-    expect(deriveTurnTokenUsage([
+    expect(aggregate([
       event(1, 'turn/start', { turn: 1 }),
       message(2, usage()),
       event(3, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
     ])).toBeUndefined()
-    expect(deriveTurnTokenUsage(completeAttempt(message(3)))).toBeUndefined()
+    expect(aggregate(completeAttempt(message(3)))).toBeUndefined()
   })
 
   it.each([
@@ -179,7 +193,7 @@ describe('deriveTurnTokenUsage', () => {
       cacheWriteTokens: 0,
     })],
   ])('fails closed for %s usage', (_label, invalidUsage) => {
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, invalidUsage)))).toBeUndefined()
+    expect(aggregate(completeAttempt(message(3, invalidUsage)))).toBeUndefined()
   })
 
   it('omits optional aggregates and routes unless every attempt reports them', () => {
@@ -201,7 +215,7 @@ describe('deriveTurnTokenUsage', () => {
       event(7, 'step/end', { turn: 1, step: 2 }),
       event(8, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
     ]
-    expect(deriveTurnTokenUsage(events)).toEqual({ uncachedInputTokens: 200, outputTokens: 40, totalTokens: 345 })
+    expect(aggregate(events)).toEqual({ uncachedInputTokens: 200, outputTokens: 40, totalTokens: 345 })
   })
 
   it('sums multiple steps and preserves distinct attributed routes', () => {
@@ -215,7 +229,7 @@ describe('deriveTurnTokenUsage', () => {
       event(7, 'step/end', { turn: 1, step: 2 }),
       event(8, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
     ]
-    expect(deriveTurnTokenUsage(events)).toEqual({
+    expect(aggregate(events)).toEqual({
       uncachedInputTokens: 200,
       outputTokens: 40,
       totalTokens: 340,
@@ -225,6 +239,69 @@ describe('deriveTurnTokenUsage', () => {
         { provider: 'openai', model: 'gpt-5' },
       ],
     })
+  })
+
+  it('records each attempt with its own buckets, route, and closing instant', () => {
+    const events = [
+      event(1, 'turn/start', { turn: 1 }),
+      event(2, 'step/start', { turn: 1, step: 1 }),
+      message(3, usage()),
+      event(4, 'step/end', { turn: 1, step: 1 }),
+      event(5, 'step/start', { turn: 1, step: 2 }),
+      message(6, usage({ cacheReadTokens: undefined, totalTokens: 120 }), 'openai', 'gpt-5', 2),
+      event(7, 'step/end', { turn: 1, step: 2 }),
+      event(8, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ]
+    expect(deriveTurnTokenUsage(events)?.attempts).toEqual([
+      {
+        uncachedInputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 50,
+        at: 3,
+        route: { provider: 'deepseek', model: 'deepseek-chat' },
+      },
+      {
+        uncachedInputTokens: 100,
+        outputTokens: 20,
+        at: 6,
+        route: { provider: 'openai', model: 'gpt-5' },
+      },
+    ])
+  })
+
+  it('keeps an attempt record for a request the provider never attributed', () => {
+    const events = [
+      event(1, 'turn/start', { turn: 1 }),
+      event(2, 'step/start', { turn: 1, step: 1 }),
+      message(3, usage()),
+      event(4, 'step/end', { turn: 1, step: 1 }),
+      event(5, 'step/start', { turn: 1, step: 2 }),
+      event(6, 'assistant/message', {
+        turn: 1,
+        step: 2,
+        message: {
+          id: 'message-6', role: 'assistant', content: [],
+          source: { kind: 'model', provider: '', model: '' },
+        },
+        usage: usage({ cacheReadTokens: undefined, totalTokens: 120 }),
+      }),
+      event(7, 'step/end', { turn: 1, step: 2 }),
+      event(8, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ]
+    const result = deriveTurnTokenUsage(events)
+    // The aggregate withholds `routes` when one attempt named none, while the
+    // per-attempt record still carries what that attempt did report.
+    expect(result?.routes).toBeUndefined()
+    expect(result?.attempts).toEqual([
+      {
+        uncachedInputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 50,
+        at: 3,
+        route: { provider: 'deepseek', model: 'deepseek-chat' },
+      },
+      { uncachedInputTokens: 100, outputTokens: 20, at: 6 },
+    ])
   })
 
   it('fails closed when aggregation overflows a safe integer', () => {
@@ -265,7 +342,7 @@ describe('deriveTurnTokenUsage', () => {
       totalTokens: Math.floor(Number.MAX_SAFE_INTEGER / 2) + 1,
     })],
   ])('fails closed when aggregate %s overflows', (_label, attempt) => {
-    expect(deriveTurnTokenUsage([
+    expect(aggregate([
       event(1, 'turn/start', { turn: 1 }),
       event(2, 'step/start', { turn: 1, step: 1 }),
       message(3, attempt),
@@ -278,7 +355,7 @@ describe('deriveTurnTokenUsage', () => {
   })
 
   it('closes a sampled attempt at step/end', () => {
-    expect(deriveTurnTokenUsage(completeAttempt(
+    expect(aggregate(completeAttempt(
       attempt(3, [
         { type: 'usage', usage: usage() },
         { type: 'finish', reason: { kind: 'stop' } },
@@ -288,7 +365,7 @@ describe('deriveTurnTokenUsage', () => {
   })
 
   it('accepts an aborted finish after observing usage', () => {
-    expect(deriveTurnTokenUsage(completeAttempt(
+    expect(aggregate(completeAttempt(
       attempt(3, [
         { type: 'usage', usage: usage() },
         { type: 'finish', reason: { kind: 'aborted', failure: { message: 'aborted', code: 'ABORTED' } } },
@@ -412,7 +489,7 @@ describe('deriveTurnTokenUsage', () => {
   })
 
   it('requires the complete turn window', () => {
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, usage())).slice(1))).toBeUndefined()
-    expect(deriveTurnTokenUsage(completeAttempt(message(3, usage())).slice(0, -1))).toBeUndefined()
+    expect(aggregate(completeAttempt(message(3, usage())).slice(1))).toBeUndefined()
+    expect(aggregate(completeAttempt(message(3, usage())).slice(0, -1))).toBeUndefined()
   })
 })

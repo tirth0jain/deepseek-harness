@@ -19,7 +19,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
-import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+import type { LlmModelCostPeak, ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import {
   CACHE_CONTROL_FORMATS,
@@ -245,6 +245,12 @@ export interface ResolvedPiAiProviderProfile
    * own, so a catalog capability must not appear here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /**
+   * Per-model peak bands this profile declared, by model id. pi-ai's model
+   * shape has one flat rate, so the window rule rides beside it and the
+   * resolved rate carries whichever band the moment in question falls in.
+   */
+  declaredPeaks: ReadonlyMap<string, LlmModelCostPeak>
 }
 
 /** Plugin configuration: the provider routes this instance owns. */
@@ -346,6 +352,16 @@ const modelFields = {
     output: z.number().min(0),
     cacheRead: z.number().min(0),
     cacheWrite: z.number().min(0),
+    // The window rule is validated in `declaredPeak`, which owns the messages
+    // a config author needs; the schema fixes only the shape.
+    peak: z.object({
+      multiplier: z.number(),
+      windows: z.array(z.object({
+        days: z.array(z.string()),
+        start: z.string(),
+        end: z.string(),
+      })),
+    }),
   }),
   compat: compatProfile,
 }
@@ -537,6 +553,7 @@ export function resolveProfiles(
       ...rest.headers === undefined ? {} : { headers: { ...rest.headers } },
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
       configuredMaxTokens: catalog?.configuredMaxTokens ?? new Map(),
+      declaredPeaks: catalog?.declaredPeaks ?? new Map(),
       modelErrors: catalog?.modelErrors ?? new Map(),
       ...piProvider === undefined ? {} : { piProvider },
       ...catalogError === undefined ? {} : { catalogError },

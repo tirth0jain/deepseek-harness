@@ -15,6 +15,10 @@
 import { builtinProviders, getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { BuiltinProvider } from '@earendil-works/pi-ai/providers/all'
 import type {
+  LlmModelCostPeak,
+  LlmModelCostWeekday,
+} from '@deepseek-ai/dsh-llm'
+import type {
   AnthropicMessagesCompat,
   Api,
   BedrockCompat,
@@ -79,6 +83,79 @@ function declaredCost(
  */
 export function pricedCost(cost: ModelCost): boolean {
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0
+}
+
+/** `HH:MM`, 24-hour UTC; the only clock spelling a peak window may use. */
+const PEAK_WINDOW_CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+
+/**
+ * Every weekday name a peak window may name. A `Set<string>`, not a literal
+ * tuple, because the value being tested arrives from configuration: the guard
+ * below is what turns it into the type the resolved band carries.
+ */
+const PEAK_WINDOW_DAYS: ReadonlySet<string> = new Set([
+  'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
+])
+
+/**
+ * Whether a configured string names a weekday.
+ * @param value - the configured day name.
+ * @returns true when it is one of the seven names a window may use.
+ */
+function isWeekday(value: string): value is LlmModelCostWeekday {
+  return PEAK_WINDOW_DAYS.has(value)
+}
+
+/**
+ * The peak band a configured model entry states, or undefined when it states
+ * none. Every part is required once any part is: a half-stated band would
+ * either never open or open with no factor, and both read as a working tariff.
+ * @param provider - route being resolved, for the diagnostic.
+ * @param id - model id being resolved, for the diagnostic.
+ * @param peak - the entry's `peak` block, if any.
+ * @returns the validated band, or undefined when the entry declares none.
+ * @throws when the block is incomplete or names a moment that cannot exist.
+ */
+function declaredPeak(
+  provider: string,
+  id: string,
+  peak: PiAiModelCostPeak | undefined,
+): LlmModelCostPeak | undefined {
+  if (peak === undefined) return undefined
+  // Unlike the `cost` block's own scalar fields, this one holds a nested array:
+  // schemastery materializes an absent `windows` as `[]`, so the stated test
+  // reads content rather than presence and `peak: {}` stays "no band declared".
+  const stated = peak.multiplier !== undefined || (peak.windows !== undefined && peak.windows.length > 0)
+  if (!stated) return undefined
+  function refuse(reason: string): never {
+    throw new PiAiCatalogError(`provider "${provider}" model "${id}" cost peak ${reason}`)
+  }
+  // A non-positive factor is not a band: zero would price every peak request
+  // at nothing, and a negative one would credit the account for using it.
+  if (peak.multiplier === undefined || !(peak.multiplier > 0) || !Number.isFinite(peak.multiplier)) {
+    refuse('needs a positive multiplier — the factor every base rate moves by inside its windows')
+  }
+  if (peak.windows === undefined || peak.windows.length === 0) {
+    refuse('needs at least one window — a band that opens nowhere is a flat rate spelled two ways')
+  }
+  const windows = peak.windows.map((window) => {
+    const start = window.start
+    const end = window.end
+    if (start === undefined || end === undefined || !PEAK_WINDOW_CLOCK.test(start) || !PEAK_WINDOW_CLOCK.test(end)) {
+      refuse('windows need start and end times as HH:MM in UTC')
+    }
+    // Zero-padded HH:MM compares lexicographically, so this is a clock order.
+    if (start >= end) refuse(`window ${start}-${end} does not end after it starts`)
+    const stated = window.days
+    if (stated === undefined || stated.length === 0) refuse(`window ${start}-${end} needs at least one weekday`)
+    const days: LlmModelCostWeekday[] = []
+    for (const day of stated) {
+      if (!isWeekday(day)) refuse(`window ${start}-${end} names "${day}", not a weekday`)
+      days.push(day)
+    }
+    return { days, start, end }
+  })
+  return { multiplier: peak.multiplier, windows }
 }
 
 /** One request modality a pi-ai model may accept. */
@@ -656,7 +733,9 @@ export interface PiAiModelProfile {
    * model has none, so it stays unpriced and its usage reports no cost. A
    * model listing endpoint publishes no prices — that is one of the facts
    * {@link PiAiProviderProfile.autoRefresh} cannot learn — so a deployment
-   * that wants spend shown for a gateway route states the rate here.
+   * that wants spend shown for a gateway route states the rate here. A tariff
+   * that raises this rate inside recurring windows states them in the same
+   * block's `peak`, whichever side the rate itself came from.
    */
   cost?: PiAiModelCost
   /** pi-ai wire-compatibility switches for this model, winning over the route's per field; one its protocol does not declare is refused. */
@@ -673,6 +752,35 @@ export interface PiAiModelCost {
   cacheRead?: number
   /** Prompt tokens written to the provider's prompt cache. */
   cacheWrite?: number
+  /** Second band the rates above move to inside recurring windows, when the tariff has one. */
+  peak?: PiAiModelCostPeak
+}
+
+/**
+ * One model's declared peak band, in the config's own all-optional terms so an
+ * absent block stays distinguishable from a stated one. The band belongs to
+ * the *rate*, not to a rate source: an entry that inherits the installed
+ * catalog's price may still declare the windows that price moves in.
+ */
+export interface PiAiModelCostPeak {
+  /** Factor every base rate moves by inside a window. */
+  multiplier?: number
+  /** Windows the band is in force in, in UTC. */
+  windows?: PiAiModelCostWindow[]
+}
+
+/** One declared peak window; every field is required once the window is written. */
+export interface PiAiModelCostWindow {
+  /**
+   * Days the window opens on. Typed as plain strings because this is the
+   * configuration boundary: resolution narrows them to weekday names and
+   * refuses the rest by name.
+   */
+  days?: string[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  start?: string
+  /** Window end, `HH:MM` UTC, exclusive. */
+  end?: string
 }
 
 /**
@@ -880,6 +988,16 @@ export interface RouteCatalog {
    * picked, so only an explicit configuration lands here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /**
+   * Per-model peak bands this profile explicitly configured, by model id.
+   *
+   * Carried beside the materialized model rather than on it: pi-ai's `Model`
+   * has one flat `cost`, and a band is a rule about *when* that rate moves,
+   * not a second rate pi-ai could send anywhere. A model whose entry names a
+   * band the installed catalog prices keeps both halves — the catalog's rate,
+   * the deployment's window.
+   */
+  declaredPeaks: ReadonlyMap<string, LlmModelCostPeak>
 }
 
 /**
@@ -945,6 +1063,7 @@ export function resolveRouteModels(
   assertOfferedCompatFields(provider, 'route', request.compat)
   const seen = new Set<string>()
   const configuredMaxTokens = new Map<string, number>()
+  const declaredPeaks = new Map<string, LlmModelCostPeak>()
   const resolveEntry = (entry: PiAiModelProfile): Model<Api> => {
     assertOfferedCompatFields(provider, `model "${entry.id}"`, entry.compat)
     if (entry.id.length === 0) invalid(provider, 'has a model with an empty id')
@@ -975,6 +1094,10 @@ export function resolveRouteModels(
     // Only a value the profile named is a deployment choice; the catalog's is
     // the model's capability and stays out of request defaults.
     if (entry.maxTokens !== undefined) configuredMaxTokens.set(entry.id, entry.maxTokens)
+    // Validated whether or not this entry states a rate: a band inherited onto
+    // a catalog price is exactly the case a gateway tariff describes.
+    const peak = declaredPeak(provider, entry.id, entry.cost?.peak)
+    if (peak !== undefined) declaredPeaks.set(entry.id, peak)
     return {
       // The installed entry lays the floor, and the fields below override it.
       // Enumerating instead would silently drop every `Model` field this
@@ -1019,5 +1142,5 @@ export function resolveRouteModels(
     invalid(provider, `sets compat "${field}", but no model on the route speaks a protocol that takes it;`
       + ` it exists on ${takers.join(', ')}`)
   }
-  return { models: serviceableModels, configuredMaxTokens, modelErrors }
+  return { models: serviceableModels, configuredMaxTokens, declaredPeaks, modelErrors }
 }

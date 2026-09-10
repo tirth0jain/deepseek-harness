@@ -48,6 +48,7 @@ import {
 import type {
   GenerateOptions,
   ImageAttachmentAccess,
+  LlmModelCostPeak,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -208,9 +209,13 @@ function reasoningInfo(
  * catalog's "nobody published one" sentinel (see `NO_COST`), not a free model,
  * so it is omitted rather than surfaced as a $0.00 price.
  * @param model - the resolved model descriptor.
+ * @param peak - peak band the profile declared for this model, if any.
  * @returns the `cost` field, or an empty object when no rate is known.
  */
-function costInfo(model: Model<Api>): Pick<LlmResolvedModelInfo, 'cost'> | Record<string, never> {
+function costInfo(
+  model: Model<Api>,
+  peak: LlmModelCostPeak | undefined,
+): Pick<LlmResolvedModelInfo, 'cost'> | Record<string, never> {
   const { cost } = model
   if (!pricedCost(cost)) return {}
   return {
@@ -219,6 +224,9 @@ function costInfo(model: Model<Api>): Pick<LlmResolvedModelInfo, 'cost'> | Recor
       output: cost.output,
       cacheRead: cost.cacheRead,
       cacheWrite: cost.cacheWrite,
+      // A band over an unpublished rate is not reported: the all-zero sentinel
+      // above already says "no price", and a window onto nothing is no tariff.
+      ...peak === undefined ? {} : { peak },
     },
   }
 }
@@ -334,7 +342,7 @@ export class PiAiAdapter extends LlmAdapter {
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
-      ...costInfo(resolvedModel),
+      ...costInfo(resolvedModel, profile.declaredPeaks.get(model)),
     }
   }
 

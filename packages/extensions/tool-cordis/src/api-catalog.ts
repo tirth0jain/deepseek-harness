@@ -4535,6 +4535,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface LlmModelContext {\n    contextWindow: number;\n}',
   },
   {
+    name: 'LlmModelCost',
+    declaration: 'export interface LlmModelCost {\n    input: number;\n    output: number;\n    cacheRead?: number;\n    cacheWrite?: number;\n    peak?: LlmModelCostPeak;\n}',
+  },
+  {
+    name: 'LlmModelCostPeak',
+    declaration: 'export interface LlmModelCostPeak {\n    readonly multiplier: number;\n    readonly windows: readonly LlmModelCostPeakWindow[];\n}',
+  },
+  {
+    name: 'LlmModelCostPeakWindow',
+    declaration: 'export interface LlmModelCostPeakWindow {\n    readonly days: readonly LlmModelCostWeekday[];\n    readonly start: string;\n    readonly end: string;\n}',
+  },
+  {
+    name: 'LlmModelCostWeekday',
+    declaration: 'export type LlmModelCostWeekday = \'mon\' | \'tue\' | \'wed\' | \'thu\' | \'fri\' | \'sat\' | \'sun\';',
+  },
+  {
     name: 'LlmModelDiscoveryRequest',
     declaration: 'export interface LlmModelDiscoveryRequest {\n    provider?: string;\n    baseURL?: string;\n    api?: string;\n    apiKey?: string;\n}',
   },
@@ -4556,7 +4572,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmResolvedModelInfo',
-    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    systemPromptUpdate?: SystemPromptUpdate;\n}',
+    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    cost?: LlmModelCost;\n    systemPromptUpdate?: SystemPromptUpdate;\n}',
   },
   {
     name: 'LlmRuntime',
@@ -4708,7 +4724,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelCatalogModel',
-    declaration: 'export interface ModelCatalogModel {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n    readonly reasoning?: ModelReasoning;\n}',
+    declaration: 'export interface ModelCatalogModel {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n    readonly reasoning?: ModelReasoning;\n    readonly cost?: LlmModelCost;\n}',
   },
   {
     name: 'ModelMessageSource',

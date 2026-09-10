@@ -91,6 +91,8 @@ The service is built on one fold and one anchor. Each session gets an isolated r
 | [`src/breakdown-projection.ts`](src/breakdown-projection.ts) | `contextBreakdown` projection definition |
 | [`src/client.ts`](src/client.ts) | Browser-safe client surface for projection consumers |
 | [`src/turn-usage.ts`](src/turn-usage.ts) | Pure fold for exact per-attempt and per-Turn usage |
+| [`src/usage-cost.ts`](src/usage-cost.ts) | The published-rate fold: buckets × per-million rates, refusing totals a rate cannot price |
+| [`src/rate-schedule.ts`](src/rate-schedule.ts) | Which of a rate's two bands one instant prices in (peak windows, UTC) |
 
 ### Fold flow
 

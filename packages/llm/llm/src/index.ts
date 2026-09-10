@@ -17,6 +17,8 @@ import type {
   LlmImageRequestPricing,
   LlmModelContext,
   LlmModelCost,
+  LlmModelCostPeak,
+  LlmModelCostWeekday,
   LlmModelDiscoveryRequest,
   LlmModelInfo,
   LlmResolvedModelInfo,
@@ -686,7 +688,9 @@ export class LlmRuntime extends TypertRemoteService {
   /**
    * Validate and detach one adapter-reported rate. A price that is not a
    * finite non-negative number would poison every estimate computed from it,
-   * so a malformed rate is refused rather than dropped silently.
+   * so a malformed rate is refused rather than dropped silently. A stated peak
+   * band is held to the same rule: a band an estimate cannot place on the
+   * clock would silently price every moment at the base band.
    * @param cost - rate the adapter reported, if any.
    * @param provider - route being resolved, for the diagnostic.
    * @param model - model being resolved, for the diagnostic.
@@ -716,6 +720,7 @@ export class LlmRuntime extends TypertRemoteService {
       output: cost.output,
       ...cost.cacheRead === undefined ? {} : { cacheRead: cost.cacheRead },
       ...cost.cacheWrite === undefined ? {} : { cacheWrite: cost.cacheWrite },
+      ...cost.peak === undefined ? {} : { peak: detachedPeak(cost.peak, provider, model) },
     }
   }
 
@@ -1168,6 +1173,51 @@ function adapterFailureChunk(error: unknown, signal?: AbortSignal): StreamChunk 
       ? { kind: 'aborted', failure }
       : { kind: 'error', failure },
   }
+}
+
+/** `HH:MM`, 24-hour UTC; the only clock spelling a rate window may use. */
+const RATE_WINDOW_CLOCK = /^(?:[01]\d|2[0-3]):[0-5]\d$/
+
+/** Every weekday name a rate window may name. */
+const RATE_WINDOW_DAYS: readonly LlmModelCostWeekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+/**
+ * Validate and detach one adapter-reported peak band. Zero-padded `HH:MM`
+ * compares lexicographically, which is what makes the ordering check below an
+ * ordering check on the clock. A window that opens nowhere, or ends before it
+ * starts, is refused: pricing would either never apply the band or apply it
+ * across the wrong side of midnight, and both look like a working estimate.
+ * @param peak - band the adapter reported.
+ * @param provider - route being resolved, for the diagnostic.
+ * @param model - model being resolved, for the diagnostic.
+ * @returns a detached band.
+ * @throws LlmError when the band is malformed.
+ */
+function detachedPeak(peak: LlmModelCostPeak, provider: string, model: string): LlmModelCostPeak {
+  const invalid = (reason: string): never => {
+    throw new LlmError(
+      `adapter returned invalid cost metadata for provider "${provider}" model "${model}": ${reason}`,
+      'INVALID_MODEL_COST',
+    )
+  }
+  if (!Number.isFinite(peak.multiplier) || peak.multiplier <= 0) {
+    invalid('a peak multiplier must be a positive finite number')
+  }
+  if (peak.windows.length === 0) invalid('a peak band needs at least one window')
+  const windows = peak.windows.map((window) => {
+    if (window.days.length === 0) invalid('a peak window needs at least one weekday')
+    for (const day of window.days) {
+      if (!RATE_WINDOW_DAYS.includes(day)) invalid(`"${String(day)}" is not a weekday name`)
+    }
+    if (!RATE_WINDOW_CLOCK.test(window.start) || !RATE_WINDOW_CLOCK.test(window.end)) {
+      invalid('peak window bounds must be HH:MM in UTC')
+    }
+    if (window.start >= window.end) {
+      invalid(`peak window ${window.start}-${window.end} does not end after it starts`)
+    }
+    return { days: [...window.days], start: window.start, end: window.end }
+  })
+  return { multiplier: peak.multiplier, windows }
 }
 
 interface AdapterRegistration {
