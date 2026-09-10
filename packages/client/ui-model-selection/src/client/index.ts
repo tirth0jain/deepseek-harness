@@ -26,6 +26,7 @@ import type { ModelDirectoryState } from './directory.ts'
 import { ModelDirectoryResolver } from './service.ts'
 import type { ModelSelectInjected } from './slots.ts'
 import { ModelSelect } from './ModelSelect.tsx'
+import { formatRate } from './rates.ts'
 import { en, zh, type ModelKey } from './locales.ts'
 
 export { ModelDirectory } from './directory.ts'
@@ -62,21 +63,13 @@ function descriptionOf(
 
 /**
  * One model's published rate as a compact cell, or undefined when the route
- * publishes none. Cache prices are left out of the row: they are what makes a
- * cached conversation cheap, not what a reader compares routes by, and the
- * spending surfaces report actual cache spend where it lands.
+ * publishes none.
  * @param model - catalog entry inside a provider group.
  * @returns `$in / $out` per million tokens, or undefined.
  */
 function rateOf(model: ModelDirectoryState['groups'][number]['models'][number]): string | undefined {
   const cost = model.cost
-  if (cost === undefined) return undefined
-  return `$${trimPrice(cost.input)} / $${trimPrice(cost.output)}`
-}
-
-/** Drop a trailing `.00`/`.0` from a price so a whole number reads as one. */
-function trimPrice(value: number): string {
-  return String(Number(value.toFixed(4)))
+  return cost === undefined ? undefined : formatRate(cost)
 }
 
 /** Flatten the directory into popup rows; failure rows are listed for visibility but never selectable. */

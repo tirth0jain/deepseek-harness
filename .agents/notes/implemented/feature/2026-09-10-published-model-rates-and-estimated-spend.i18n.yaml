@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-10-published-model-rates-and-estimated-spend.md
-2026-09-10-published-model-rates-and-estimated-spend.md: 17444ae155afb76f8f052d4b31fa43188f4b2fc9
-2026-09-10-published-model-rates-and-estimated-spend.zh.md: 675f3acfce989785490026bc59120d71a89ed6c1
+2026-09-10-published-model-rates-and-estimated-spend.md: e0def61f8d68da86a7981093910321cbdd3f3a48
+2026-09-10-published-model-rates-and-estimated-spend.zh.md: 18c411ad727e06aab18d32798c3e78caaafdaef9

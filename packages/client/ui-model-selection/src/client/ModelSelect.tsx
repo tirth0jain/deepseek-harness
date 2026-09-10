@@ -24,6 +24,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelSelectInjected } from './slots.ts'
+import { formatRate } from './rates.ts'
 import css from './ModelSelect.module.css'
 
 /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
@@ -38,23 +39,6 @@ interface EffortChoice {
 
 /** Unplaced portal card: hidden but laid out at a fixed origin so offsetWidth/offsetHeight are real (Menu primitive's measure pass). */
 const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
-
-/** Drop a trailing `.00`/`.0` from a price so a whole number reads as one. */
-function trimPrice(value: number): string {
-  return String(Number(value.toFixed(4)))
-}
-
-/**
- * One model's published rate as `$in / $out` per million tokens. Cache prices
- * stay out of the row: they are what makes a long conversation cheap, not what
- * a reader compares routes by, and the spending surfaces report actual cache
- * spend where it lands.
- * @param cost - the catalog entry's published rate.
- * @returns the compact rate cell.
- */
-function formatRate(cost: { input: number; output: number }): string {
-  return `$${trimPrice(cost.input)} / $${trimPrice(cost.output)}`
-}
 
 /**
  * Render the composer model seat.
