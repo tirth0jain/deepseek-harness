@@ -1145,6 +1145,35 @@ export interface PiAiProviderProfile {
    */
   modelOverrides?: Record<string, PiAiModelOverride>
   /**
+   * Refresh this route's model catalog from its endpoint on every web page
+   * load: the route is re-interrogated at its model-listing URL and the
+   * merged result is stored into the `llm-pi-ai` user settings section, so a
+   * gateway that gains or retires models, or corrects a context window, is
+   * reflected without hand-editing `settings.yaml`.
+   *
+   * Only the endpoint itself is ever consulted — nothing here consults the
+   * installed pi-ai catalog, and capacities the listing does not disclose
+   * (output caps, modalities, reasoning) are never invented. Already-listed
+   * entries keep every field the deployment wrote, and a field the listing
+   * now discloses replaces the stored one; a model the listing no longer
+   * serves is dropped, because retirement is the gateway's call. A model
+   * the listing adds gets exactly the fields the listing discloses (id,
+   * display name, capacities) — reasoning efforts are never auto-added,
+   * since no listing endpoint reports them; declare them per model on the
+   * Models page for the models that need them. A model's remaining facts
+   * fall to the route's `defaultContextWindow`, `defaultMaxTokens`, and
+   * `defaultInput` at resolution. An empty successful listing is refused
+   * as ambiguous rather than trusted, so a transient gateway hiccup cannot
+   * erase the stored catalog.
+   *
+   * Web-page loads are throttled per route, so burst refreshes coalesce
+   * behind one listing request. A route whose listing this build cannot read
+   * (a protocol with no `/models` endpoint, or a route without a baseURL) is
+   * skipped with a warning. Nothing runs unless this flag is set; headless
+   * compositions have no web page loads to hook and never refresh.
+   */
+  autoRefresh?: boolean
+  /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
    * field. What neither sets keeps the installed catalog entry's value, then
@@ -3311,6 +3340,26 @@ export interface Config {
 ```
 
 来源：[`packages/web/web-fetch-http/src/index.ts:32`](../packages/web/web-fetch-http/src/index.ts)
+
+## `@deepseek-ai/dsh-web-search-brightdata`
+
+需要：`web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Literal Bright Data API token; prefer {@link apiKeyEnv} so no secret enters configuration files. */
+  apiKey?: string
+  /** Credential reference resolved for each search; defaults to `$BRIGHTDATA_API_TOKEN`. */
+  apiKeyEnv?: string
+  /** Web Unlocker endpoint base; `/request` is appended. */
+  baseURL?: string
+  /** Bright Data zone name. Defaults to the free MCP provisioning's `mcp_unlocker`. */
+  zone?: string
+}
+```
+
+来源：[`packages/web/web-search-brightdata/src/index.ts:47`](../packages/web/web-search-brightdata/src/index.ts)
 
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
