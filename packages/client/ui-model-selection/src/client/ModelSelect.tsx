@@ -355,7 +355,9 @@ export function ModelSelect(
                             <span className={css.optionCopy}>
                               <span className={css.modelName}>{model.name}</span>
                               {model.cost !== undefined && (
-                                <span className={css.modelRate}>{formatRate(model.cost)}</span>
+                                <span className={css.modelRate}>
+                                  {formatRate(model.cost, price => t('rate.cacheHit', { price }))}
+                                </span>
                               )}
                             </span>
                             <span className={css.check}>

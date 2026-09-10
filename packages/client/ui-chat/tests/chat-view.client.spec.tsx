@@ -2872,28 +2872,26 @@ describe('ChatView', () => {
   })
 })
 
-describe('TurnNavigator per-turn loading', () => {
-  it('loads only the hovered unloaded turn from its card button', async () => {
+describe('TurnNavigator previews', () => {
+  it('shows an unloaded turn preview without a load control', () => {
+    // Loading lives beside the usage pill now, so the card is a read-only
+    // tooltip: its text must not offer a control the rail no longer holds.
     const h = makeHarness({}, { hasMore: true })
     h.setOutline([
       { turn: 1, seq: 0, prompt: 'earliest prompt', response: 'earliest answer' },
       { turn: 2, seq: 9, prompt: 'later prompt', response: 'later answer' },
     ])
     const view = render(<h.ChatView {...h.props} />)
-    const first = view.getByRole('button', { name: '加载并跳转到第 1 轮' })
-    fireEvent.focus(first)
+    fireEvent.focus(view.getByRole('button', { name: '加载并跳转到第 1 轮' }))
     const card = view.getByRole('tooltip')
     expect(card.textContent).toContain('earliest prompt')
-
-    // The card's own control pages history to exactly this Turn.
-    const load = view.getByRole('button', { name: '仅加载第 1 轮' })
-    expect(h.loadThrough).not.toHaveBeenCalled()
-    fireEvent.click(load)
-    expect(h.loadThrough).toHaveBeenCalledWith(0)
-    await act(async () => { await Promise.resolve() })
+    expect(card.textContent).toContain('earliest answer')
+    expect(card.querySelector('button')).toBeNull()
+    // The card carries no control, so it never takes the pointer.
+    expect(card.className).not.toContain('previewReachable')
   })
 
-  it('leaves a loaded turn without a load control', () => {
+  it('leaves a loaded turn preview without a load control', () => {
     const snapshot = chatSnapshotFixture({
       nodes: [
         userInTurn(1, 'first prompt', 1), assistant(2, 'first response', 1),
@@ -2904,6 +2902,8 @@ describe('TurnNavigator per-turn loading', () => {
     const h = makeHarness({}, {}, snapshot)
     const view = render(<h.ChatView {...h.props} />)
     fireEvent.focus(view.getByRole('button', { name: '跳转到第 1 轮' }))
-    expect(view.getByRole('tooltip').textContent).not.toContain('仅加载')
+    const card = view.getByRole('tooltip')
+    expect(card.textContent).toContain('first prompt')
+    expect(card.querySelector('button')).toBeNull()
   })
 })

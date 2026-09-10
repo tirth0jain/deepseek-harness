@@ -65,11 +65,15 @@ function descriptionOf(
  * One model's published rate as a compact cell, or undefined when the route
  * publishes none.
  * @param model - catalog entry inside a provider group.
+ * @param t - the model namespace, for the cache-hit segment's wording.
  * @returns `$in / $out` per million tokens, or undefined.
  */
-function rateOf(model: ModelDirectoryState['groups'][number]['models'][number]): string | undefined {
+function rateOf(
+  model: ModelDirectoryState['groups'][number]['models'][number],
+  t: TranslateNS<'model'>,
+): string | undefined {
   const cost = model.cost
-  return cost === undefined ? undefined : formatRate(cost)
+  return cost === undefined ? undefined : formatRate(cost, price => t('rate.cacheHit', { price }))
 }
 
 /** Flatten the directory into popup rows; failure rows are listed for visibility but never selectable. */
@@ -78,7 +82,7 @@ function optionsOf(directory: ModelDirectoryState, t: TranslateNS<'model'>): Sel
   for (const group of directory.groups) {
     for (const model of group.models) {
       const description = descriptionOf(group.id, model, t)
-      const rate = rateOf(model)
+      const rate = rateOf(model, t)
       const detail = description !== undefined ? `${group.name} · ${description}` : group.name
       rows.push({
         id: rowId(group.id, model.id),

@@ -12,6 +12,7 @@ import { StatsPills, deriveStats, formatDuration, type StatsPillsProps } from '.
 import { formatTokens } from '../src/client/chat/token-format.ts'
 import { en, zh } from '../src/client/locale.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
+import { sessionSelector } from './session-snapshot-fixture.client.ts'
 
 const t: StatsPillsProps['t'] = makeTranslate(zh, commonZh)
 const tEn: StatsPillsProps['t'] = makeTranslate(en, commonEn)
@@ -144,8 +145,16 @@ describe('StatsPills', () => {
   function props(
     source: { getSnapshot(): ChatSnapshot; subscribe(fn: () => void): () => void },
     values: Record<string, unknown> = { tokenUsage: USAGE },
+    session: { hasMore?: boolean } = {},
   ): StatsPillsProps {
-    return { useChat: bindSnapshotSelector(source), useProjection: projections(values), t: tEn }
+    return {
+      useChat: bindSnapshotSelector(source),
+      useProjection: projections(values),
+      // The load control reads only the pager's remaining-history flag.
+      useSession: bindSnapshotSelector(sessionSelector({ hasMore: session.hasMore ?? false })),
+      loadThrough: () => Promise.resolve(),
+      t: tEn,
+    }
   }
 
   function tokenUsage(cacheReadTokens: number, uncachedInputTokens: number) {
@@ -447,5 +456,97 @@ describe('StatsPills', () => {
     act(() => { set({ partial: { turn: 1, step: 2, blocks: [{ kind: 'text', text: 'a' }] } }) })
     act(() => { set({ partial: { turn: 1, step: 2, blocks: [{ kind: 'text', text: 'ab' }] } }) })
     expect(renders).toBe(before)
+  })
+
+  describe('StatsPills load-turn control', () => {
+    /** Whole-log outline: turn/start seqs the paged window may or may not cover. */
+    const outline = [
+      { turn: 1, seq: 10, prompt: 'first', response: 'done' },
+      { turn: 2, seq: 400, prompt: 'second', response: 'done' },
+    ]
+
+    it('offers the newest Turn while the window still starts after its turn/start seq', () => {
+      // The window head sits inside turn 2 (its process node anchors at 400.9),
+      // so the turn is only partly held and reports no aggregate yet.
+      const { source } = makeSource({ nodes: [assistant(401, 2), assistant(402, 2)] })
+      const view = render(<StatsPills {...props(
+        source,
+        { tokenUsage: USAGE, turnOutline: outline },
+        { hasMore: true },
+      )} />)
+      const button = view.getByRole('button', { name: 'Load all of turn 2 — your message through the full response' })
+      expect(button.textContent).toBe('Load turn 2')
+      expect(button.hasAttribute('disabled')).toBe(false)
+    })
+
+    it('pages history through the Turn\'s turn/start seq, which carries the whole Turn', () => {
+      const { source } = makeSource({ nodes: [assistant(401, 2), assistant(402, 2)] })
+      const loadThrough = vi.fn(() => Promise.resolve())
+      const view = render(<StatsPills {...props(
+        source,
+        { tokenUsage: USAGE, turnOutline: outline },
+        { hasMore: true },
+      )} loadThrough={loadThrough} />)
+      fireEvent.click(view.getByRole('button', { name: /Load all of turn 2/ }))
+      // The seq logged before the Turn's prompt and steps, not the window head:
+      // paging through it is what brings in the reader's message as well.
+      expect(loadThrough).toHaveBeenCalledWith(400)
+    })
+
+    it('stays hidden once the window covers the newest Turn', () => {
+      // First anchor (398.9) precedes turn 2's start, so the whole Turn is held.
+      const { source } = makeSource({ nodes: [assistant(399, 2)] })
+      const view = render(<StatsPills {...props(
+        source,
+        { tokenUsage: USAGE, turnOutline: outline },
+        { hasMore: true },
+      )} />)
+      expect(view.queryByRole('button', { name: /Load all of turn/ })).toBeNull()
+    })
+
+    it('stays hidden when the pager has nothing left to page in', () => {
+      const { source } = makeSource({ nodes: [assistant(401, 2)] })
+      const view = render(<StatsPills {...props(
+        source,
+        { tokenUsage: USAGE, turnOutline: outline },
+        { hasMore: false },
+      )} />)
+      expect(view.queryByRole('button', { name: /Load all of turn/ })).toBeNull()
+    })
+
+    it('shows the busy wording and refuses a second press while the page is in flight', async () => {
+      const { source } = makeSource({ nodes: [assistant(401, 2)] })
+      let settle: (() => void) | undefined
+      const loadThrough = vi.fn(() => new Promise<void>((resolve) => { settle = resolve }))
+      const view = render(<StatsPills {...props(
+        source,
+        { tokenUsage: USAGE, turnOutline: outline },
+        { hasMore: true },
+      )} loadThrough={loadThrough} />)
+      fireEvent.click(view.getByRole('button', { name: /Load all of turn 2/ }))
+      const busy = view.getByRole('button', { name: /Load all of turn 2/ })
+      expect(busy.textContent).toBe('Loading turn 2…')
+      expect(busy.hasAttribute('disabled')).toBe(true)
+      expect(busy.getAttribute('aria-busy')).toBe('true')
+      // The clearing runs in the promise's `.finally`, one microtask later.
+      await act(async () => {
+        settle?.()
+        await Promise.resolve()
+      })
+      expect(view.getByRole('button', { name: /Load all of turn 2/ }).textContent).toBe('Load turn 2')
+    })
+
+    it('keeps the row alive when a partly loaded Turn has no settled step yet', () => {
+      // No nodes and no tokens, but the newest Turn is unfinished business: the
+      // row must render or the only control that can complete it never appears.
+      const { source } = makeSource()
+      const view = render(<StatsPills {...props(
+        source,
+        { turnOutline: outline },
+        { hasMore: true },
+      )} />)
+      expect(view.container.querySelector('[data-composer-stats]')).toBeTruthy()
+      expect(view.getByRole('button', { name: /Load all of turn 2/ })).toBeTruthy()
+    })
   })
 })

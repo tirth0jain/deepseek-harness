@@ -6,6 +6,7 @@ import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-tes
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import { AssistantMarkdown, type AssistantMarkdownProps } from '../src/client/chat/AssistantMarkdown.tsx'
 import { StatsPills } from '../src/client/chat/StatsPills.tsx'
+import { sessionSelector } from './session-snapshot-fixture.client.ts'
 import { zh } from '../src/client/locale.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 
@@ -48,6 +49,8 @@ describe('render branch tails', () => {
       <StatsPills
         t={t}
         useChat={bindSnapshotSelector(source)}
+        useSession={bindSnapshotSelector(sessionSelector())}
+        loadThrough={() => Promise.resolve()}
         useProjection={() => undefined}
       />,
     )

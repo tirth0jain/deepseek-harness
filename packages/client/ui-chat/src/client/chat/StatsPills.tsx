@@ -5,13 +5,19 @@
 // Mounted on 'conversation.composer.dock' so it sticks with the composer in the
 // active conversation scrollport (see ConversationRoot data-conversation-scroll).
 
-import { memo, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { IconDatabaseOutline16, IconGaugeOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconDatabaseOutline16, IconDownloadOutline16, IconGaugeOutline16, IconLoadingOutline16,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
+import type { SessionSnapshotSelector } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges the sessionStats key into SessionProjectionMap for useProjection.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
+// Type-only: merges the turnOutline key into SessionProjectionMap for useProjection.
+import type {} from '@deepseek-ai/dsh-session-turn-outline/client'
 import type { TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
@@ -124,6 +130,10 @@ export function billedInputTokens(usage: TokenUsageProjection): number {
 export interface StatsPillsProps {
   useChat: SnapshotSelectorHook<ChatSnapshot>
   useProjection: UseProjection
+  /** Session lifecycle state: the pager's remaining-history flag gates the load control. */
+  useSession: SessionSnapshotSelector
+  /** Pages the window back through one seq, resolving once it is covered. */
+  loadThrough: (seq: SessionSeq) => Promise<void>
   /** The owning dock's locale seat. */
   t: ChatViewSlotProps['t']
 }
@@ -314,11 +324,62 @@ function UsagePill({ usage, t, dialog }: {
   )
 }
 
-export const StatsPills = memo(function StatsPills({ useChat, useProjection, t }: StatsPillsProps) {
+/**
+ * The load control beside the usage pill: pages the newest Turn's own events
+ * into the window so its tokens — and therefore its estimated cost — exist to
+ * be reported. A window that starts mid-Turn holds only part of a Turn, and a
+ * partially held Turn reports no aggregate; the button is the reader's way to
+ * complete it without hunting the rail.
+ *
+ * It rides the `turn/start` seq the host outline publishes, which is logged
+ * before the Turn's prompt and steps, so one press brings in the whole Turn:
+ * the reader's message through the end of the model's response.
+ */
+function LoadTurnPill({ turn, busy, onLoad, t }: {
+  turn: number
+  busy: boolean
+  onLoad: () => void
+  t: ChatViewSlotProps['t']
+}) {
+  return (
+    <span className={css.anchor}>
+      <button
+        type="button"
+        className={css.pill}
+        disabled={busy}
+        aria-busy={busy ? 'true' : undefined}
+        aria-label={t('chat.loadTurn.aria', { turn })}
+        onClick={onLoad}
+      >
+        {busy ? <IconLoadingOutline16 /> : <IconDownloadOutline16 />}
+        <span className={css.label}>
+          {busy ? t('chat.loadTurn.busy', { turn }) : t('chat.loadTurn', { turn })}
+        </span>
+      </button>
+    </span>
+  )
+}
+
+export const StatsPills = memo(function StatsPills({
+  useChat, useProjection, useSession, loadThrough, t,
+}: StatsPillsProps) {
   const settledNodes = useChat(s => s.legacy.nodes)
   const usage = useProjection('tokenUsage')
+  // Whole-log outline: names every Turn of the session whether or not the
+  // paged window holds it, which is what makes an incomplete newest Turn
+  // detectable from here.
+  const outline = useProjection('turnOutline')
+  // The window head. A Turn whose start sits before it is only partially
+  // loaded, so its aggregate is unknowable until the window covers that seq —
+  // the same `uncovered` test the rail's jump uses before it repages.
+  const firstKey = useChat(s => s.order[0])
+  const nodeStore = useChat(s => s.nodes)
+  const hasMore = useSession(s => s.hasMore)
   // One exclusive slot for both dialogs: opening either pill closes the other.
   const [openPill, setOpenPill] = useState<'time' | 'usage' | null>(null)
+  // The Turn whose load is in flight, by number: a control that re-targets
+  // mid-flight must not leave a stale busy flag behind.
+  const [loadingTurn, setLoadingTurn] = useState<number | null>(null)
   // Every figure rides the durable sessionStats projection, so paging and
   // compaction cannot change any of them; an assembly without the unit falls
   // back to the window-scoped fold wholesale (same field names), paid only
@@ -329,7 +390,24 @@ export const StatsPills = memo(function StatsPills({ useChat, useProjection, t }
   // billing (e.g. every request failed) shows its counts without a usage pill.
   const hasTokens = usage !== undefined
     && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)
-  if (stats.steps === 0 && !hasTokens) return null
+  // The newest Turn, offered for loading only while the window starts after
+  // its `turn/start` seq. `hasMore` guards the degenerate case where nothing
+  // is left to page in: without it the control could never discharge.
+  const firstSeq = firstKey === undefined ? null : nodeStore.get(firstKey)?.anchorSeq ?? null
+  const newest = outline === undefined || outline.length === 0
+    ? undefined
+    : outline[outline.length - 1]
+  const pendingTurn = newest !== undefined && hasMore && (firstSeq === null || firstSeq > newest.seq)
+    ? newest
+    : undefined
+  const loadTurn = useCallback((seq: SessionSeq): void => {
+    setLoadingTurn(newest?.turn ?? null)
+    void loadThrough(seq)
+      // The pager surfaces its own failure; this control only needs to settle.
+      .catch(() => { /* keep the button available for a retry */ })
+      .finally(() => { setLoadingTurn(null) })
+  }, [loadThrough, newest?.turn])
+  if (stats.steps === 0 && !hasTokens && pendingTurn === undefined) return null
   // data-composer-stats: InputBar's `.root:has([data-composer-stats])` rule
   // tightens the composer's bottom clearance only while this row renders.
   return (
@@ -352,6 +430,14 @@ export const StatsPills = memo(function StatsPills({ useChat, useProjection, t }
             open: openPill === 'usage',
             setOpen: (open) => { setOpenPill(open ? 'usage' : null) },
           }}
+        />
+      )}
+      {pendingTurn !== undefined && (
+        <LoadTurnPill
+          turn={pendingTurn.turn}
+          busy={loadingTurn === pendingTurn.turn}
+          onLoad={() => { loadTurn(pendingTurn.seq) }}
+          t={t}
         />
       )}
     </div>

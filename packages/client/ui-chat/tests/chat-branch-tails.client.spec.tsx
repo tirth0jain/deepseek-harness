@@ -17,6 +17,7 @@ import {
 } from '../src/client/chat/MessageItem.tsx'
 import { AssistantMarkdown, type AssistantMarkdownProps } from '../src/client/chat/AssistantMarkdown.tsx'
 import { StatsPills } from '../src/client/chat/StatsPills.tsx'
+import { sessionSelector } from './session-snapshot-fixture.client.ts'
 import { zh } from '../src/client/locale.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 
@@ -1046,6 +1047,8 @@ describe('small branch tails', () => {
       <StatsPills
         t={t}
         useChat={bindSnapshotSelector(source)}
+        useSession={bindSnapshotSelector(sessionSelector())}
+        loadThrough={() => Promise.resolve()}
         useProjection={(key: string) => key === 'tokenUsage'
           ? { uncachedInputTokens: 0, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 }
           : undefined}

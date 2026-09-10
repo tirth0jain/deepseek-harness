@@ -56,6 +56,13 @@ button.pill[aria-expanded='true'] {
   color: var(--dsw-alias-label-secondary);
 }
 
+/* A load in flight keeps its place in the row while refusing a second press;
+   the label already carries the busy wording. */
+button.pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .label {
   min-width: 0;
   overflow: hidden;

@@ -184,9 +184,18 @@ export interface ChatViewInjected {
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
 }
 
+/**
+ * Injected face of the composer-dock session statistics. The dock is composed
+ * outside the Chat view, so the paging verb its load control needs is resolved
+ * from the Session binding rather than inherited from the view.
+ */
+export interface StatsPillsInjected {
+  /** Page history back through seq; resolves when the window covers it. */
+  loadThrough: (seq: SessionSeq) => Promise<void>
+}
+
 /** Full Chat view props. */
-export type ChatViewSlotProps =
-  PropsRuntime<'conversation.view'>
+export type ChatViewSlotProps =  PropsRuntime<'conversation.view'>
   & PropsRenderSlots<'conversation.chat.node' | 'conversation.message.images'>
   & PropsStore<ChatStore>
   & InjectFace<ChatViewInjected>
