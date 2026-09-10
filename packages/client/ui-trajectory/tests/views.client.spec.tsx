@@ -31,7 +31,7 @@ import type {
   SessionBinding, SessionListState, SessionProjectionMap, SessionSnapshot, UseProjection,
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import {
   ConversationSession, ConversationSessionHeader,
@@ -125,6 +125,7 @@ function sessionSnapshot(nodes: LegacyConversationSlice['nodes']): SessionSnapsh
     openState: 'open',
     openError: null,
     hasMore: false,
+    baseSeq: SessionSeq(0),
     loadingOlder: false,
     promptError: null,
     blank: nodes.length === 0,

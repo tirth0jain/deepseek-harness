@@ -10,7 +10,7 @@ import { useSyncExternalStore } from 'react'
 import type {
   QueuedMessage, SessionListState, SessionSnapshot,
 } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
@@ -43,7 +43,7 @@ function row(id: string, text: string | null, preview = text ?? '[image]'): Queu
 function snapshotWith(queue: QueuedMessage[]): SessionSnapshot {
   return {
     sessionId: SID, queue, running: true, removed: false, openState: 'open', openError: null,
-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null,
+    hasMore: false, baseSeq: SessionSeq(0), loadingOlder: false, promptError: null, blank: false, subagent: null,
     pendingSubmissions: [],
     lastAgentError: null, promptAttempted: true, awaitingFirstTurn: false,
   }

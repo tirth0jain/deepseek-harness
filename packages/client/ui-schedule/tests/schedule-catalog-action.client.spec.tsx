@@ -5,7 +5,7 @@ import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionSnapshot, UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { ScheduleRecord } from '@deepseek-ai/dsh-schedule/client'
 import { ScheduleId } from '@deepseek-ai/dsh-schedule'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   formatScheduleFrequency,
   formatScheduleLocalTime,
@@ -59,6 +59,7 @@ function sessionSnapshot(openState: SessionSnapshot['openState']): SessionSnapsh
     openState,
     openError: null,
     hasMore: false,
+    baseSeq: SessionSeq(0),
     loadingOlder: false,
     promptError: null,
     blank: false,

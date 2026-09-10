@@ -325,15 +325,15 @@ function UsagePill({ usage, t, dialog }: {
 }
 
 /**
- * The load control beside the usage pill: pages the newest Turn's own events
- * into the window so its tokens — and therefore its estimated cost — exist to
- * be reported. A window that starts mid-Turn holds only part of a Turn, and a
- * partially held Turn reports no aggregate; the button is the reader's way to
- * complete it without hunting the rail.
- *
- * It rides the `turn/start` seq the host outline publishes, which is logged
- * before the Turn's prompt and steps, so one press brings in the whole Turn:
- * the reader's message through the end of the model's response.
+ * The load control beside the usage pill: walks the window back through
+ * history one Turn at a time. A window that starts mid-Turn holds only part of
+ * a Turn, and a partially held Turn reports no aggregate, so the button first
+ * completes that Turn; once the window begins exactly at a Turn's start, the
+ * Turn it names is the one immediately before — the next Turn the window does
+ * not hold. Either way the label says which Turn a press will bring in, and
+ * the press rides the `turn/start` seq the host outline publishes, which the
+ * loop logs before the Turn's prompt and steps. One press therefore loads a
+ * whole Turn: the reader's message through the end of the response.
  */
 function LoadTurnPill({ turn, busy, onLoad, t }: {
   turn: number
@@ -372,9 +372,12 @@ export const StatsPills = memo(function StatsPills({
   // The window head. A Turn whose start sits before it is only partially
   // loaded, so its aggregate is unknowable until the window covers that seq —
   // the same `uncovered` test the rail's jump uses before it repages.
-  const firstKey = useChat(s => s.order[0])
-  const nodeStore = useChat(s => s.nodes)
   const hasMore = useSession(s => s.hasMore)
+  // The window's oldest EVENT, which is what tells a Turn held whole from one
+  // the window enters midway. The head NODE's anchor cannot: a Turn's
+  // `turn/start` precedes its first visible node, so that node's anchor sits
+  // after the Turn's own seq whether or not the window covers the Turn's start.
+  const baseSeq = useSession(s => s.baseSeq)
   // One exclusive slot for both dialogs: opening either pill closes the other.
   const [openPill, setOpenPill] = useState<'time' | 'usage' | null>(null)
   // The Turn whose load is in flight, by number: a control that re-targets
@@ -390,23 +393,40 @@ export const StatsPills = memo(function StatsPills({
   // billing (e.g. every request failed) shows its counts without a usage pill.
   const hasTokens = usage !== undefined
     && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)
-  // The newest Turn, offered for loading only while the window starts after
-  // its `turn/start` seq. `hasMore` guards the degenerate case where nothing
-  // is left to page in: without it the control could never discharge.
-  const firstSeq = firstKey === undefined ? null : nodeStore.get(firstKey)?.anchorSeq ?? null
-  const newest = outline === undefined || outline.length === 0
-    ? undefined
-    : outline[outline.length - 1]
-  const pendingTurn = newest !== undefined && hasMore && (firstSeq === null || firstSeq > newest.seq)
-    ? newest
-    : undefined
-  const loadTurn = useCallback((seq: SessionSeq): void => {
-    setLoadingTurn(newest?.turn ?? null)
+  // Which Turn a press brings in, walking history back one Turn per press:
+  // the Turn the window's head sits inside when it started midway through one
+  // (that Turn's aggregate is unknown until it is whole), otherwise the Turn
+  // immediately before the window's first. `hasMore` is loadThrough's own
+  // precondition, and without it the control could never discharge.
+  const pendingTurn = useMemo(() => {
+    if (outline === undefined || outline.length === 0 || !hasMore) return undefined
+    // Newest first, so the first entry at or before the head is the Turn the
+    // head sits in.
+    let head = -1
+    for (let index = outline.length - 1; index >= 0; index -= 1) {
+      const entry = outline[index]
+      if (entry !== undefined && entry.seq <= baseSeq) {
+        head = index
+        break
+      }
+    }
+    // The head precedes every known Turn: the window already starts before
+    // this session's first Turn, so no press can add one.
+    const entry = head < 0 ? undefined : outline[head]
+    if (entry === undefined) return undefined
+    // Midway through the head Turn: finish that one before reaching past it.
+    if (entry.seq < baseSeq) return entry
+    // The window begins exactly at the head Turn's start, so that Turn is
+    // whole; the next one back is what the window does not hold.
+    return head === 0 ? undefined : outline[head - 1]
+  }, [outline, hasMore, baseSeq])
+  const loadTurn = useCallback((seq: SessionSeq, turn: number): void => {
+    setLoadingTurn(turn)
     void loadThrough(seq)
       // The pager surfaces its own failure; this control only needs to settle.
       .catch(() => { /* keep the button available for a retry */ })
       .finally(() => { setLoadingTurn(null) })
-  }, [loadThrough, newest?.turn])
+  }, [loadThrough])
   if (stats.steps === 0 && !hasTokens && pendingTurn === undefined) return null
   // data-composer-stats: InputBar's `.root:has([data-composer-stats])` rule
   // tightens the composer's bottom clearance only while this row renders.
@@ -436,7 +456,7 @@ export const StatsPills = memo(function StatsPills({
         <LoadTurnPill
           turn={pendingTurn.turn}
           busy={loadingTurn === pendingTurn.turn}
-          onLoad={() => { loadTurn(pendingTurn.seq) }}
+          onLoad={() => { loadTurn(pendingTurn.seq, pendingTurn.turn) }}
           t={t}
         />
       )}

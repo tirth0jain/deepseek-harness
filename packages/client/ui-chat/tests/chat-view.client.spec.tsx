@@ -18,7 +18,7 @@ import type {
   ConversationLocationDataStore, ConversationTurnDataMap,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { KeyedSnapshotSelectorHook, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
@@ -70,6 +70,7 @@ function sessionSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnaps
     openState: 'open',
     openError: null,
     hasMore: false,
+    baseSeq: SessionSeq(0),
     loadingOlder: false,
     promptError: null,
     blank: false,

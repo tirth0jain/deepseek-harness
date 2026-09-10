@@ -2,7 +2,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionId, SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type { RemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionRequestId } from '../../types.ts'
@@ -95,6 +95,15 @@ export interface SessionSnapshot {
   readonly openState: OpenState
   readonly openError: RemoteFailure | null
   readonly hasMore: boolean
+  /**
+   * Seq of the OLDEST event in the loaded window. A handler needs this to tell
+   * a Turn the window holds whole from one it enters midway: a Turn's own
+   * `turn/start` sits before its first visible node, so comparing that node's
+   * anchor against the Turn's start cannot separate "the window begins at this
+   * Turn" from "the window begins inside it". `baseSeq <= turn/start` is the
+   * exact test, because the window is a contiguous span from here.
+   */
+  readonly baseSeq: SessionSeq
   readonly loadingOlder: boolean
   readonly promptError: PromptError | null
   readonly blank: boolean

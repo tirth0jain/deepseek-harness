@@ -3,7 +3,7 @@ import type {
   ISession, SessionEventLikeEntry, SessionSnapshot, SessionSummary,
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   EMPTY_CONVERSATION_SNAPSHOT,
   type ConversationSnapshot,
@@ -73,6 +73,7 @@ export function sessionSnapshot(sessionId: SessionId): SessionSnapshot {
     openState: 'open',
     openError: null,
     hasMore: false,
+    baseSeq: SessionSeq(0),
     loadingOlder: false,
     promptError: null,
     blank: false,

@@ -32,6 +32,7 @@ function sessionSnapshot(): SessionSnapshot {
     openState: 'open',
     openError: null,
     hasMore: false,
+    baseSeq: 0 as SessionSeq,
     loadingOlder: false,
     promptError: null,
     blank: true,

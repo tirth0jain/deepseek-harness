@@ -808,6 +808,7 @@ export class Session implements SessionFace {
       openState: this.openState,
       openError: this.openError,
       hasMore: this.hasMore,
+      baseSeq: SessionSeq(this.baseSeq),
       loadingOlder: this.loadingOlder,
       promptError: this.promptError,
       blank: this.blankBit,

@@ -7,7 +7,7 @@
  */
 
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 
 const SID = 's1' as SessionId
 
@@ -21,6 +21,7 @@ export function sessionSnapshotFixture(overrides: Partial<SessionSnapshot> = {})
     removed: false,
     openState: 'open',
     openError: null,
+    baseSeq: SessionSeq(0),
     hasMore: false,
     loadingOlder: false,
     promptError: null,
