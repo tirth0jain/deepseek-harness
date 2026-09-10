@@ -81,6 +81,7 @@ export const DEFAULT_INPUT: readonly PiAiModality[] = ['text']
 export type {
   PiAiCompatProfile,
   PiAiModality,
+  PiAiModelCost,
   PiAiModelOverride,
   PiAiModelProfile,
   PiAiReasoningEfforts,
@@ -337,6 +338,15 @@ const modelFields = {
   // `{}`, and absent must stay distinguishable — it means "inherit the
   // installed catalog's capability", while `false` disables reasoning.
   reasoningEfforts: z.union([z.const(false), reasoningEfforts]),
+  // Same absent-versus-stated split as the line above: an absent block
+  // materializes as `{}` and resolution reads that as "no rate stated", while
+  // a stated rate must name the input/output pair a total is computed from.
+  cost: z.object({
+    input: z.number().min(0),
+    output: z.number().min(0),
+    cacheRead: z.number().min(0),
+    cacheWrite: z.number().min(0),
+  }),
   compat: compatProfile,
 }
 

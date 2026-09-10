@@ -30,11 +30,56 @@ import type {
 } from '@earendil-works/pi-ai'
 
 /**
- * Pricing for a model the installed catalog does not describe. The harness
- * never reads pi-ai's cost metadata — `replay.ts` zeroes it and no consumer
- * reports spend — so this is the absence of a fact, not a configurable rate.
+ * Rate carried by a model the installed catalog does not price: a hand-declared
+ * gateway model, or a catalog entry published without a rate. All-zero means
+ * "no published price" rather than "free", which is why the resolver omits a
+ * cost it cannot state instead of reporting zeros as one.
  */
 const NO_COST: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+
+/**
+ * The rate a configured model entry states, or undefined when it states none.
+ * A half-stated rate (one of the `input`/`output` pair) is refused rather than
+ * completed with zeros: silently pricing the missing half at nothing would
+ * understate spend on every request the model serves.
+ * @param provider - route being resolved, for the diagnostic.
+ * @param id - model id being resolved, for the diagnostic.
+ * @param cost - the entry's `cost` block, if any.
+ * @returns the complete rate, or undefined when the entry declares none.
+ * @throws when the block names only part of the priced pair.
+ */
+function declaredCost(
+  provider: string,
+  id: string,
+  cost: PiAiModelCost | undefined,
+): ModelCost | undefined {
+  if (cost === undefined) return undefined
+  const stated = cost.input !== undefined || cost.output !== undefined
+    || cost.cacheRead !== undefined || cost.cacheWrite !== undefined
+  if (!stated) return undefined
+  if (cost.input === undefined || cost.output === undefined) {
+    throw new PiAiCatalogError(
+      `provider "${provider}" model "${id}" cost needs both input and output, the priced pair`
+      + ' (a rate missing one of them would bill that bucket at nothing)',
+    )
+  }
+  return {
+    input: cost.input,
+    output: cost.output,
+    cacheRead: cost.cacheRead ?? 0,
+    cacheWrite: cost.cacheWrite ?? 0,
+  }
+}
+
+/**
+ * Whether a catalog rate carries information: at least one non-zero price.
+ * The all-zero constant above is the absence of a published rate.
+ * @param cost - rate resolved for the model.
+ * @returns true when the rate prices at least one bucket.
+ */
+export function pricedCost(cost: ModelCost): boolean {
+  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0
+}
 
 /** One request modality a pi-ai model may accept. */
 export type PiAiModality = Model<Api>['input'][number]
@@ -605,8 +650,29 @@ export interface PiAiModelProfile {
    * declares the offered levels and their wire spellings.
    */
   reasoningEfforts?: false | PiAiReasoningEfforts
+  /**
+   * Published list price for this model, in USD per million tokens. Absent
+   * keeps the installed catalog entry's own price; a hand-declared gateway
+   * model has none, so it stays unpriced and its usage reports no cost. A
+   * model listing endpoint publishes no prices — that is one of the facts
+   * {@link PiAiProviderProfile.autoRefresh} cannot learn — so a deployment
+   * that wants spend shown for a gateway route states the rate here.
+   */
+  cost?: PiAiModelCost
   /** pi-ai wire-compatibility switches for this model, winning over the route's per field; one its protocol does not declare is refused. */
   compat?: PiAiCompatProfile
+}
+
+/** One model's published rate, USD per million tokens; `input`/`output` are the priced pair. */
+export interface PiAiModelCost {
+  /** Uncached prompt tokens. */
+  input?: number
+  /** Generated tokens, reasoning included. */
+  output?: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
 }
 
 /**
@@ -922,7 +988,7 @@ export function resolveRouteModels(
       provider,
       baseUrl,
       input: declaredInput(entry.input) ?? base?.input ?? [...request.defaultInput],
-      cost: base?.cost ?? NO_COST,
+      cost: declaredCost(provider, entry.id, entry.cost) ?? base?.cost ?? NO_COST,
       contextWindow,
       maxTokens,
       ...resolveModelReasoning(provider, entry, base),

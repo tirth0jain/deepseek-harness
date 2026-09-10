@@ -15,6 +15,12 @@ import dialogCss from './stat-dialog.module.css'
 
 export interface TurnUsagePanelProps {
   usage: TurnTokenUsage
+  /**
+   * Estimated spend at the turn's published route rate, in USD; undefined when
+   * the route is unpriced or the turn billed more than one route, in which case
+   * no amount is rendered at all.
+   */
+  cost?: number | undefined
   /** The owning view's locale seat, passed down as a plain prop. */
   t: ChatViewSlotProps['t']
 }
@@ -39,11 +45,22 @@ function formatExactCount(value: number, t: ChatViewSlotProps['t']): string {
 }
 
 /**
+ * Format an estimated amount in USD. Six decimals because a single turn's
+ * spend is routinely under a cent, and a rate is per million tokens: rounding
+ * to cents would print $0.00 for the turns a reader is inspecting.
+ * @param value - estimated USD.
+ * @returns the amount, marked as an estimate by the caller's own label.
+ */
+function formatCost(value: number): string {
+  return `$${value.toFixed(6)}`
+}
+
+/**
  * Turn-usage IconActions pill with a click-open Turn-usage details dialog.
  * @param props - Turn usage buckets and locale seat.
  * @returns The trigger and, while open, its portaled dialog anchored above the trigger.
  */
-export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
+export function TurnUsagePanel({ usage, cost, t }: TurnUsagePanelProps) {
   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
 
   const cacheHit = usage.cacheReadTokens === undefined
@@ -91,6 +108,12 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
               <>
                 <dt>{t('message.turnUsage.cacheHit')}</dt>
                 <dd>{`${cacheHit}%`}</dd>
+              </>
+            )}
+            {cost !== undefined && (
+              <>
+                <dt>{t('message.turnUsage.cost')}</dt>
+                <dd className={dialogCss.route}>{formatCost(cost)}</dd>
               </>
             )}
             <dt>{t('message.turnUsage.input')}</dt>

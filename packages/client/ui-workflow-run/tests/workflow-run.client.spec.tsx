@@ -338,6 +338,8 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
     loadImage: () => Promise.reject(new Error('not used')),
     renderMessageImages: () => null,
     fileMentions: () => undefined,
+    // The panel renders no usage, so no route needs a published rate here.
+    costOf: () => undefined,
     openSession,
     t: makeTranslate(zh),
   }

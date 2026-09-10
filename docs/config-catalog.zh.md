@@ -1273,6 +1273,15 @@ export interface PiAiModelProfile {
    * declares the offered levels and their wire spellings.
    */
   reasoningEfforts?: false | PiAiReasoningEfforts
+  /**
+   * Published list price for this model, in USD per million tokens. Absent
+   * keeps the installed catalog entry's own price; a hand-declared gateway
+   * model has none, so it stays unpriced and its usage reports no cost. A
+   * model listing endpoint publishes no prices — that is one of the facts
+   * {@link PiAiProviderProfile.autoRefresh} cannot learn — so a deployment
+   * that wants spend shown for a gateway route states the rate here.
+   */
+  cost?: PiAiModelCost
   /** pi-ai wire-compatibility switches for this model, winning over the route's per field; one its protocol does not declare is refused. */
   compat?: PiAiCompatProfile
 }
@@ -1390,6 +1399,18 @@ export type PiAiModality = Model<Api>['input'][number]
  * from the dict is not offered.
  */
 export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | null>>
+
+/** One model's published rate, USD per million tokens; `input`/`output` are the priced pair. */
+export interface PiAiModelCost {
+  /** Uncached prompt tokens. */
+  input?: number
+  /** Generated tokens, reasoning included. */
+  output?: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
+}
 
 /** One reasoning-dispatch wire format a profile may name. */
 export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFormat']>

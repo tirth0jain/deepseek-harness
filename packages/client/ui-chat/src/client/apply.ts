@@ -3,9 +3,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+// Type-only: the `modelDirectories` service this view reads published rates from.
+import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 // The `file` entry of `SidebarRightResourceParamsMap`, which types `{ params: { line } }` below.
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client'
 import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
@@ -18,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected,
+  ChatModelCostState, ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected,
   TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
@@ -48,6 +51,36 @@ export const inject = [
   'slots', 'sessions', 'uiSession', 'uiConversation', 'locale',
   'settingsScope', 'remote', 'remote.session', 'sidebarRight',
 ]
+
+/** Stable empty rate source for a deployment with no model-selection plugin mounted. */
+const NO_MODEL_COSTS = createSnapshotStore<ChatModelCostState>({ groups: [] })
+
+/**
+ * The published rates one session's Chat view prices turns with: the
+ * model-selection plugin's own per-session directory, so the selector and the
+ * transcript never disagree about a route's rate.
+ *
+ * The directory is loaded here because a reader that never opens a selector
+ * would otherwise leave it idle — and an idle directory prices nothing. Its
+ * absence (that plugin removed from the deployment) yields a stable empty
+ * source, which renders no amounts rather than wrong ones.
+ * @param ctx - client root context.
+ * @param sessionId - session whose view is being created.
+ * @returns the observable rate source for this session.
+ */
+function modelCostStore(ctx: Context, sessionId: SessionId): SnapshotStore<ChatModelCostState> {
+  const directories = ctx.get('modelDirectories')
+  if (directories === undefined) return NO_MODEL_COSTS
+  try {
+    const directory = directories.directoryFor(sessionId)
+    void directory.load().catch(() => {
+      // No rates until a load succeeds; the view simply shows no amounts.
+    })
+    return directory.store
+  } catch {
+    return NO_MODEL_COSTS
+  }
+}
 
 /**
  * Mount all Chat-owned contributions.
@@ -111,7 +144,7 @@ export function apply(ctx: Context): void {
         const session = binding.session
         const chat = chatSource(binding)
         return {
-          hooks: { transcriptView: transcriptView.mode },
+          hooks: { transcriptView: transcriptView.mode, modelCosts: modelCostStore(ctx, sessionId) },
           keyedHooks: {
             chatNode: key => chat.getSnapshot().nodes.source(key),
             chatNodeProcess: key => chat.getSnapshot().nodes.processSource(key),

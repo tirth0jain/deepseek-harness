@@ -16,6 +16,7 @@ import type {
   LlmFailure,
   LlmImageRequestPricing,
   LlmModelContext,
+  LlmModelCost,
   LlmModelDiscoveryRequest,
   LlmModelInfo,
   LlmResolvedModelInfo,
@@ -683,6 +684,42 @@ export class LlmRuntime extends TypertRemoteService {
   }
 
   /**
+   * Validate and detach one adapter-reported rate. A price that is not a
+   * finite non-negative number would poison every estimate computed from it,
+   * so a malformed rate is refused rather than dropped silently.
+   * @param cost - rate the adapter reported, if any.
+   * @param provider - route being resolved, for the diagnostic.
+   * @param model - model being resolved, for the diagnostic.
+   * @returns a detached rate, or undefined when the adapter stated none.
+   * @throws LlmError when a stated rate is malformed.
+   */
+  private detachedCost(
+    cost: LlmModelCost | undefined,
+    provider: string,
+    model: string,
+  ): LlmModelCost | undefined {
+    if (cost === undefined) return undefined
+    const price = (value: number | undefined): boolean =>
+      value === undefined || (Number.isFinite(value) && value >= 0)
+    if (
+      !price(cost.input) || !price(cost.output)
+      || !price(cost.cacheRead) || !price(cost.cacheWrite)
+      || cost.input === undefined || cost.output === undefined
+    ) {
+      throw new LlmError(
+        `adapter returned invalid cost metadata for provider "${provider}" model "${model}"`,
+        'INVALID_MODEL_COST',
+      )
+    }
+    return {
+      input: cost.input,
+      output: cost.output,
+      ...cost.cacheRead === undefined ? {} : { cacheRead: cost.cacheRead },
+      ...cost.cacheWrite === undefined ? {} : { cacheWrite: cost.cacheWrite },
+    }
+  }
+
+  /**
    * Discover models advertised by one registered provider. Catalog membership
    * is advisory and never changes routing or request validation.
    * @param provider - registered provider route to inspect.
@@ -790,6 +827,7 @@ export class LlmRuntime extends TypertRemoteService {
         'INVALID_MODEL_MAX_TOKENS',
       )
     }
+    const cost = this.detachedCost(resolved.cost, provider, model)
     const info: LlmResolvedModelInfo = {
       provider,
       id: model,
@@ -798,6 +836,7 @@ export class LlmRuntime extends TypertRemoteService {
       ...inputModalities === undefined ? {} : { inputModalities },
       ...context === undefined ? {} : { context: { contextWindow: context.contextWindow } },
       ...defaultMaxTokens === undefined ? {} : { defaultMaxTokens },
+      ...cost === undefined ? {} : { cost },
       ...resolved.systemPromptUpdate === undefined ? {} : { systemPromptUpdate: resolved.systemPromptUpdate },
     }
     const reasoning = resolved.reasoning

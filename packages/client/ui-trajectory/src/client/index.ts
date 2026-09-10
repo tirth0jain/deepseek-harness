@@ -5,7 +5,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+// Type-only: the `modelDirectories` service this view reads published rates from.
+import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -25,7 +28,11 @@ import {
 } from './trajectory-snapshot-builder.ts'
 import type { TrajectorySnapshot } from './trajectory-contract.ts'
 import { registerTrajectoryToolDefinition } from './trajectory-tool-definition.ts'
-import { TrajectoryView, type TrajectoryViewInjected } from './TrajectoryView.tsx'
+import {
+  TrajectoryView,
+  type TrajectoryModelCostState,
+  type TrajectoryViewInjected,
+} from './TrajectoryView.tsx'
 
 export type { TrajectoryKey } from './locales.ts'
 export type {
@@ -38,6 +45,36 @@ export type {
 
 /** Required services: the conversation slot, registries, ordinary Session paging, and the locale service. */
 export const inject = ['slots', 'sessions', 'uiSession', 'uiConversation', 'locale']
+
+/** Stable empty rate source for a deployment with no model-selection plugin mounted. */
+const NO_MODEL_COSTS = createSnapshotStore<TrajectoryModelCostState>({ groups: [] })
+
+/**
+ * The published rates this session's Trajectory prices requests with: the
+ * model-selection plugin's own per-session directory, so the selector and the
+ * ledger never disagree about a route's rate.
+ *
+ * The directory is loaded here because a reader that never opens a selector
+ * would leave it idle — and an idle directory prices nothing. Its absence
+ * (that plugin removed from the deployment) yields a stable empty source,
+ * which renders no amounts rather than wrong ones.
+ * @param ctx - client root context.
+ * @param sessionId - session whose view is being created.
+ * @returns the observable rate source for this session.
+ */
+function modelCostStore(ctx: Context, sessionId: SessionId): SnapshotStore<TrajectoryModelCostState> {
+  const directories = ctx.get('modelDirectories')
+  if (directories === undefined) return NO_MODEL_COSTS
+  try {
+    const directory = directories.directoryFor(sessionId)
+    void directory.load().catch(() => {
+      // No rates until a load succeeds; the ledger simply shows no amounts.
+    })
+    return directory.store
+  } catch {
+    return NO_MODEL_COSTS
+  }
+}
 
 /**
  * Client plugin body: register the trajectory view tab. The registration
@@ -90,7 +127,7 @@ export function apply(ctx: Context): void {
       }
       const trajectory = ctx.uiConversation.binding(sessionId).target('trajectory')
       return {
-        hooks: { duration },
+        hooks: { duration, modelCosts: modelCostStore(ctx, sessionId) },
         loadOlder: async () => {
           const before = trajectory.getSnapshot()
           await session.loadOlder()

@@ -1,0 +1,45 @@
+# Agent Note: Published model rates and estimated spend
+
+Status: implemented
+
+English | [中文](2026-09-10-published-model-rates-and-estimated-spend.zh.md)
+
+## Problem
+
+Every usage surface in the harness reported tokens and nothing else. A reader could see that a turn consumed 15.8K tokens but not what that turn would cost, so comparing two routes — a cheap flash model against a flagship — meant leaving the product and looking the rates up by hand. The information was already present in the process: the installed pi-ai catalog prices the models it describes, and `catalog.ts` was reading that `cost` field and then discarding it behind an all-zero sentinel because no consumer reported spend.
+
+The gateway routes this deployment actually serves (CommandCode, OpenCode) publish no prices at all: their model listings answer id, name, and context length, and nothing else. So "price the usage" needs both halves — a way for a deployment to state a rate the catalog does not carry, and a fold that turns token buckets into an amount without inventing one where no rate exists.
+
+## Decision
+
+**`LlmModelCost` is a published rate, not a billing record.** The type lives in [types.ts](../../../../packages/llm/llm/src/types.ts) and travels on `LlmResolvedModelInfo.cost`, threaded through `normalizeModelInfo` (which validates every stated price as a finite non-negative number) and exposed to the browser by `buildModelCatalog` on `ModelCatalogModel.cost`. Its JSDoc states the contract that keeps it honest: what a deployment pays is its own contract, so this is a list price carried for display; and an absent bucket stays absent rather than defaulting to zero, because "this route does not charge for cache writes" and "nobody published a rate" are different facts and only the first may be multiplied into a total.
+
+**A model entry states its own rate; a half-stated pair is refused.** `PiAiModelProfile.cost` in [catalog.ts](../../../../packages/llm/llm-pi-ai/src/catalog.ts) accepts `input`, `output`, optional `cacheRead`, and optional `cacheWrite` — per million tokens, USD. `declaredCost` requires `input` and `output` together: a rate naming only one of them would bill the other bucket at nothing on every request the model serves, which understates spend exactly where the answer matters, so it throws `PiAiCatalogError` instead. A declared rate wins over the installed catalog's; an entry that states none keeps the catalog's. The all-zero `NO_COST` sentinel remains the absence of a rate, and `pricedCost` is what tells the two apart when the adapter decides whether to report a `cost` at all — an unpriced model surfaces nothing rather than `$0.00`, so a route with no published price shows no amount instead of a free one.
+
+**Spend is estimated by one fold, and it refuses dishonest totals.** `estimateUsageCost` in [usage-cost.ts](../../../../packages/llm/token-meter/src/usage-cost.ts) multiplies each carrying bucket by its per-million rate, scaled once at the end. It returns `undefined` — not a partial sum — when a bucket carries tokens the rate does not price, because a total that silently billed that bucket at nothing is worse than no total. `sumUsageCosts` adds across readings and skips the ones no rate could price, so one unpriced request does not void a session's priced ones.
+
+**Two surfaces spend it, and both leave gaps as gaps.** [turn-cost.ts](../../../../packages/client/ui-chat/src/client/chat/turn-cost.ts) prices one completed turn from the buckets `deriveTurnTokenUsage` already derives, and reports nothing when the turn billed more than one route: a turn that switched models reports buckets no single rate explains, and pricing all of them at one route's rate would be a fabricated number. That amount rides the Chat turn-usage dialog as an `Estimated cost (list price)` row at six decimals — a single turn is routinely under a cent, so cents would print `$0.00` for the turns a reader is inspecting. The Trajectory ledger prices each request from the route its own request view recorded, carries the running sum as `cumulativeCost`, and shows both halves under `This request` and `Session cumulative` in its Usage inspector.
+
+Both views read the model selector's own per-session directory (`ctx.modelDirectories`) rather than a second catalog, so a rate edited in Settings prices the next turn without a reload, and a deployment without that plugin gets a stable empty source that renders no amounts. Because a reader of the transcript may never open the selector, each view loads the directory itself; leaving it idle would have priced nothing.
+
+Every row in the model selector and the composer seat also shows the rate as `$in / $out`, which is what makes the ordering legible: a deployment's `models` list order is the selector's order.
+
+## Alternatives considered
+
+**Add price fields to `PiAiModelProfile` and nothing else.** A deployment could then state rates, but the amounts would still have no path to a surface; the `LlmModelCost` seam is what lets one fold serve Chat, Trajectory, and any later surface.
+
+**Derive the rate from the pi-ai catalog for gateway models.** `opencode-go`'s catalog prices `deepseek-v4-flash` at `$0.22/$0.66`, and it would have shown an amount for every auto-refreshed model without a line of configuration. It was rejected: the price belongs to the endpoint that bills, not to a vendor catalog describing a different one, and the deployment's two routes disagree with it in places. The catalog price remains the source for catalog models, which is where it is authoritative.
+
+**Bill the missing half of a partial rate at zero.** Convenient, and wrong in the direction that matters: every request would understate spend, and the number would look authoritative.
+
+**Default an absent rate to zero and always render an amount.** Then an unpriced route reads as free — the one wrong answer a spending surface must not give.
+
+**Report a total for a multi-route turn using its first route's rate.** The turn's buckets are not split per route, so no total computed this way describes the turn; the surfaces show nothing and the reader sees that no single rate applies.
+
+## Verification
+
+- `pnpm exec vitest run packages/llm/token-meter packages/llm/llm packages/llm/llm-pi-ai packages/api/session-controller packages/client/ui-chat packages/client/ui-trajectory packages/client/ui-model-selection`
+- `usage-cost.spec.ts` covers the scaled sum, the sub-million case, skipped empty buckets, the unpriceable-bucket refusal, and the empty reading; `turn-cost.client.spec.ts` covers one routed turn, cache buckets, route switching, an unpriced route, an unrecorded route, and a rate missing a billed bucket.
+- `model-cost.spec.ts` resolves a declared rate through the real profile resolver, reads a catalog rate for a catalog model, reports no rate for an unpriced gateway model, and rejects a half-stated pair.
+- `turn-usage-panel.client.spec.tsx` and `table.client.spec.tsx` assert the rendered amount and its absence at both surfaces.
+- `pnpm run verify-type-equiv` after documenting `LlmModelCost` on [llm-streaming.md](../../../../docs/subsystems/llm-streaming.md).

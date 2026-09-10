@@ -40,6 +40,7 @@ export async function buildModelCatalog(
           name: model.name,
           ...(model.description === undefined ? {} : { description: model.description }),
           ...(reasoning === undefined ? {} : { reasoning }),
+          ...(resolved.cost === undefined ? {} : { cost: resolved.cost }),
         }
       }))
       return {

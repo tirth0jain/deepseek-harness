@@ -50,6 +50,28 @@ describe('TurnUsagePanel', () => {
     expect(details.textContent).not.toContain('Total')
   })
 
+  it('renders the estimated amount, and nothing where no rate exists', () => {
+    const priced: TurnTokenUsage = {
+      uncachedInputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      routes: [{ provider: 'commandcode', model: 'deepseek/deepseek-v4-flash' }],
+    }
+    const unpriced: TurnTokenUsage = {
+      ...priced,
+      routes: [{ provider: 'acme', model: 'unpublished' }],
+    }
+    const withRate = render(<TurnUsagePanel usage={priced} cost={0.004321} t={t} />)
+    fireEvent.click(withRate.getByRole('button'))
+    // Six decimals: one turn is routinely under a cent, so cents would read $0.00.
+    expect(withRate.getByRole('dialog').textContent)
+      .toContain('Estimated cost (list price)$0.004321')
+    cleanup()
+    const withoutRate = render(<TurnUsagePanel usage={unpriced} t={t} />)
+    fireEvent.click(withoutRate.getByRole('button'))
+    expect(withoutRate.getByRole('dialog').textContent).not.toContain('Estimated cost')
+  })
+
   it('omits unavailable optional facts instead of inventing values', () => {
     const usage: TurnTokenUsage = {
       uncachedInputTokens: 120,

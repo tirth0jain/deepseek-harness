@@ -317,6 +317,28 @@ export interface LlmModelContext {
   contextWindow: number
 }
 
+/**
+ * List price for one exact provider/model route, in USD per million tokens.
+ *
+ * What a deployment actually pays is its own contract — a subscription
+ * gateway bills nothing per call, a routed provider may price a model
+ * differently from its author — so this is a published rate carried for
+ * display, never a billing record. An absent bucket stays absent rather than
+ * defaulting to zero: "this route does not charge for cache writes" and
+ * "nobody published a rate" are different facts, and only the first may be
+ * multiplied into a total.
+ */
+export interface LlmModelCost {
+  /** Uncached prompt tokens. */
+  input: number
+  /** Generated tokens, reasoning included (reasoning is a reported subset, not an extra charge). */
+  output: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
+}
+
 /** Display metadata for one adapter-owned reasoning effort. */
 export interface LlmReasoningEffortInfo {
   /** Opaque stable value accepted by {@link GenerateOptions.reasoningEffort}. */
@@ -354,6 +376,8 @@ export interface LlmResolvedModelInfo extends LlmModelInfo {
   defaultMaxTokens?: number
   /** Adapter-owned selectable reasoning levels when exposed. */
   reasoning?: LlmModelReasoningInfo
+  /** Published list price for this exact route; absent when the deployment and its catalog both state none. */
+  cost?: LlmModelCost
   /** Declared mid-conversation system prompt handling; absent means only a leading system message is read. */
   systemPromptUpdate?: SystemPromptUpdate
 }

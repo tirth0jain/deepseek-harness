@@ -13,6 +13,7 @@ import { PendingSteeringBubble, PendingSubmissionBubble } from './MessageItem.ts
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
 import { TurnNavigator } from './TurnNavigator.tsx'
 import { mergeTurnRailItems, type TurnRailItem } from './turn-rail-items.ts'
+import type { TurnRateLookup } from './turn-cost.ts'
 import { formatRunDuration } from './message-chrome.ts'
 import css from './ChatView.module.css'
 
@@ -217,7 +218,7 @@ const ChatNodeList = memo(function ChatNodeList({ order, ...seatProps }: ChatNod
 export function ChatView({
   useSession, useChat, useChatNode, useChatNodeProcess, useSessions, useStore, actions, renderSlot,
   sessionId, openFile, loadOlder, loadThrough, loadImage, openView, chatScroll, forkAt, fileMentions,
-  useTranscriptView, useProjection, t,
+  useTranscriptView, useModelCosts, useProjection, t,
 }: ChatViewSlotProps) {
   const order = useChat(s => s.order)
   const nodeStore = useChat(s => s.nodes)
@@ -242,6 +243,14 @@ export function ChatView({
   const hasMore = useSession(s => s.hasMore)
   const loadingOlder = useSession(s => s.loadingOlder)
   const compactTranscript = useTranscriptView(mode => mode === 'compact')
+  // Rates ride the model selector's own per-session catalog, so a price edited
+  // in Settings reaches the transcript without a reload. A route the catalog
+  // does not price resolves to undefined, and the tail then shows no amount.
+  const modelCosts = useModelCosts(snapshot => snapshot.groups)
+  const costOf = useCallback<TurnRateLookup>((provider, model) => {
+    const group = modelCosts.find(candidate => candidate.id === provider)
+    return group?.models.find(candidate => candidate.id === model)?.cost
+  }, [modelCosts])
   const inspectCall = useCallback((callId: string) => {
     openView('trajectory', callId)
   }, [openView])
@@ -796,6 +805,7 @@ export function ChatView({
             loadImage={loadImage}
             renderMessageImages={renderMessageImages}
             fileMentions={fileMentions}
+            costOf={costOf}
             renderSlot={renderSlot}
             t={t}
           />

@@ -442,6 +442,10 @@ interface TrajectoryRequestNumberBase {
   requestConfig?: AssistantRequestConfig
   usage?: TrajectoryUsage
   cumulativeUsage?: TrajectoryUsage
+  /** Estimated spend for this request at its route's published rate, USD. */
+  cost?: number
+  /** Estimated spend over the resident prefix ending at this request, USD. */
+  cumulativeCost?: number
 }
 
 /** One purpose-discriminated request identity paired with its session-global number. */
@@ -821,10 +825,14 @@ function UsageRows({ usage, t }: { usage: TrajectoryUsage | undefined; t: Trajec
 function RequestUsagePanel({
   usage,
   cumulative,
+  cost,
+  cumulativeCost,
   t,
 }: {
   usage: TrajectoryUsage | undefined
   cumulative: TrajectoryUsage | undefined
+  cost: number | undefined
+  cumulativeCost: number | undefined
   t: TrajectoryTranslate
 }) {
   return (
@@ -832,12 +840,33 @@ function RequestUsagePanel({
       <section className={css.usageGroup}>
         <h4 className={css.usageHeading}>{t('usage.thisRequest')}</h4>
         <UsageRows usage={usage} t={t} />
+        <CostRow cost={cost} t={t} />
       </section>
       <section className={css.usageGroup}>
         <h4 className={css.usageHeading}>{t('usage.sessionCumulative')}</h4>
         <UsageRows usage={cumulative} t={t} />
+        <CostRow cost={cumulativeCost} t={t} />
       </section>
     </div>
+  )
+}
+
+/**
+ * Estimated spend line under one usage block. Renders nothing without an
+ * amount: an unpriced route has no cost to state, and a zero would read as a
+ * free request rather than an unknown one.
+ * @param props - estimated USD and the owning view's locale seat.
+ * @returns the label/value pair, or null when no estimate exists.
+ */
+function CostRow({ cost, t }: { cost: number | undefined; t: TrajectoryTranslate }) {
+  if (cost === undefined) return null
+  return (
+    <dl className={css.overview}>
+      <div>
+        <dt>{t('usage.estimatedCost')}</dt>
+        <dd>{`$${cost.toFixed(6)}`}</dd>
+      </div>
+    </dl>
   )
 }
 
@@ -2940,6 +2969,8 @@ export function TrajectoryTable({
               <RequestUsagePanel
                 usage={selectedRequestUsage}
                 cumulative={selectedRequestCumulativeUsage}
+                cost={selectedRequestInfo.cost}
+                cumulativeCost={selectedRequestInfo.cumulativeCost}
                 t={t}
               />
             )}

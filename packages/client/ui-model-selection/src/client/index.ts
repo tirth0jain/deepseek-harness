@@ -60,16 +60,37 @@ function descriptionOf(
   return key !== undefined && model.description === en[key] ? t(key) : model.description
 }
 
+/**
+ * One model's published rate as a compact cell, or undefined when the route
+ * publishes none. Cache prices are left out of the row: they are what makes a
+ * cached conversation cheap, not what a reader compares routes by, and the
+ * spending surfaces report actual cache spend where it lands.
+ * @param model - catalog entry inside a provider group.
+ * @returns `$in / $out` per million tokens, or undefined.
+ */
+function rateOf(model: ModelDirectoryState['groups'][number]['models'][number]): string | undefined {
+  const cost = model.cost
+  if (cost === undefined) return undefined
+  return `$${trimPrice(cost.input)} / $${trimPrice(cost.output)}`
+}
+
+/** Drop a trailing `.00`/`.0` from a price so a whole number reads as one. */
+function trimPrice(value: number): string {
+  return String(Number(value.toFixed(4)))
+}
+
 /** Flatten the directory into popup rows; failure rows are listed for visibility but never selectable. */
 function optionsOf(directory: ModelDirectoryState, t: TranslateNS<'model'>): SelectOption[] {
   const rows: SelectOption[] = []
   for (const group of directory.groups) {
     for (const model of group.models) {
       const description = descriptionOf(group.id, model, t)
+      const rate = rateOf(model)
+      const detail = description !== undefined ? `${group.name} · ${description}` : group.name
       rows.push({
         id: rowId(group.id, model.id),
         label: model.name,
-        detail: description !== undefined ? `${group.name} · ${description}` : group.name,
+        detail: rate === undefined ? detail : `${detail} · ${rate}`,
         ...(directory.current !== null
           && directory.current.provider === group.id
           && directory.current.model === model.id

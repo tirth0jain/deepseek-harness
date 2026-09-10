@@ -1147,3 +1147,53 @@ describe('TrajectoryTable', () => {
     expect(onInspectApplied).not.toHaveBeenCalled()
   })
 })
+
+describe('TrajectoryTable estimated cost', () => {
+  const turns: readonly TrajectoryTurnModel[] = [{
+    turn: 1,
+    groups: [{
+      title: 'Step 1',
+      cells: [{
+        index: 1,
+        kind: 'message',
+        text: 'priced answer',
+        input: 1_000_000,
+        output: 1_000_000,
+        timeSeconds: 0.1,
+      }],
+    }],
+  }]
+  const request = {
+    turn: 1,
+    step: 1,
+    seq: 1,
+    group: 'Step 1',
+    number: 1,
+    usage: { input: 1_000_000, output: 1_000_000 },
+    cumulativeUsage: { input: 1_000_000, output: 1_000_000 },
+  }
+
+  it('shows the estimate for both the request and the cumulative prefix', () => {
+    render(
+      <TrajectoryTable
+        turns={turns}
+        {...FOLD_PROPS}
+        requestNumbers={[{ ...request, cost: 0.00088, cumulativeCost: 0.00176 }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Estimated cost (list price)$0.000880')
+    expect(text).toContain('Estimated cost (list price)$0.001760')
+  })
+
+  it('renders no amount for a request whose route carried no rate', () => {
+    render(
+      <TrajectoryTable turns={turns} {...FOLD_PROPS} requestNumbers={[{ ...request }]} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Request #1' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    expect(document.body.textContent).not.toContain('Estimated cost')
+  })
+})

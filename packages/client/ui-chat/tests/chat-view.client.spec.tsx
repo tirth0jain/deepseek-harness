@@ -390,6 +390,8 @@ function makeHarness(
     useStore: bindSnapshotSelector(chat),
     actions: chat.actions,
     useTranscriptView: bindSnapshotSelector(transcriptView),
+    // No route in this fixture publishes a rate; the tail shows no amount.
+    useModelCosts: bindSnapshotSelector(createSnapshotStore({ groups: [] })),
     renderSlot,
     SessionProvider: SessionProviderStub,
     viewRequest: null,
@@ -2867,5 +2869,41 @@ describe('ChatView', () => {
     const failedView = render(<failed.ChatView {...failed.props} />)
     expect(failedView.getByText('Compaction cancelled.')).toBeTruthy()
     expect(failedView.container.querySelector('[data-state="error"]')).not.toBeNull()
+  })
+})
+
+describe('TurnNavigator per-turn loading', () => {
+  it('loads only the hovered unloaded turn from its card button', async () => {
+    const h = makeHarness({}, { hasMore: true })
+    h.setOutline([
+      { turn: 1, seq: 0, prompt: 'earliest prompt', response: 'earliest answer' },
+      { turn: 2, seq: 9, prompt: 'later prompt', response: 'later answer' },
+    ])
+    const view = render(<h.ChatView {...h.props} />)
+    const first = view.getByRole('button', { name: '加载并跳转到第 1 轮' })
+    fireEvent.focus(first)
+    const card = view.getByRole('tooltip')
+    expect(card.textContent).toContain('earliest prompt')
+
+    // The card's own control pages history to exactly this Turn.
+    const load = view.getByRole('button', { name: '仅加载第 1 轮' })
+    expect(h.loadThrough).not.toHaveBeenCalled()
+    fireEvent.click(load)
+    expect(h.loadThrough).toHaveBeenCalledWith(0)
+    await act(async () => { await Promise.resolve() })
+  })
+
+  it('leaves a loaded turn without a load control', () => {
+    const snapshot = chatSnapshotFixture({
+      nodes: [
+        userInTurn(1, 'first prompt', 1), assistant(2, 'first response', 1),
+        userInTurn(4, 'second prompt', 2), assistant(5, 'second response', 2),
+      ],
+      turnEnds: new Map([[1, 3], [2, 6]]),
+    })
+    const h = makeHarness({}, {}, snapshot)
+    const view = render(<h.ChatView {...h.props} />)
+    fireEvent.focus(view.getByRole('button', { name: '跳转到第 1 轮' }))
+    expect(view.getByRole('tooltip').textContent).not.toContain('仅加载')
   })
 })

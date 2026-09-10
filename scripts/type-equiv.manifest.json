@@ -78,6 +78,11 @@
     },
     {
       "doc": "docs/subsystems/llm-streaming.md",
+      "symbol": "LlmModelCost",
+      "source": "packages/llm/llm/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/llm-streaming.md",
       "symbol": "ReasoningEffortId",
       "source": "packages/llm/llm/src/brand.ts"
     },
