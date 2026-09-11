@@ -7,6 +7,7 @@ import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type {} from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: the `modelDirectories` service this view reads published rates from.
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 // The `file` entry of `SidebarRightResourceParamsMap`, which types `{ params: { line } }` below.
@@ -168,6 +169,11 @@ export function apply(ctx: Context): void {
             if (options?.line === undefined) ctx.sidebarRight.openResource(url)
             else ctx.sidebarRight.openResource(url, { params: { line: options.line } })
             await Promise.resolve()
+          },
+          openSkill: (name) => {
+            const scope = ctx.sessions.scope(sessionId)
+            if (scope === undefined) return
+            ctx.get('inputTriggers')?.sessionOf(scope).openReference('skill', { ref: `/${name}` })
           },
           loadOlder: () => { void session.loadOlder() },
           loadThrough: seq => session.loadThrough(seq),

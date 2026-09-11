@@ -103,6 +103,9 @@
     },
     {
       "path": "../ui-sidebar-documentpreview"
+    },
+    {
+      "path": "../ui-input-trigger"
     }
   ]
 }
