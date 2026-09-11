@@ -1279,7 +1279,9 @@ export interface PiAiModelProfile {
    * model has none, so it stays unpriced and its usage reports no cost. A
    * model listing endpoint publishes no prices — that is one of the facts
    * {@link PiAiProviderProfile.autoRefresh} cannot learn — so a deployment
-   * that wants spend shown for a gateway route states the rate here.
+   * that wants spend shown for a gateway route states the rate here. A tariff
+   * that raises this rate inside recurring windows states them in the same
+   * block's `peak`, whichever side the rate itself came from.
    */
   cost?: PiAiModelCost
   /** pi-ai wire-compatibility switches for this model, winning over the route's per field; one its protocol does not declare is refused. */
@@ -1410,6 +1412,8 @@ export interface PiAiModelCost {
   cacheRead?: number
   /** Prompt tokens written to the provider's prompt cache. */
   cacheWrite?: number
+  /** Second band the rates above move to inside recurring windows, when the tariff has one. */
+  peak?: PiAiModelCostPeak
 }
 
 /** One reasoning-dispatch wire format a profile may name. */
@@ -1417,6 +1421,33 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
+
+/**
+ * One model's declared peak band, in the config's own all-optional terms so an
+ * absent block stays distinguishable from a stated one. The band belongs to
+ * the *rate*, not to a rate source: an entry that inherits the installed
+ * catalog's price may still declare the windows that price moves in.
+ */
+export interface PiAiModelCostPeak {
+  /** Factor every base rate moves by inside a window. */
+  multiplier?: number
+  /** Windows the band is in force in, in UTC. */
+  windows?: PiAiModelCostWindow[]
+}
+
+/** One declared peak window; every field is required once the window is written. */
+export interface PiAiModelCostWindow {
+  /**
+   * Days the window opens on. Typed as plain strings because this is the
+   * configuration boundary: resolution narrows them to weekday names and
+   * refuses the rest by name.
+   */
+  days?: string[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  start?: string
+  /** Window end, `HH:MM` UTC, exclusive. */
+  end?: string
+}
 ```
 
 依赖：`Api`（`@earendil-works/pi-ai`）· `CacheRetention`（`@earendil-works/pi-ai`）· `Model`（`@earendil-works/pi-ai`）· `ModelThinkingLevel`（`@earendil-works/pi-ai`）· `OpenAICompletionsCompat`（`@earendil-works/pi-ai`）· [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets`（`@earendil-works/pi-ai`）· `Transport`（`@earendil-works/pi-ai`)

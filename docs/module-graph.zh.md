@@ -83,6 +83,7 @@ flowchart TD
     pkg_tool_web["tool-web"]
     pkg_web["web"]
     pkg_web_fetch_http["web-fetch-http"]
+    pkg_web_search_brightdata["web-search-brightdata"]
     pkg_web_search_deepseek["web-search-deepseek"]
     pkg_web_search_exa["web-search-exa"]
     pkg_web_search_perplexity["web-search-perplexity"]
@@ -416,6 +417,9 @@ flowchart TD
   pkg_web_fetch_http --> pkg_http_proxy
   pkg_web_fetch_http --> pkg_timeout
   pkg_web_fetch_http --> pkg_web
+  pkg_web_search_brightdata --> pkg_credentials
+  pkg_web_search_brightdata --> pkg_launch_environment
+  pkg_web_search_brightdata --> pkg_web
   pkg_web_search_exa --> pkg_launch_environment
   pkg_web_search_exa --> pkg_web
   pkg_web_search_perplexity --> pkg_launch_environment
@@ -518,6 +522,7 @@ flowchart TD
   pkg_llm_pi_ai --> pkg_authorization
   pkg_llm_pi_ai --> pkg_credentials
   pkg_llm_pi_ai --> pkg_fs
+  pkg_llm_pi_ai --> pkg_host_webserver
   pkg_llm_pi_ai --> pkg_launch_environment
   pkg_llm_pi_ai --> pkg_llm
   pkg_llm_pi_ai --> pkg_settings
@@ -1307,6 +1312,7 @@ flowchart TD
 | [`system-prompt`](../packages/core/system-prompt) | `core` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope) |
 | [`skill`](../packages/skill/skill) | `skill` | [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope) |
 | [`web-fetch-http`](../packages/web/web-fetch-http) | `web` | [`http-proxy`](../packages/util/http-proxy), [`timeout`](../packages/util/timeout), [`web`](../packages/web/web) |
+| [`web-search-brightdata`](../packages/web/web-search-brightdata) | `web` | [`credentials`](../packages/credentials/credentials), [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`web-search-exa`](../packages/web/web-search-exa) | `web` | [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`web-search-perplexity`](../packages/web/web-search-perplexity) | `web` | [`launch-environment`](../packages/util/launch-environment), [`web`](../packages/web/web) |
 | [`api-remotes`](../packages/api/remotes) | `api` | [`scope`](../packages/core/scope) |
@@ -1341,7 +1347,7 @@ flowchart TD
 | [`shell`](../packages/shell/shell) | `shell` | [`sandbox`](../packages/sandbox/sandbox), [`settings`](../packages/settings/settings), [`subprocess`](../packages/subprocess/subprocess) |
 | [`workspace`](../packages/workspace/workspace) | `workspace` | [`invariants`](../packages/runtime-diagnostics/invariants), [`session`](../packages/core/session), [`session-persistence`](../packages/session/session-persistence), [`storage`](../packages/storage/storage), [`storage-domain`](../packages/storage/storage-domain), [`typert-protocol`](../packages/typert/protocol) |
 | [`llm-deepseek`](../packages/llm/llm-deepseek) | `llm` | [`anonymous-user-id`](../packages/identity/anonymous-user-id), [`atomic-write`](../packages/util/atomic-write), [`attachment`](../packages/attachment/attachment), [`credentials`](../packages/credentials/credentials), [`deepseek-llm-api-extensions`](../packages/llm/deepseek-llm-api-extensions), [`fs`](../packages/fs/fs), [`home-paths`](../packages/util/home-paths), [`launch-environment`](../packages/util/launch-environment), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings), [`timeout`](../packages/util/timeout) |
-| [`llm-pi-ai`](../packages/llm/llm-pi-ai) | `llm` | [`attachment`](../packages/attachment/attachment), [`authorization`](../packages/credentials/authorization), [`credentials`](../packages/credentials/credentials), [`fs`](../packages/fs/fs), [`launch-environment`](../packages/util/launch-environment), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings), [`timeout`](../packages/util/timeout) |
+| [`llm-pi-ai`](../packages/llm/llm-pi-ai) | `llm` | [`attachment`](../packages/attachment/attachment), [`authorization`](../packages/credentials/authorization), [`credentials`](../packages/credentials/credentials), [`fs`](../packages/fs/fs), [`host-webserver`](../packages/host/webserver), [`launch-environment`](../packages/util/launch-environment), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings), [`timeout`](../packages/util/timeout) |
 | [`llm-retry`](../packages/llm/llm-retry) | `llm` | [`agent`](../packages/core/agent), [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection), [`timeout`](../packages/util/timeout) |
 | [`agent-default-model`](../packages/core/agent-default-model) | `core` | [`agent`](../packages/core/agent), [`llm`](../packages/llm/llm), [`settings`](../packages/settings/settings) |
 | [`goal`](../packages/goal/goal) | `goal` | [`agent`](../packages/core/agent), [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`scope`](../packages/core/scope), [`session`](../packages/core/session), [`session-projection`](../packages/session/session-projection), [`typert-protocol`](../packages/typert/protocol) |

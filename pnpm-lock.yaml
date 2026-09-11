@@ -4338,6 +4338,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../core/session
+      '@deepseek-ai/dsh-token-meter':
+        specifier: workspace:^
+        version: link:../../llm/token-meter
       '@deepseek-ai/dsh-tools':
         specifier: workspace:^
         version: link:../../core/tools

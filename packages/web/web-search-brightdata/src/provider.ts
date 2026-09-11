@@ -47,6 +47,8 @@ export interface BrightDataSearchProviderOptions {
  * Decode the HTML entities DuckDuckGo pages use. Numeric and hex character
  * references decode too; unknown named entities are left verbatim rather than
  * guessed (a wrong guess would fabricate snippet text).
+ * @param text - Raw HTML fragment whose entities are decoded.
+ * @returns The fragment with known entities replaced and unknown ones left as written.
  */
 export function decodeHtmlEntities(text: string): string {
   return text
@@ -82,6 +84,8 @@ function stripTags(html: string): string {
  * Resolve one DuckDuckGo redirect href (`//duckduckgo.com/l/?uddg=<encoded>`)
  * to its destination. Non-redirect absolute http(s) hrefs pass through; any
  * other form returns `undefined` (relative or unsupported link).
+ * @param href - One anchor's raw `href` attribute value.
+ * @returns The absolute http(s) destination, or `undefined` when the link cannot be resolved.
  */
 export function unwrapDdgUrl(href: string): string | undefined {
   let candidate = href.trim()
@@ -142,6 +146,8 @@ const ANCHOR_SEGMENT_SNIPPET_PATTERN = /<a\b[^>]*class="[^"]*\bresult__snippet\b
 /**
  * Map parsed hits to normalized sources. The web service owns the final
  * `maxResults` truncation, so this provider reports `truncated: false`.
+ * @param hits - Parsed result anchors in page order.
+ * @returns The portable search result, carrying only the fields a hit supplied.
  */
 export function mapParsedHits(hits: readonly ParsedSearchHit[]): WebSearchResult {
   const sources: WebSearchSource[] = hits.map(hit => ({

@@ -33,9 +33,17 @@ node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open
 
 **Editor access.** A code-server / VS Code route was scripted separately during setup: it installs `@deepseek-ai/dsh` and `@vscode/vsce` globally, patches the published bundle for LAN binding, and builds a VSIX. That script is kept at `/root/projects/dsh-vscode.md` and is not part of either repository.
 
+## Web search providers
+
+**Bright Data Web Unlocker** (`9712944bae`, `bbec969caa`, `71a4364138`) adds a fourth `ctx.web` search backend in `packages/web/web-search-brightdata`, alongside the shipped `exa`, `perplexity` and `deepseek` ones. It calls no vendor search endpoint: it asks a Web Unlocker zone for the DuckDuckGo HTML result page (`format: 'raw'`) and parses the organic results locally, so a search returns citeable `url`/`title`/`snippet` sources and never an invented answer or a publication date. It is selected like any other backend — `searchProvider: brightdata` — and the token resolves through `ctx.credentials` (whose local provider also reads the launch environment), or from the launch environment alone when that seam is absent.
+
+Three quirks are worth knowing before choosing it: **availability ignores the token** (the plugin always supplies a credential resolver, so `available()` only checks a parseable endpoint and a non-empty zone — a tokenless deployment selects this provider and the *search* fails as `WEB_PROVIDER_ERROR` naming `BRIGHTDATA_API_TOKEN`, not `WEB_PROVIDER_UNAVAILABLE`); **`apiKeyEnv` takes a bare variable name** (`BRIGHTDATA_API_TOKEN`, not `$BRIGHTDATA_API_TOKEN` — the credential-reference grammar rejects the `$` form with a `TypeError`); and **every search spends one credit** from Bright Data's free tier, which is 5,000 credits/month drawn from a single shared pool across Web Unlocker, SERP API, Web Scraper API, Scraper Studio and MCP, with `maxResults` truncating only afterwards.
+
+The package shipped without a README, which the doc gates caught; it now carries a full `package-reference` README pair (`.md`, `.zh.md`, `.i18n.yaml`) and the `indirect` Model Experience registration that its sibling provider backends use. The provider's own behavior did not change — only its documentation, its package version, and the JSDoc on three exported helpers.
+
 ## Model catalog management
 
-Two gateway providers are configured in `~/.dsh/settings.yaml` — `commandcode` (69 models) and `opencode-go` (36 models). Three behaviours were added on top of upstream's catalog handling, all in `packages/llm/llm-pi-ai`:
+Two gateway providers are configured in `~/.dsh/settings.yaml` — `commandcode` (69 models) and `opencode-go` (36 declared; the gateway serves 37, and the difference is the undeclared V4.1 Flash alias explained below). Three behaviours were added on top of upstream's catalog handling, all in `packages/llm/llm-pi-ai`:
 
 **Auto-refresh on every web page load** (`8269a9f757`). A provider route with `autoRefresh: true` is re-interrogated at its own `GET {baseURL}/models` on each web page load, and the merged result is written back into the `llm-pi-ai` user settings section. A gateway that gains or retires models, or corrects a context window, therefore shows up in `settings.yaml` without hand-editing. The merge is deliberately conservative: listed entries keep every stored field and only a capacity the listing actually discloses replaces the stored one, and nothing is ever read from pi-ai's installed catalog — the endpoint is the only truth consulted.
 
@@ -43,7 +51,9 @@ Two gateway providers are configured in `~/.dsh/settings.yaml` — `commandcode`
 
 **Reasoning efforts are never auto-added** (`a91cf74b9d`). Neither gateway discloses per-model reasoning efforts, so stamping a uniform map onto every model a refresh adds would misrepresent models whose real support differs. Auto-added models carry exactly the fields the listing discloses — id, display name, capacities — and efforts are set per model. The route-level `defaultReasoningEfforts` profile field was removed entirely.
 
-**Curated ordering and DeepSeek V4.1 Flash.** The provider `models` list order is the model selector's order, so the curated list is what decides what a reader sees first. `deepseek/deepseek-v4.1-flash` sits directly above `deepseek/deepseek-v4-flash`, with a 1M context window, 384K max output, efforts `off / low / high / max`, and the live Flash tariff. The OpenCode Go route is ordered the same way: its V4.1 Flash is declared first in that provider's `models` list, directly above `deepseek-v4-flash`, because it is *not* an auto-refreshed entry and would otherwise sit last of 36. A refresh cannot undo that — `mergeRefreshedModels` puts stored order first and appends only what the listing adds — so the curated position survives every page-load refresh. Note that DeepSeek retired the older Flash models on 2026-09-10: `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` are now legacy aliases served by the V4.1 Flash model and billed at Flash prices, and `deepseek-v4-pro` follows on September 14. V4.1 Flash and V4 Flash therefore cost the *same* — the cheaper rows are the retired aliases, not a discount on the new model.
+**Curated ordering and DeepSeek V4.1 Flash.** The provider `models` list order is the model selector's order, so the curated list is what decides what a reader sees first. `deepseek/deepseek-v4.1-flash` sits directly above `deepseek/deepseek-v4-flash`, with a 1M context window, 384K max output, efforts `off / low / high / max`, and the live Flash tariff. The OpenCode Go route is ordered the same way: its V4.1 Flash is declared first in that provider's `models` list, directly above `deepseek-v4-flash`. A refresh cannot undo that — `mergeRefreshedModels` puts stored order first and appends only what the listing adds — so the curated position survives every page-load refresh. Note that DeepSeek retired the older Flash models on 2026-09-10: `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` are now legacy aliases served by the V4.1 Flash model and billed at Flash prices, and `deepseek-v4-pro` follows on September 14. V4.1 Flash and V4 Flash therefore cost the *same* — the cheaper rows are the retired aliases, not a discount on the new model.
+
+**Which OpenCode id V4.1 Flash is declared under.** OpenCode Go serves this model under two ids — `deepseek-flash` and `deepseek-v4.1-flash` — and both answer a request. Only the second appears on the operator's rate card and endpoint table, so the declaration names `deepseek-v4.1-flash` and the retired alias stays undeclared. That choice has one visible consequence worth knowing: the refresh appends every *served* id the route does not declare, so the undeclared alias comes back as a bare, unpriced row at the bottom of the OpenCode group. Duplicate ids cannot both be suppressed by declaration — declare one and the other is appended, so exactly one extra alias row exists either way. The row is harmless (same model, same price when priced) but it is not evidence the curated list failed; `mergeListedIntoConfigured` only ever appends ids the endpoint actually returned.
 
 ## Published rates and estimated spend
 
@@ -85,16 +95,27 @@ The dock sits outside the Chat view, so its registration injects `loadThrough` f
 
 ## Upstream sync
 
-The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. The most recent sync merged `upstream/master` (288 commits, `aa8262ec09`) and kept every local feature through four conflicts: `llm-pi-ai/src/index.ts` (kept both upstream's `registering` flag and the local `settingsProvider`), `bundle/web-app/README.zh.md` (kept the local `--host 0.0.0.0` paragraph), `llm-pi-ai/README.i18n.yaml` (took upstream hashes and re-recorded), and `docs/config-catalog.md` (took upstream, then regenerated).
+The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. Two syncs have happened, both onto an identical pair of checkouts:
+
+**288 commits, `aa8262ec09`** (0.1.5-rc.1), kept every local feature through four conflicts: `llm-pi-ai/src/index.ts` (kept both upstream's `registering` flag and the local `settingsProvider`), `bundle/web-app/README.zh.md` (kept the local `--host 0.0.0.0` paragraph), `llm-pi-ai/README.i18n.yaml` (took upstream hashes and re-recorded), and `docs/config-catalog.md` (took upstream, then regenerated).
+
+**134 commits, `c291e7961a`** (0.1.5-rc.2). Three conflicts, all in `ui-chat` and all additive on *both* sides, resolved by keeping both: `apply.ts` (upstream's `input-trigger` declaration merge is unrelated to the local `ui-model-selection` one), and `ChatNodeSeat.tsx` / `ChatView.tsx` (upstream threads a new `openSkill` owner prop while the local work carries `costOf` and `useModelCosts`; the destructures and memo dependency lists now name both). No local feature needed a semantic change — upstream did not touch a single file in `llm-pi-ai/src` or `token-meter/src`, and the only edits inside those packages were version strings.
+
+Gates that went stale in that merge and were regenerated: `docs/config-catalog.md` (+ its `.i18n.yaml` pairing), `docs/module-graph.*`, `docs/event-producer-consumer.md`, and `extensions/cordis-client-runner/src/client/slot-catalog.ts`. Three unrelated gate failures were also repaired because the fork had introduced them: the missing `packages/web/web-search-brightdata/README.{md,zh.md,i18n.yaml}`, its package version (the root-version rule in `scripts/check-workspace-constraints.ts` requires every dsh-family manifest to match `0.1.5-rc.2`), and `@deepseek-ai/dsh-token-meter` missing from `ui-trajectory`'s devDependencies. Two further failures are upstream's own and were left alone: `verify-client-domain-graph` reports pre-existing layering violations in `ui-sidebar-documentpreview` (a package neither side edited), and `verify-doc-site-fragments` needs `website/.dist`, which only `docs:build` produces.
 
 Derived artifacts must be regenerated after any merge that touches their sources; they are freshness-gated, so a stale one fails `doc-sync`:
 
 ```bash
 pnpm run gen-config-catalog            # docs/config-catalog.md + .zh.md
 pnpm run gen-cordis-inspect-catalog    # cordis_inspect API catalog
+pnpm run gen-module-graph              # docs/module-graph.md/.zh.md/.i18n.yaml
+pnpm run gen-doc-graphs                # docs/event-producer-consumer.md + siblings
+pnpm run gen-client-catalog            # cordis-client-runner slot catalog
 node_modules/.bin/tsx scripts/gen-third-party-notices.ts
 pnpm run verify-translation-pairing --write <changed EN docs>
 ```
+
+`gen-doc-graphs` rewrites only the English side of `event-producer-consumer.md`; the Chinese counterpart keeps translated prose but must take the regenerated tables' line numbers, or `verify-translation-pairing` fails on the pair.
 
 ## Building, testing, restarting
 
@@ -160,6 +181,11 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `b0156a62f8` | feat(ui-chat): move the turn loader beside the usage pill, show cache rates |
 | `0b4e1333d9` | Merge remote-tracking branch `upstream/master` |
 | `4329c8a4cb` | feat(ui-chat): walk the turn loader back through earlier turns |
-| (this change) | feat(usage): price each attempt at its own route and rate band |
+| `35e16d23a1` | feat(usage): price each attempt at its own route and rate band |
+| `6abf54ced1` | docs: record OpenCode V4.1 Flash ordering and the Zen availability limit |
+| `24f40ec67d` | Merge remote-tracking branch `upstream/master` (0.1.5-rc.2, 134 commits) |
+| (this change) | docs: complete the Bright Data package and re-point OpenCode's V4.1 Flash id |
+
+Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
 Related Agent Notes: `.agents/notes/implemented/feature/2026-09-10-published-model-rates-and-estimated-spend.md` (and its `.zh.md`).
