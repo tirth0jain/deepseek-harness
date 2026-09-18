@@ -46,6 +46,7 @@
     "@deepseek-ai/dsh-hook-protocol": "workspace:^",
     "@deepseek-ai/dsh-hooks-claude-code": "workspace:^",
     "@deepseek-ai/dsh-hooks-codex": "workspace:^",
+    "@deepseek-ai/dsh-host-webserver": "workspace:^",
     "@deepseek-ai/dsh-http-proxy": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-jobs": "workspace:^",

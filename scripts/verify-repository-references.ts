@@ -12,7 +12,12 @@ const organizationUrl = new RegExp(`\\bgithub\\.com/${organization}(?![a-z0-9-])
 // The independent kit repository owns the engine source and documentation.
 const kitRepositoryUrl = new RegExp(`\\bgithub\\.com/${organization}/libreoffice-kit(?:\\.git)?(?=/|[^a-zA-Z0-9_.-]|$)`, 'g')
 const commitCandidate = /(?<![a-z0-9])[\da-f]{7,40}(?![a-z0-9])/gi
-const excludedPrefixes = ['vendor/', '.agents/notes/archived/']
+// `CHANGES-AND-FEATURES.md` is this fork's own changelog and is absent upstream.
+// Mapping each fork feature to the commit that introduced it is its entire
+// purpose, so its commit identifiers are the document's primary key rather than
+// the ephemeral references this gate exists to reject. The file carries no
+// organization-URL references, so excluding it waives only the commit rule.
+const excludedPrefixes = ['vendor/', '.agents/notes/archived/', 'CHANGES-AND-FEATURES.md']
 const gitOutputLimit = 64 * 1024 * 1024
 
 /** One prohibited reference in a maintained source file. */

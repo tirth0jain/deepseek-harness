@@ -431,7 +431,7 @@ export const StatsPills = memo(function StatsPills({
   // data-composer-stats: InputBar's `.root:has([data-composer-stats])` rule
   // tightens the composer's bottom clearance only while this row renders.
   return (
-    <div className={css.root}>
+    <div className={css.root} data-composer-stats>
       {stats.steps > 0 && (
         <TimePill
           stats={stats}

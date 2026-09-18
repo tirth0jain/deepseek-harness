@@ -404,6 +404,11 @@ export interface ConnectionConfig {
    * non-loopback (`0.0.0.0`) deployment must declare the names it is reached
    * by; the Web runtime derives LAN IP literals from an active all-interface
    * bind. An entry that is not a bare, canonical authority fails plugin load.
+   *
+   * A listed authority is also admitted to the settings document: the browser
+   * half reaches the same verdict for its own page authority, so
+   * `ctx.connection.canWriteSettings` is true there. Without that, a headless
+   * deployment reached only over the network could never edit its own settings.
    */
   trustedHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */

@@ -13,13 +13,33 @@ Two checkouts of the same history are kept side by side, and they are expected t
 | `/root/projects/dsh-new-upstream` | Primary checkout; the live GUI runs from here | `dshkill-new` / `dshstart` |
 | `/root/projects/deepseek-harness` | Mirror checkout on an alternate port (3082) | `dshstart-old` |
 
-Only one harness runs at a time: both share `~/.dsh`, and booting one re-points that profile's module symlinks at its own build. The sync direction is always **new → old**; the mirror is fast-forwarded and rebuilt, never edited independently. To confirm the two agree:
+Only one harness runs at a time: both share `~/.dsh`, and booting one re-points that profile's module symlinks at its own build. The sync direction is always **new → old**; the mirror is fast-forwarded and rebuilt, never edited independently. The mirror reaches the primary through its own `new` remote (its `origin` is this fork on GitHub and is not the sync source), and it must be rebuilt before it can serve, because `lib/` is gitignored:
 
 ```bash
-git -C /root/projects/deepseek-harness merge --ff-only origin/master
+git -C /root/projects/deepseek-harness fetch new
+git -C /root/projects/deepseek-harness merge --ff-only new/master
+(cd /root/projects/deepseek-harness && pnpm install && pnpm run build:lib)
 diff -r --brief /root/projects/dsh-new-upstream/packages /root/projects/deepseek-harness/packages \
   -x node_modules -x lib -x dist -x '*.tsbuildinfo'
 ```
+
+A mirror build must never run while the other harness is serving — see the rebuild/restart rule under the upstream sync below.
+
+## Upstream sync: 0.1.6-alpha.2
+
+`94210c9097` merges `upstream/master` (1548 commits) into the fork, taking the tree from `0.1.5-rc.2` to `0.1.6-alpha.2`. All 20 conflicts were resolved by hand, and three fork features had to be adapted because upstream had reworked the same code.
+
+**Rebuild and restart together, or the client half breaks.** The Host process and the client plugin bundles it serves are two halves of one build. Rebuilding `lib/` while a harness is running leaves the old Host in memory serving the new bundles, so the browser pairs a new `@deepseek-ai/dsh-client-ui-conversation` against an old slots core and reports *Failed to load plugins* with `this._core.registerFactory is not a function`. Nothing is corrupted — the fix is to restart the harness so both halves come from the same build. Treat the rebuild and the restart as one step, and hard-reload the tab afterwards.
+
+Adaptations the merge forced:
+
+- **`client-connection` settings write access.** Upstream replaced the fixture-based `apply` with `installConnection(ctx, options)`, so `canWriteSettings` moved onto that seam: `ConnectionInstallOptions.trustedHosts` is now an explicit input beside `transport` / `recovery` / `location`, `ConnectionLocation` gained an optional `host` (the port-qualified page authority the fence compares), and `apply` reads the injected `__DSH_TRUSTED_HOSTS__` global and passes it through. Behavior is unchanged.
+- **`ui-chat` / `ui-trajectory` pricing.** Kept our `costOf` / `useModelCosts` / turn-loader wiring while taking upstream's `MarkdownDelegateProvider`, `jsonStringWrapping`, and its removal of `renderSlotChain`. Our `requestRoute` in `TrajectoryView.tsx` followed upstream's `AssistantProvenance` → `AssistantProviderMetadata` rename.
+- **Tests.** Followed upstream's `SessionPendingInteractionSnapshot` → `SessionStatusSnapshot` rename and its removal of `SessionSnapshot.queue` and the fixture `search` location field.
+
+**Version and closure.** Upstream's root version is now `0.1.6-alpha.2`, which every dsh-family manifest must match; `packages/web/web-search-brightdata` was still on `0.1.5-rc.2` and is bumped here. `python/sdk-runtime` also gained `@deepseek-ai/dsh-host-webserver`, the peer `llm-pi-ai` needs for the auto-refresh feature. Eight orphaned build directories left behind by packages upstream deleted (`packages/e2b/*`, `packages/fs/tool-present`, and friends) were removed; they held only ignored `lib/` and `node_modules/`, and the workspace `constraints` gate reads the filesystem, so it failed on them.
+
+**Lifting the `--host 0.0.0.0` guard is still ours.** Upstream had already shipped the LAN trust machinery — `resolveLanTrust`, the `trustedHosts` config, the `/api` browser-trust fence and the `--trusted-host` flag all predate the fork. What upstream still refuses is the bind itself: its `startup.ts` errors on `--host 0.0.0.0` "for safety". `165591cce5` removes that guard and nothing else, so the merge kept our `startup.ts` and took upstream's everywhere else.
 
 ## Deployment and access
 
@@ -81,7 +101,7 @@ Before this work, every usage surface reported tokens and nothing else, so compa
 
 The cache-hit rate earns its place in the row: on a long agent conversation most prompt tokens are cache reads, so that rate — not the headline pair — is what actually sets the bill.
 
-**Rate provenance matters.** The bundled pi-ai catalog ages, and it still carried the pre-2026-09-10 Flash tariff. Deriving gateway rates from it would have priced a route at `$0.22/$0.66` whose live CommandCode and OpenCode Go rate cards both say `$0.15/$0.60` — wrong by half again, while still looking authoritative. The rates in `settings.yaml` were transcribed from the operators' live rate cards instead: [CommandCode](https://commandcode.ai/models), [OpenCode Go](https://opencode.ai/docs/go/), and [DeepSeek's own pricing page](https://api-docs.deepseek.com/quick_start/pricing/). Seven DeepSeek-backed entries carry a peak band — `commandcode/deepseek-v4.1-flash`, `.../deepseek-v4-flash`, `.../deepseek-v4-flash-vision-exp`, `.../deepseek-v4-pro`, and the OpenCode Go rows `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-flash`.
+**Where the published rates came from.** The bundled pi-ai catalog ages, and it still carried the pre-2026-09-10 Flash tariff. Deriving gateway rates from it would have priced a route at `$0.22/$0.66` whose live CommandCode and OpenCode Go rate cards both say `$0.15/$0.60` — wrong by half again, while still looking authoritative. The rates in `settings.yaml` were transcribed from the operators' live rate cards instead: [CommandCode](https://commandcode.ai/models), [OpenCode Go](https://opencode.ai/docs/go/), and [DeepSeek's own pricing page](https://api-docs.deepseek.com/quick_start/pricing/). Seven DeepSeek-backed entries carry a peak band — `commandcode/deepseek-v4.1-flash`, `.../deepseek-v4-flash`, `.../deepseek-v4-flash-vision-exp`, `.../deepseek-v4-pro`, and the OpenCode Go rows `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-flash`.
 
 One wrinkle in those cards worth knowing: CommandCode's page for DeepSeek V4 Flash Vision (exp) prints the peak cache-read cell as `$0.01` when every other cell on the page is exactly double. The band is stated as a factor of 2, so that row follows the arithmetic (`$0.014`) rather than the rounded cell. Context-tiered cards (Grok 4.6, Qwen3.7/3.6 Plus, GPT 5.6 Luna, Grok 4.6) still record only their base tier, since tier is a property of the request's size rather than of the clock — so those estimates remain a floor.
 
@@ -173,6 +193,10 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 - **Only curated models have rates.** The rest of the CommandCode card was filled from its published table, but any model whose operator publishes nothing shows no amount rather than a guess.
 - **`opencode-go` serves a different V4.1 Flash id.** Its production name is `deepseek-flash`, declared explicitly because the bundled catalog has no entry for it. The same API key also authenticates against OpenCode **Zen** (`https://opencode.ai/zen/v1`), but Zen does not serve V4.1 Flash at all — its listing has no such id and a request for `deepseek-flash` answers `401 "Model deepseek-flash is not supported"` — so V4.1 Flash is reachable only through Go (or DeepSeek directly, or CommandCode). Adding a Zen provider would be worth doing for its *other* DeepSeek rows, which are cheaper than Go's (`deepseek-v4-flash` at `$0.14/$0.28` against Go's `$0.15/$0.60`), but not for this model.
 - **Pre-existing suite failure.** `packages/llm/plugin-package-inventory-deepseek/tests/inventory.spec.ts` fails on this machine because of a stray `/tmp/package.json` (`"name": "tmp"`); it fails on a pristine checkout too and is unrelated to these changes.
+- **`verify-client-domain-graph` fails on upstream's own code.** The gate reports 38 violations, all in packages this fork has never touched (`ui-sidebar-documentpreview` 28, `ui-sidebar-browser` 7, `ui-conversation` 3). It was already failing before the sync — 26 violations on the pre-merge tree, confirmed by running the same script in a worktree at the pre-merge commit — and upstream's 1548 commits added the other 12. Our own single violation (`ui-chat/src/client/contract/slots.ts` importing `TurnRateLookup` from the sibling `chat` domain) is fixed by moving the alias to `contract/turn-cost.ts`, so the `ui-chat` package is clean. Nothing here is a regression from the sync.
+- **`verify-scoped-events` needs more heap than Node's default.** The generator walks the whole repository and now exceeds the 2 GB default on this 8 GB host: run `NODE_OPTIONS=--max-old-space-size=4096 pnpm run verify-scoped-events`. `gen-scoped-events` has the same requirement, and neither is baked into the npm script because an inline `NODE_OPTIONS=` prefix is not portable to the Windows targets this repository still builds for.
+- **`verify-repository-references` excludes this file.** `CHANGES-AND-FEATURES.md` does not exist upstream and maps each fork feature to the commit that introduced it, so the commit identifiers that gate rejects are this document's primary key. The file carries no organization-URL references, so the exclusion waives only the commit rule.
+- **`verify-doc-site-fragments` needs a built site.** It reads `website/.dist` and fails until `pnpm run docs:build` has run at least once; `docs:build` ends by running the gate itself.
 
 ## Commit index
 
@@ -191,7 +215,9 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `6abf54ced1` | docs: record OpenCode V4.1 Flash ordering and the Zen availability limit |
 | `24f40ec67d` | Merge remote-tracking branch `upstream/master` (0.1.5-rc.2, 134 commits) |
 | `bf04e71d95` | docs: complete the Bright Data package and re-point OpenCode's V4.1 Flash id |
-| (this change) | feat(settings): let a declared trusted authority write settings |
+| `8ab51e8613` | feat(settings): let a declared trusted authority write settings |
+| `a787753134` | docs: record the settings write-access rule for declared authorities |
+| `94210c9097` | Merge `upstream/master` (dsh 0.1.6-alpha.2, 1548 commits) |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 

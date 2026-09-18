@@ -17,11 +17,10 @@ import {
   rateBandAt,
   type TurnTokenUsage,
   type UsageRateBand,
-  type UsageRateSchedule,
 } from '@deepseek-ai/dsh-token-meter/client'
+import type { TurnRateLookup } from '../contract/turn-cost.ts'
 
-/** Resolve one exact route's published rate and peak band, or undefined when the route is unpriced. */
-export type TurnRateLookup = (provider: string, model: string) => UsageRateSchedule | undefined
+export type { TurnRateLookup } from '../contract/turn-cost.ts'
 
 /** One Turn's estimated spend and the bands it was billed in. */
 export interface TurnCostEstimate {

@@ -14,7 +14,7 @@ import type { UsageRate } from '@deepseek-ai/dsh-token-meter/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { createChatStore } from '../stores.ts'
-import type { TurnRateLookup } from '../chat/turn-cost.ts'
+import type { TurnRateLookup } from './turn-cost.ts'
 import type { ToolCallId } from './store.ts'
 import type { ChatConversationViewNode, ChatNode, ChatNodeKind } from './chat-nodes.ts'
 import type {
