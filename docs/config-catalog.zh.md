@@ -411,6 +411,18 @@ export interface ConnectionConfig {
    * deployment reached only over the network could never edit its own settings.
    */
   trustedHosts?: string[]
+  /**
+   * Enforce the browser token handshake. Default: true.
+   *
+   * Set false only when something in front of the harness already authenticates
+   * every visitor (a reverse proxy with its own access control, for example).
+   * The `/api` trust fence still applies, but any request it admits is then
+   * authorized, so reachability becomes the entire access policy: bind to the
+   * interface that proxy reaches and declare exactly the authorities it
+   * forwards. The launch token is neither minted into the printed URL nor
+   * accepted, and no browser-session signing secret is created.
+   */
+  browserAuth?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */

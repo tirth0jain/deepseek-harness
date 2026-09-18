@@ -180,7 +180,10 @@ async function initializeSecret(credentials: CredentialProvider): Promise<Buffer
 /**
  * Process launch-token exchange and persistent signed-cookie verification.
  * Connection loads the credential provider's signing secret during activation
- * and retains it for synchronous request authentication.
+ * and retains it for synchronous request authentication. A deployment that
+ * authenticates its own visitors before they reach the harness mounts the
+ * secret-free owner from {@link BrowserAuth.open} instead, which admits every
+ * request the trust fence already passed.
  */
 export class BrowserAuth {
   private readonly launchToken: string
@@ -188,7 +191,7 @@ export class BrowserAuth {
 
   private constructor(
     processOwner: object,
-    private readonly secret: Buffer,
+    private readonly secret: Buffer | undefined,
     maxAgeDays: number,
   ) {
     this.launchToken = processLaunchToken(processOwner)
@@ -216,7 +219,25 @@ export class BrowserAuth {
   }
 
   /**
-   * Add this process's launch token to the ordinary application root URL.
+   * Create the authentication-free owner for a deployment that terminates
+   * authentication in front of the harness — for example a reverse proxy that
+   * already gates every visitor.
+   *
+   * Every request the `/api` trust fence admits is authorized, no signing
+   * secret is loaded or created, and {@link BrowserAuth.authenticatedUrl}
+   * returns the clean URL with no launch token. Reachability is then the whole
+   * access policy, so a deployment using this must control its bind and the
+   * authorities it declares.
+   * @param processOwner - root application context; carried for symmetry with {@link BrowserAuth.create}.
+   * @returns an authentication owner that admits every fenced request.
+   */
+  static open(processOwner: object): BrowserAuth {
+    return new BrowserAuth(processOwner, undefined, 1)
+  }
+
+  /**
+   * Add this process's launch token to the ordinary application root URL, or
+   * return the clean URL when this owner enforces no authentication.
    * @param baseUrl - canonical browser origin without credentials.
    * @returns root URL carrying the process token as its sole authentication input.
    */
@@ -225,19 +246,23 @@ export class BrowserAuth {
     url.pathname = '/'
     url.search = ''
     url.hash = ''
-    url.searchParams.set(TOKEN_QUERY, this.launchToken)
+    // The authentication-free owner advertises the clean URL: there is no
+    // token to exchange, so printing one would only publish a stale secret.
+    if (this.secret !== undefined) url.searchParams.set(TOKEN_QUERY, this.launchToken)
     return url.href
   }
 
   /**
    * Authenticate an index request. A valid root query token mints the cookie
    * and redirects to clean `/`; a valid cookie lets the caller serve the
-   * index; every other request receives the same minimal 401 response.
+   * index; every other request receives the same minimal 401 response. An
+   * authentication-free owner serves the index unconditionally.
    * @param req - incoming root or configured-index request.
    * @param res - response owned when this method returns false.
    * @returns true only when the caller may serve index.html.
    */
   authorizeIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
+    if (this.secret === undefined) return true
     /* v8 ignore next -- node:http always supplies url on server requests. */
     const url = new URL(req.url ?? '/', 'http://dsh.invalid')
     const tokens = url.searchParams.getAll(TOKEN_QUERY)
@@ -282,11 +307,13 @@ export class BrowserAuth {
   }
 
   /**
-   * Verify the authority-bound browser cookie on a Host request.
+   * Verify the authority-bound browser cookie on a Host request. An
+   * authentication-free owner admits every request the trust fence forwarded.
    * @param request - request headers carrying Host and Cookie.
    * @returns true only for an unexpired cookie signed by this activation's loaded secret.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
+    if (this.secret === undefined) return true
     const authority = requestAuthority(request.headers)
     const rawCookie = header(request.headers, 'cookie')
     if (authority === undefined || rawCookie === undefined) return false

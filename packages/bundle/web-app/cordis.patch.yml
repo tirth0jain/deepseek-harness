@@ -180,12 +180,14 @@
     # webserver under /api; browser half is the fetch/SSE client.
     - id: connection
       name: '@deepseek-ai/dsh-client-connection'
-      inject: [webRuntime]
+      inject: [webRuntime, webStartup]
       config:
         # LAN literals derived from the active bind plus --trusted-host extras.
         # A deployment adding authorities keeps this expression and concatenates
         # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        # --no-browser-auth clears this; the /api trust fence is unaffected.
+        browserAuth: !!js ctx.webStartup.browserAuth
 
     # Raw Blob and ReadableStream uploads run independently of Connection's
     # RPC and generation service.

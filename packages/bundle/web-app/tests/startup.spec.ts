@@ -64,6 +64,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    openBrowser: !!js ctx.webStartup.openBrowser',
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    browserAuth: !!js ctx.webStartup.browserAuth',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -101,6 +102,7 @@ describe('web command-line provider', () => {
       '--trusted-host', '10.0.0.9',
     ])
     expect(values).toEqual({
+      browserAuth: true,
       host: '127.0.0.1',
       openBrowser: false,
       port: 8080,
@@ -112,8 +114,21 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ openBrowser: true, trustedHosts: [] })
+    expect(values).toEqual({ browserAuth: true, openBrowser: true, trustedHosts: [] })
     expect(observed.readerConfig).toEqual({
+      browserAuth: true,
+      host: '127.0.0.1',
+      openBrowser: true,
+      port: 3080,
+      trustedHosts: [],
+    })
+  })
+
+  it('clears browser authentication for an upstream-authenticated deployment', async () => {
+    const { values, observed } = await bootProvider(['--no-browser-auth'])
+    expect(values).toEqual({ browserAuth: false, openBrowser: true, trustedHosts: [] })
+    expect(observed.readerConfig).toEqual({
+      browserAuth: false,
       host: '127.0.0.1',
       openBrowser: true,
       port: 3080,
@@ -141,8 +156,9 @@ describe('web command-line provider', () => {
 
   it('accepts the all-interfaces host and passes it to consumers', async () => {
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(values).toEqual({ openBrowser: true, host: '0.0.0.0', trustedHosts: [] })
+    expect(values).toEqual({ browserAuth: true, openBrowser: true, host: '0.0.0.0', trustedHosts: [] })
     expect(observed.readerConfig).toEqual({
+      browserAuth: true,
       host: '0.0.0.0',
       openBrowser: true,
       port: 3080,

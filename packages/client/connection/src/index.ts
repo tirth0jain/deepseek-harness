@@ -101,6 +101,18 @@ export interface ConnectionConfig {
    * deployment reached only over the network could never edit its own settings.
    */
   trustedHosts?: string[]
+  /**
+   * Enforce the browser token handshake. Default: true.
+   *
+   * Set false only when something in front of the harness already authenticates
+   * every visitor (a reverse proxy with its own access control, for example).
+   * The `/api` trust fence still applies, but any request it admits is then
+   * authorized, so reachability becomes the entire access policy: bind to the
+   * interface that proxy reaches and declare exactly the authorities it
+   * forwards. The launch token is neither minted into the printed URL nor
+   * accepted, and no browser-session signing secret is created.
+   */
+  browserAuth?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -110,6 +122,7 @@ export interface ConnectionConfig {
 export const Config: z<ConnectionConfig> = z.object({
   recovery: ConnectionRecoveryConfigSchema.default({}),
   trustedHosts: z.array(String).default([]),
+  browserAuth: z.boolean().default(true),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
@@ -117,7 +130,7 @@ export const Config: z<ConnectionConfig> = z.object({
 /**
  * Provides carrier-neutral RPC and Fetch registries. When `webServer` is
  * present, the plugin also mounts the `/api` browser transport with Host/Origin
- * checks and persistent browser authentication.
+ * checks and, unless `browserAuth` is off, persistent browser authentication.
  * @param ctx - Host plugin context.
  * @param config - resolved plugin config (schema defaults applied).
  */
@@ -125,16 +138,24 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const recovery = resolveConnectionConfig(config?.recovery)
   // The Loader resolves schema defaults; hand-built test contexts may pass none.
   const trustedHosts = config?.trustedHosts ?? []
+  const browserAuth = config?.browserAuth ?? true
   const cookieMaxAgeDays = config?.cookieMaxAgeDays ?? 30
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
+  if (!browserAuth) {
+    // Turning authentication off is a deliberate deployment choice, but silence
+    // would make it indistinguishable from a mistake: state the consequence once.
+    console.warn('client-connection: browser authentication is off; every request the /api trust fence admits is authorized')
+  }
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    browserAuth
+      ? await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays)
+      : BrowserAuth.open(ctx.root),
   )
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)

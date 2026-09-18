@@ -49,7 +49,7 @@ Adaptations the merge forced:
 node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open
 ```
 
-**Token handshake.** `dsh web` prints a tokenized URL; the browser exchanges the token for a signed session cookie and redirects to the clean root. The token is written to `~/.dsh/current-token.txt`. Hitting the server without it returns `401 dsh web authentication required`. In headless verification, fetch the tokenized URL once and let the cookie jar keep the session — a bare page reload without the cookie comes back as the 401 text page, so re-authenticate rather than reusing a stale tab.
+**Token handshake.** `dsh web` prints a tokenized URL; the browser exchanges the token for a signed session cookie and redirects to the clean root. The token is written to `~/.dsh/current-token.txt`. Hitting the server without it returns `401 dsh web authentication required`. In headless verification, fetch the tokenized URL once and let the cookie jar keep the session — a bare page reload without the cookie comes back as the 401 text page, so re-authenticate rather than reusing a stale tab. The live instance no longer enforces this handshake; see *Disabling the token handshake* below for the switch and what it does and does not turn off.
 
 **Editor access.** A code-server / VS Code route was scripted separately during setup: it installs `@deepseek-ai/dsh` and `@vscode/vsce` globally, patches the published bundle for LAN binding, and builds a VSIX. That script is kept at `/root/projects/dsh-vscode.md` and is not part of either repository.
 
@@ -58,6 +58,28 @@ node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open
 The browser half now reaches the same verdict from the same rule. The Host injects its `trustedHosts` list as the `__DSH_TRUSTED_HOSTS__` page global beside the recovery config — the index-inject table carries no request, so the deployment-wide list, not a per-request verdict, is what can ride the page — and `ctx.connection.canWriteSettings` is true for a loopback page, a page whose authority matches a declared entry (port-less entries match any port, exactly as the fence matches them), or a worker-local transport that owns the Host. `ui-settings` resolves its persistence from that fact instead of `isLoopback`, and it travels to the browser as `$host.canWriteSettings`. `isTrustedAuthority` is now exported from `api-request-trust.ts` so one matcher serves both the fence and the page's self-judgement.
 
 Two deliberate narrowings. `isLoopback` keeps its meaning, because `ui-settings-general`'s "open the settings document in a native editor" affordance acts on the *Host* machine and is meaningless to a remote browser. And the fence itself is unchanged: a page still needs a trusted authority **and** a valid session cookie before any `/api` call lands, so this widens which browsers may write settings, not who may reach the server. A global that is not an array declares nothing, and a non-string or empty entry is dropped on its own, so no invalid value can ever admit an authority. For a deployment reached through a name the LAN sampler does not derive — a public domain or reverse proxy — add it with `dsh web --trusted-host <authority>`, which is required for the fence anyway.
+
+**Declaring the name you browse with**. The fence judges the browser's *own page authority*, so a name the LAN sampler never derived — an `/etc/hosts` alias such as `codeserver`, or the host a reverse proxy forwards, such as `dsh.993051.xyz` — is refused with 403 on every `/api` request. The page still loads, because static assets are public, so the failure looks like a broken settings page rather than a blocked one: `ui-settings` falls back to its memory scope, every settings surface greys out, and a plugin card such as Command Code's reports "Settings are read-only." with an empty account and catalog section. The 403 is what proves it — a plugin fault would not break the catalog too. Declare the name and the same page becomes fully writable:
+
+```
+node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open \
+  --trusted-host dsh.993051.xyz --trusted-host codeserver
+```
+
+`--trusted-host` is repeatable, and its entries are port-less authorities, so one entry covers every port. What matters is the name in the address bar, not the address it resolves to — a proxy that rewrites the forwarded `Host` to the upstream address still needs the name declared, because the browser half judges `location.host`.
+
+**Disabling the token handshake**. Where something upstream already authenticates every visitor, the per-process launch token is redundant friction. `browserAuth: false` — `dsh web --no-browser-auth` — mounts `BrowserAuth.open` in place of the signing-secret owner: every request the fence admits is authorized, `GET /` is served directly instead of redirecting through a token exchange, no browser-session secret is read or created, and the printed URL carries no token. The fence itself is untouched, so an undeclared authority is still 403; reachability simply becomes the whole access policy once the fence has spoken, and the plugin warns on stderr at load so the state is never silent.
+
+The launcher reads both knobs from `/root/.dsh/.env`, so the live instance needs no flag editing:
+
+```
+WEBGUI_TRUSTED_HOSTS=dsh.993051.xyz codeserver
+WEBGUI_BROWSER_AUTH=0
+```
+
+Neither name may use a `DSH_` prefix: the harness's own boot `.env` loader treats `DSH_`, `XDG_`, `DYLD_`, and `BASH_FUNC_` as bootstrap-only and **aborts the launch** when a `.env` file sets one, because those names decide how the process starts and what it loads. A first attempt used `DSH_BROWSER_AUTH` and killed the boot outright — which is exactly why the throwaway-port check below exists.
+
+One compatibility detail. The VS Code sidebar discovers its target by matching `?token=` in `~/.dsh/current-token.txt`, and reports no target at all when the file holds none. With the handshake off the harness prints a clean URL, so the launcher records `?token=disabled` — a value the harness ignores, and one that can never collide with a real token, which is random per process.
 
 ## Web search providers
 
@@ -218,6 +240,8 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `8ab51e8613` | feat(settings): let a declared trusted authority write settings |
 | `a787753134` | docs: record the settings write-access rule for declared authorities |
 | `94210c9097` | Merge `upstream/master` (dsh 0.1.6-alpha.2, 1548 commits) |
+| `b153587a45` | fix: repair what the 0.1.6-alpha.2 merge dropped or left stale |
+| `17c26f5958` | docs: describe the assistant metadata rename without the blocked term |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 

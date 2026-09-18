@@ -42,7 +42,7 @@ Saved model selections override the composition default. Both protocols share `d
 
 ### Configuration
 
-Most users never set these; the command-line flags feed the four settings below — `--host`, `--port`, and `--trusted-host` come from the invocation, and `--no-open` turns the browser handoff off for that invocation:
+Most users never set these; the command-line flags feed the four settings below — `--host`, `--port`, and `--trusted-host` come from the invocation, `--no-open` turns the browser handoff off for that invocation, and `--no-browser-auth` skips the launch-token handshake:
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -56,6 +56,10 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 ### LAN access and trusted hosts
 
 By default the GUI accepts connections from this machine only. A deployment that binds all network interfaces also allows browsers from the LAN, and the printed URL then includes a LAN address; `--trusted-host` adds extra hosts in either case. Host and Origin checks control reachability, while the token exchange authenticates every Host API method and WebSocket stream. The LAN addresses are sampled once at startup, so a network change later is not picked up — restart the GUI to re-advertise.
+
+The same fence decides whether the browser may edit settings. A page whose own authority is neither loopback nor a trusted host gets a read-only settings document, because the browser half reaches the same verdict for its own page location. The page still loads — static assets are public — but every `/api` request is refused with 403, so account cards and model catalogs come back empty. Declare the authority you actually browse with: a DNS alias such as `codeserver`, or the host name a reverse proxy forwards. What matters is the name in the address bar, not the address it resolves to.
+
+`--no-browser-auth` drops the token exchange for a deployment whose visitors something upstream already authenticates. The fence still applies, so declare the proxy's forwarded authority; every request the fence admits is then authorized, the printed URL carries no token, and no browser-session signing secret is created. Reachability becomes the whole access policy, so only use it when the bind and the declared authorities are under your control.
 
 ### Running over SSH
 

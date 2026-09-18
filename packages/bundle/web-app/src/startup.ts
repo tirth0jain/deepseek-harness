@@ -29,10 +29,13 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /** Whether this invocation enforces the browser token handshake (`--no-browser-auth` clears it). */
+  browserAuth: boolean
 }
 
 /** The web flag family, as commander parsed it. */
 interface WebOptions {
+  browserAuth: boolean
   host?: string
   open: boolean
   port?: string
@@ -52,6 +55,7 @@ function webCommand(): Command {
     .option('--no-open', 'do not open the Web UI in the default browser')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option('--trusted-host <authority...>', 'extra authority the /api browser-trust fence accepts (host or host:port; repeatable)')
+    .option('--no-browser-auth', 'skip the launch-token handshake; only for a deployment something else already authenticates')
     .addHelpText('after', `
 Examples:
   dsh --profile web                          serve on the composed host and port
@@ -59,6 +63,9 @@ Examples:
   dsh --profile web --port 8080              serve on another port
   dsh --profile web --host 0.0.0.0           bind all interfaces (LAN / reverse proxy);
                                              browsers must still pass the /api trust fence
+  dsh --profile web --host 0.0.0.0 \\
+    --trusted-host dsh.example.com           accept a reverse proxy's forwarded host
+  dsh --profile web --no-browser-auth        trust an upstream proxy's own authentication
 `)
 }
 
@@ -68,7 +75,9 @@ Examples:
  * is accepted (binding all interfaces, e.g. behind a LAN reverse proxy; the
  * /api browser-trust fence still requires a loopback, derived LAN, or
  * declared `--trusted-host` authority), and a non-numeric `--port` is a usage
- * error. On rejection (and on `--help`) nothing is provided.
+ * error. `--no-browser-auth` clears `browserAuth` for an invocation whose
+ * visitors an upstream proxy already authenticates. On rejection (and on
+ * `--help`) nothing is provided.
  * @param ctx - plugin context carrying the command line.
  */
 export function apply(ctx: Context): void {
@@ -83,6 +92,7 @@ export function apply(ctx: Context): void {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      browserAuth: options.browserAuth,
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

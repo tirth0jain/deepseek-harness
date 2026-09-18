@@ -344,6 +344,25 @@ describe('connection node half', () => {
     await dispose()
   })
 
+  it('admits every fenced request when browser authentication is off', async () => {
+    const { connection, dispose } = await mounted({
+      browserAuth: false,
+      trustedHosts: ['harness.example'],
+    })
+    // The fence is unchanged: an undeclared authority is still refused.
+    expect(connection.requestRejection(fakeRequest({ host: 'other.example' }))).toBe(403)
+    // A declared authority and loopback both need no browser session at all.
+    expect(connection.requestRejection(fakeRequest({ host: 'harness.example' }))).toBeUndefined()
+    expect(connection.requestRejection(fakeRequest({ host: '127.0.0.1:3080' }))).toBeUndefined()
+    // Nothing is advertised to exchange, and the index is served directly
+    // instead of redirecting through the token handshake.
+    expect(connection.authenticatedUrl('http://harness.example')).toBe('http://harness.example/')
+    const index = fakeResponse()
+    expect(connection.authorizeIndex(fakeRequest({ host: 'harness.example' }, '/'), index.response)).toBe(true)
+    expect(index.state.status).toBeUndefined()
+    await dispose()
+  })
+
   it('provides a disposable dedicated RPC channel', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []
