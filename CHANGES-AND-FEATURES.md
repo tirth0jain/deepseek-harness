@@ -59,7 +59,7 @@ The browser half now reaches the same verdict from the same rule. The Host injec
 
 Two deliberate narrowings. `isLoopback` keeps its meaning, because `ui-settings-general`'s "open the settings document in a native editor" affordance acts on the *Host* machine and is meaningless to a remote browser. And the fence itself is unchanged: a page still needs a trusted authority **and** a valid session cookie before any `/api` call lands, so this widens which browsers may write settings, not who may reach the server. A global that is not an array declares nothing, and a non-string or empty entry is dropped on its own, so no invalid value can ever admit an authority. For a deployment reached through a name the LAN sampler does not derive — a public domain or reverse proxy — add it with `dsh web --trusted-host <authority>`, which is required for the fence anyway.
 
-**Declaring the name you browse with**. The fence judges the browser's *own page authority*, so a name the LAN sampler never derived — an `/etc/hosts` alias such as `codeserver`, or the host a reverse proxy forwards, such as `dsh.993051.xyz` — is refused with 403 on every `/api` request. The page still loads, because static assets are public, so the failure looks like a broken settings page rather than a blocked one: `ui-settings` falls back to its memory scope, every settings surface greys out, and a plugin card such as Command Code's reports "Settings are read-only." with an empty account and catalog section. The 403 is what proves it — a plugin fault would not break the catalog too. Declare the name and the same page becomes fully writable:
+**Declaring the name you browse with** (`34cd59ef4b`). The fence judges the browser's *own page authority*, so a name the LAN sampler never derived — an `/etc/hosts` alias such as `codeserver`, or the host a reverse proxy forwards, such as `dsh.993051.xyz` — is refused with 403 on every `/api` request. The page still loads, because static assets are public, so the failure looks like a broken settings page rather than a blocked one: `ui-settings` falls back to its memory scope, every settings surface greys out, and a plugin card such as Command Code's reports "Settings are read-only." with an empty account and catalog section. The 403 is what proves it — a plugin fault would not break the catalog too. Declare the name and the same page becomes fully writable:
 
 ```
 node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open \
@@ -68,7 +68,7 @@ node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open \
 
 `--trusted-host` is repeatable, and its entries are port-less authorities, so one entry covers every port. What matters is the name in the address bar, not the address it resolves to — a proxy that rewrites the forwarded `Host` to the upstream address still needs the name declared, because the browser half judges `location.host`.
 
-**Disabling the token handshake**. Where something upstream already authenticates every visitor, the per-process launch token is redundant friction. `browserAuth: false` — `dsh web --no-browser-auth` — mounts `BrowserAuth.open` in place of the signing-secret owner: every request the fence admits is authorized, `GET /` is served directly instead of redirecting through a token exchange, no browser-session secret is read or created, and the printed URL carries no token. The fence itself is untouched, so an undeclared authority is still 403; reachability simply becomes the whole access policy once the fence has spoken, and the plugin warns on stderr at load so the state is never silent.
+**Disabling the token handshake** (`34cd59ef4b`). Where something upstream already authenticates every visitor, the per-process launch token is redundant friction. `browserAuth: false` — `dsh web --no-browser-auth` — mounts `BrowserAuth.open` in place of the signing-secret owner: every request the fence admits is authorized, `GET /` is served directly instead of redirecting through a token exchange, no browser-session secret is read or created, and the printed URL carries no token. The fence itself is untouched, so an undeclared authority is still 403; reachability simply becomes the whole access policy once the fence has spoken, and the plugin warns on stderr at load so the state is never silent.
 
 The launcher reads both knobs from `/root/.dsh/.env`, so the live instance needs no flag editing:
 
@@ -242,6 +242,7 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `94210c9097` | Merge `upstream/master` (dsh 0.1.6-alpha.2, 1548 commits) |
 | `b153587a45` | fix: repair what the 0.1.6-alpha.2 merge dropped or left stale |
 | `17c26f5958` | docs: describe the assistant metadata rename without the blocked term |
+| `34cd59ef4b` | feat(web): declare trusted hosts and allow disabling browser auth |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
