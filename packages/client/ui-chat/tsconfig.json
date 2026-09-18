@@ -60,6 +60,9 @@
       "path": "../../session/session-turn-outline"
     },
     {
+      "path": "../../subagent/subagent"
+    },
+    {
       "path": "../../settings/settings"
     },
     {
@@ -90,6 +93,9 @@
       "path": "../ui-session"
     },
     {
+      "path": "../ui-sidebar-browser"
+    },
+    {
       "path": "../ui-sidebar-right"
     },
     {
@@ -102,7 +108,7 @@
       "path": "../ui-workspace"
     },
     {
-      "path": "../ui-sidebar-documentpreview"
+      "path": "../ui-sidebar-documentpreview/tsconfig.client.json"
     },
     {
       "path": "../ui-input-trigger"

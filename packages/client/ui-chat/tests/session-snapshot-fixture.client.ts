@@ -15,7 +15,6 @@ const SID = 's1' as SessionId
 export function sessionSnapshotFixture(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
     sessionId: SID,
-    queue: [],
     pendingSubmissions: [],
     running: false,
     removed: false,
