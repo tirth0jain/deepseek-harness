@@ -128,16 +128,24 @@ describe('connection node half', () => {
   })
 
   it('injects validated browser recovery timing and withdraws it on disposal', async () => {
-    const { ctx, dispose } = await mounted({ recovery: { generationReadyTimeoutMs: 25_000 } })
+    const { ctx, dispose } = await mounted({
+      recovery: { generationReadyTimeoutMs: 25_000 },
+      trustedHosts: ['harness.lan'],
+    })
     try {
       const rows: IndexInjection[] = []
       ctx.emit('webserver/index-inject', rows)
-      expect(rows).toEqual([{
-        kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
-          backoffBaseMs: 500, backoffFactor: 2, backoffMaxMs: 10_000,
-          generationReadyWarnMs: 3_000, generationReadyTimeoutMs: 25_000,
+      expect(rows).toEqual([
+        {
+          kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
+            backoffBaseMs: 500, backoffFactor: 2, backoffMaxMs: 10_000,
+            generationReadyWarnMs: 3_000, generationReadyTimeoutMs: 25_000,
+          },
         },
-      }])
+        // The browser half re-judges its own authority against this list, so it
+        // must ride the page even when empty.
+        { kind: 'global', name: '__DSH_TRUSTED_HOSTS__', value: ['harness.lan'] },
+      ])
       await dispose()
       const after: IndexInjection[] = []
       ctx.emit('webserver/index-inject', after)

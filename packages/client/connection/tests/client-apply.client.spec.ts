@@ -15,13 +15,15 @@ import {
 } from '../src/client/index.ts'
 
 type Win = {
-  location?: { hostname: string; search: string; origin?: string }
+  location?: { hostname: string; search: string; origin?: string; host?: string }
   __DSH_TRANSPORT__?: ClientTransportHooks
+  __DSH_TRUSTED_HOSTS__?: unknown
 }
 
 afterEach(() => {
   delete (globalThis as Win).location
   delete (globalThis as Win).__DSH_TRANSPORT__
+  delete (globalThis as Win).__DSH_TRUSTED_HOSTS__
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
@@ -139,6 +141,80 @@ describe('connection client apply', () => {
   it('reports non-loopback page authority through the connection handle', async () => {
     ;(globalThis as Win).location = { hostname: '192.0.2.20', search: '' }
     expect((await mount()).isLoopback).toBe(false)
+  })
+
+  it('keeps a loopback page writable with no declaration at all', async () => {
+    ;(globalThis as Win).location = { hostname: '127.0.0.1', search: '', host: '127.0.0.1:3080' }
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(true)
+    expect(handle.canWriteSettings).toBe(true)
+  })
+
+  it('keeps an undeclared remote authority read-only while still non-loopback', async () => {
+    ;(globalThis as Win).location = { hostname: 'harness.lan', search: '', host: 'harness.lan:3080' }
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+    expect(handle.canWriteSettings).toBe(false)
+  })
+
+  const admitted: Array<[label: string, host: string, trusted: string[]]> = [
+    ['a port-less declaration matches any port', 'harness.lan:3080', ['harness.lan']],
+    ['an exact authority matches that port', 'harness.lan:3080', ['harness.lan:3080']],
+    ['a derived LAN literal admits its page', '192.0.2.20:3080', ['192.0.2.20']],
+    ['case never decides trust', 'Harness.LAN:3080', ['harness.lan']],
+  ]
+
+  it.each(admitted)('admits a declared remote authority to settings: %s', async (_label, host, trusted) => {
+    ;(globalThis as Win).location = { hostname: host.split(':')[0] ?? '', search: '', host }
+    ;(globalThis as Win).__DSH_TRUSTED_HOSTS__ = trusted
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+    expect(handle.canWriteSettings).toBe(true)
+  })
+
+  const refused: Array<[label: string, host: string, trusted: string[]]> = [
+    ['a different host is not admitted', 'harness.lan:3080', ['other.lan']],
+    ['an exact entry does not admit another port', 'harness.lan:3080', ['harness.lan:9999']],
+    ['an empty declaration list admits nothing', 'harness.lan:3080', []],
+  ]
+
+  it.each(refused)('keeps an undeclared remote authority read-only: %s', async (_label, host, trusted) => {
+    ;(globalThis as Win).location = { hostname: host.split(':')[0] ?? '', search: '', host }
+    ;(globalThis as Win).__DSH_TRUSTED_HOSTS__ = trusted
+    expect((await mount()).canWriteSettings).toBe(false)
+  })
+
+  const malformed: Array<[label: string, trusted: unknown]> = [
+    ['a non-array global', 'harness.lan'],
+    ['only unusable entries', [7, null, {}]],
+    ['empty-string entries', ['']],
+  ]
+
+  it.each(malformed)('fails closed on an unusable trusted-host global: %s', async (_label, trusted) => {
+    ;(globalThis as Win).location = { hostname: 'harness.lan', search: '', host: 'harness.lan:3080' }
+    ;(globalThis as Win).__DSH_TRUSTED_HOSTS__ = trusted
+    expect((await mount()).canWriteSettings).toBe(false)
+  })
+
+  it('drops unusable entries individually and keeps the usable ones', async () => {
+    ;(globalThis as Win).location = { hostname: 'harness.lan', search: '', host: 'harness.lan:3080' }
+    ;(globalThis as Win).__DSH_TRUSTED_HOSTS__ = [7, 'harness.lan', '']
+    expect((await mount()).canWriteSettings).toBe(true)
+  })
+
+  it('admits a worker-local transport that owns the Host, with no declarations', async () => {
+    ;(globalThis as Win).location = { hostname: 'preview.example', search: '', host: 'preview.example' }
+    ;(globalThis as Win).__DSH_TRANSPORT__ = { ownsHost: true }
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(true)
+    expect(handle.canWriteSettings).toBe(true)
+  })
+
+  it('keeps a runtime without browser location writable', async () => {
+    delete (globalThis as Win).location
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(true)
+    expect(handle.canWriteSettings).toBe(true)
   })
 
   it('requires one generation source and ignores a stale source disposer', async () => {

@@ -86,7 +86,7 @@ async function bench(
     },
   })
   class RemoteService extends Service {
-    readonly $host = { home: HOME, isLoopback: true }
+    readonly $host = { home: HOME, isLoopback: true, canWriteSettings: true }
 
     constructor(serviceCtx: Context) {
       super(serviceCtx, 'remote')
@@ -120,7 +120,7 @@ describe('apply', () => {
       },
     })
     class RemoteService extends Service {
-      readonly $host = { home: undefined, isLoopback: false }
+      readonly $host = { home: undefined, isLoopback: false, canWriteSettings: false }
 
       constructor(serviceCtx: Context) {
         super(serviceCtx, 'remote')

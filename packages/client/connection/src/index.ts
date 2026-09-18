@@ -79,6 +79,11 @@ export interface ConnectionConfig {
    * non-loopback (`0.0.0.0`) deployment must declare the names it is reached
    * by; the Web runtime derives LAN IP literals from an active all-interface
    * bind. An entry that is not a bare, canonical authority fails plugin load.
+   *
+   * A listed authority is also admitted to the settings document: the browser
+   * half reaches the same verdict for its own page authority, so
+   * `ctx.connection.canWriteSettings` is true there. Without that, a headless
+   * deployment reached only over the network could never edit its own settings.
    */
   trustedHosts?: string[]
   /** Absolute browser-session lifetime in days. Default: 30. */
@@ -120,6 +125,10 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
     webCtx.on('webserver/index-inject', (table) => {
       table.push({ kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: recovery })
+      // The browser half re-judges its own page authority against the same list
+      // this fence enforces, so a declared non-loopback authority is admitted to
+      // the settings document instead of being treated as a read-only stranger.
+      table.push({ kind: 'global', name: '__DSH_TRUSTED_HOSTS__', value: trustedHosts })
     })
     const fetchHandler = connection.createSharedFetchHandler(API_PATH)
     const route: WebRoute = {

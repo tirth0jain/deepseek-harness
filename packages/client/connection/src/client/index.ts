@@ -11,6 +11,7 @@ import {
 import { createFixtureConnectionRpc } from './fixture.ts'
 import { createWebConnectionRpc, type RpcFetch, type RpcStreamOpen } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
+import { isTrustedAuthority } from '../api-request-trust.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 import { resolveConnectionConfig } from '../recovery-config.ts'
 
@@ -109,6 +110,28 @@ export interface ClientTransportHooks {
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
   __DSH_CONNECTION_RECOVERY__?: unknown
+  /**
+   * Non-loopback authorities the Host declares it serves, injected alongside
+   * the recovery config. A global that is not an array declares nothing, which
+   * keeps the page read-only rather than admitting an unjudged authority.
+   */
+  __DSH_TRUSTED_HOSTS__?: unknown
+}
+
+/**
+ * Read the injected trusted-authority list. The global is Host-authored, but it
+ * crosses a wire boundary this half does not own, so entries are judged one at
+ * a time: a non-string or empty entry is dropped instead of throwing during
+ * plugin apply, and a global that is not an array declares nothing. Dropping is
+ * safe because no invalid entry can ever admit an authority — only a usable
+ * string reaches the matcher.
+ * @param global - the page global object to read from.
+ * @returns the usable declared authorities, possibly empty.
+ */
+function readTrustedHosts(global: ClientTransportGlobal): readonly string[] {
+  const value = global.__DSH_TRUSTED_HOSTS__
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
 }
 
 /**
@@ -122,6 +145,18 @@ export interface ConnectionHandle {
    * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
    */
   readonly isLoopback: boolean
+  /**
+   * Whether this page may persist the Host settings document. True under
+   * {@link isLoopback}, and also when the page authority is one the Host
+   * declared in `trustedHosts` — the same list the `/api` fence enforces, so a
+   * headless deployment reached only over the network can still edit its own
+   * settings instead of being locked read-only.
+   *
+   * Deliberately narrower than {@link isLoopback}: affordances that act on the
+   * Host machine itself (opening the settings document in a local editor) stay
+   * loopback-only, because they are meaningless to a remote browser.
+   */
+  readonly canWriteSettings: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
   readonly generation: ConnectionGenerationState
   /** Current recovery lifecycle for connection-specific consumers. */
@@ -182,6 +217,29 @@ function watchBrowserNetwork(controller: ConnectionController): () => void {
 }
 
 /**
+ * Whether the page's own authority is one the Host declared it serves.
+ *
+ * `location.host` is the page's authority — the same string a browser puts in
+ * the request `Host` header, which is exactly what the `/api` fence judges, so
+ * the two halves reach one verdict from one rule.
+ * @param pageLocation - the browser location, or undefined outside a browser.
+ * @param trustedHosts - authorities the Host injected for this deployment.
+ * @returns true when the page authority matches a declared entry.
+ */
+function isTrustedPageAuthority(pageLocation: Location | undefined, trustedHosts: readonly string[]): boolean {
+  if (pageLocation === undefined || trustedHosts.length === 0) return false
+  const authority: unknown = pageLocation.host
+  if (typeof authority !== 'string' || authority.length === 0) return false
+  try {
+    return isTrustedAuthority(new URL(`http://${authority}`), trustedHosts)
+  } catch {
+    // An unparsable authority cannot be matched against a declaration; the
+    // closed reading keeps the page read-only rather than guessing.
+    return false
+  }
+}
+
+/**
  * Client plugin body: pick physical carriers by page mode and provide ctx.connection.
  * @param ctx - client cordis context.
  */
@@ -191,6 +249,7 @@ export function apply(ctx: Context): void {
   const fixtureRpc = fixture ? createFixtureConnectionRpc() : undefined
   const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
   const recovery = resolveConnectionConfig((globalThis as ClientTransportGlobal).__DSH_CONNECTION_RECOVERY__)
+  const trustedHosts = readTrustedHosts(globalThis as ClientTransportGlobal)
   const rpc = fixtureRpc ?? transport?.rpc ?? createWebConnectionRpc(transport?.fetch, transport?.openStream)
   let generationSource: ConnectionGenerationSource | undefined
   let owner: ConnectionOwner | undefined
@@ -229,8 +288,10 @@ export function apply(ctx: Context): void {
     publishGeneration(undefined)
     publishState(undefined)
   }
+  const isLoopback = transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)
   const handle: ConnectionHandle = {
-    isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isLoopback,
+    canWriteSettings: isLoopback || isTrustedPageAuthority(pageLocation, trustedHosts),
     generation: {
       getSnapshot: () => generation,
       subscribe: (listener) => {
