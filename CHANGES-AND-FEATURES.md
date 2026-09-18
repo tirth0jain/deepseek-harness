@@ -33,6 +33,12 @@ node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open
 
 **Editor access.** A code-server / VS Code route was scripted separately during setup: it installs `@deepseek-ai/dsh` and `@vscode/vsce` globally, patches the published bundle for LAN binding, and builds a VSIX. That script is kept at `/root/projects/dsh-vscode.md` and is not part of either repository.
 
+**Settings write access over the network** (`8ab51e8613`). Upstream gated the settings document on `ctx.remote.$host.isLoopback`, so any page whose authority was not `localhost` / `127.x.x.x` ran its settings scope in `'memory'` mode: no describe read, no write, and every settings surface greyed out as read-only. A headless host reached only over the LAN could therefore not edit its own settings at all — the Command Code plugin's "Settings are read-only." banner and its disabled *Add account* button were this, not a plugin fault. The `/api` fence never had that limitation: it already admits a loopback, sampled-LAN, or declared `--trusted-host` authority, so the two halves simply disagreed about which pages are "ours".
+
+The browser half now reaches the same verdict from the same rule. The Host injects its `trustedHosts` list as the `__DSH_TRUSTED_HOSTS__` page global beside the recovery config — the index-inject table carries no request, so the deployment-wide list, not a per-request verdict, is what can ride the page — and `ctx.connection.canWriteSettings` is true for a loopback page, a page whose authority matches a declared entry (port-less entries match any port, exactly as the fence matches them), or a worker-local transport that owns the Host. `ui-settings` resolves its persistence from that fact instead of `isLoopback`, and it travels to the browser as `$host.canWriteSettings`. `isTrustedAuthority` is now exported from `api-request-trust.ts` so one matcher serves both the fence and the page's self-judgement.
+
+Two deliberate narrowings. `isLoopback` keeps its meaning, because `ui-settings-general`'s "open the settings document in a native editor" affordance acts on the *Host* machine and is meaningless to a remote browser. And the fence itself is unchanged: a page still needs a trusted authority **and** a valid session cookie before any `/api` call lands, so this widens which browsers may write settings, not who may reach the server. A global that is not an array declares nothing, and a non-string or empty entry is dropped on its own, so no invalid value can ever admit an authority. For a deployment reached through a name the LAN sampler does not derive — a public domain or reverse proxy — add it with `dsh web --trusted-host <authority>`, which is required for the fence anyway.
+
 ## Web search providers
 
 **Bright Data Web Unlocker** (`9712944bae`, `bbec969caa`, `71a4364138`) adds a fourth `ctx.web` search backend in `packages/web/web-search-brightdata`, alongside the shipped `exa`, `perplexity` and `deepseek` ones. It calls no vendor search endpoint: it asks a Web Unlocker zone for the DuckDuckGo HTML result page (`format: 'raw'`) and parses the organic results locally, so a search returns citeable `url`/`title`/`snippet` sources and never an invented answer or a publication date. It is selected like any other backend — `searchProvider: brightdata` — and the token resolves through `ctx.credentials` (whose local provider also reads the launch environment), or from the launch environment alone when that seam is absent.
@@ -184,7 +190,8 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `35e16d23a1` | feat(usage): price each attempt at its own route and rate band |
 | `6abf54ced1` | docs: record OpenCode V4.1 Flash ordering and the Zen availability limit |
 | `24f40ec67d` | Merge remote-tracking branch `upstream/master` (0.1.5-rc.2, 134 commits) |
-| (this change) | docs: complete the Bright Data package and re-point OpenCode's V4.1 Flash id |
+| `bf04e71d95` | docs: complete the Bright Data package and re-point OpenCode's V4.1 Flash id |
+| (this change) | feat(settings): let a declared trusted authority write settings |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
