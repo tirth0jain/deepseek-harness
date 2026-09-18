@@ -1,7 +1,8 @@
 // Icon-row Turn-stat actions: a database pill labelled with the turn total
 // click-opens the per-Turn usage dialog, and a clock pill labelled with the
-// turn wall time click-opens the Turn-time dialog. Both sit right of the
-// branch action in the tail's IconActions row, ahead of the plain clock text.
+// turn wall time and its decode throughput click-opens the Turn-time dialog.
+// Both sit right of the branch action in the tail's IconActions row, ahead of
+// the plain clock text.
 
 import { createPortal } from 'react-dom'
 import { IconClockOutline16, IconDatabaseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -175,7 +176,10 @@ export function TurnUsagePanel({ usage, cost, t }: TurnUsagePanelProps) {
 }
 
 /**
- * Turn-time IconActions pill with a click-open Turn-time details dialog.
+ * Turn-time IconActions pill with a click-open Turn-time details dialog. The
+ * pill carries the Turn's own decode throughput beside its wall time, so the
+ * headline number is readable without opening the dialog; a Turn with no
+ * sampled decode keeps the plain duration.
  * @param props - Turn timing facts and locale seat.
  * @returns The clock-and-duration trigger and, while open, its portaled dialog anchored above the trigger.
  */
@@ -191,7 +195,15 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
         onClick={() => { setOpen(!open) }}
       >
         <IconClockOutline16 />
-        <span className={css.label}>{t('message.ranFor', { duration: formatRunDuration(runMs, t) })}</span>
+        <span className={css.label}>
+          {t('message.ranFor', { duration: formatRunDuration(runMs, t) })}
+          {tokensPerSecond !== undefined && (
+            <>
+              <span className={css.sep} aria-hidden>·</span>
+              {t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}
+            </>
+          )}
+        </span>
       </button>
       {open && createPortal(
         <div

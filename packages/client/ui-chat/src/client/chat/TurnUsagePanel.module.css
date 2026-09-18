@@ -42,6 +42,13 @@
   text-overflow: ellipsis;
 }
 
+/* Same middot as the composer stats row: the time pill reads
+   `Ran for 2m 18s · 38 tok/s` as one phrase, not two readings. */
+.sep {
+  color: var(--dsw-alias-separator-primary);
+  margin: 0 6px;
+}
+
 .trigger svg {
   width: calc(15px + var(--dsh-content-font-delta, 0px));
   height: calc(15px + var(--dsh-content-font-delta, 0px));

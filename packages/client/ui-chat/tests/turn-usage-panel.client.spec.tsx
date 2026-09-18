@@ -137,12 +137,14 @@ describe('TurnUsagePanel', () => {
 })
 
 describe('TurnTimePanel', () => {
-  it('shows a clock-and-duration pill and opens the time dialog on click', () => {
+  it('shows a clock-and-duration pill with the turn speed and opens the time dialog on click', () => {
     const view = render(
       <TurnTimePanel runMs={19_000} tokensPerSecond={20} ttftMs={1_200} t={t} />,
     )
     const trigger = view.getByRole('button')
-    expect(trigger.textContent).toBe('Ran for 19s')
+    // The pill carries this Turn's own decode throughput beside its wall time,
+    // so the figure is readable without opening the dialog.
+    expect(trigger.textContent).toBe('Ran for 19s·20 tok/s')
     expect(trigger.querySelector('svg')).not.toBeNull()
     expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
     expect(view.queryByRole('dialog')).toBeNull()
@@ -163,6 +165,8 @@ describe('TurnTimePanel', () => {
 
   it('omits unrecorded speed and TTFT rows', () => {
     const view = render(<TurnTimePanel runMs={3_000} t={t} />)
+    // No sampled decode: the pill stays a plain duration with no dangling separator.
+    expect(view.getByRole('button').textContent).toBe('Ran for 3s')
     fireEvent.click(view.getByRole('button'))
     const dialog = view.getByRole('dialog')
     expect(dialog.textContent).toContain('Total run time3s')

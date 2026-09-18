@@ -1881,7 +1881,7 @@ describe('ChatView', () => {
       .toContain('用时 1小时05分03秒')
   })
 
-  it('the settled footer exposes ttft, decode throughput, and usage as the details trigger', () => {
+  it('the settled footer exposes ttft, LLM throughput, and usage as the details trigger', () => {
     const first: AssistantMessageNode = {
       kind: 'assistant', seq: 2, time: 2_000, turn: 1, step: 1, blocks: [{ kind: 'text', text: 'mid' }],
       timing: { stepStartTime: 1_000, firstTokenTime: 2_200, completedTime: 5_200 },
@@ -1915,16 +1915,17 @@ describe('ChatView', () => {
     expect(dialog.textContent).toContain('缓存命中49.4%')
     expect(dialog.textContent).toContain('未缓存输入5,060 tok')
     fireEvent.keyDown(document, { key: 'Escape' })
-    // The time pill carries the run time; first-step ttft (1.2s) and 100
-    // tokens over 5s of decode move into its dialog.
+    // The time pill carries the run time and this Turn's own LLM throughput
+    // (100 tokens over the two steps' 6.4s of LLM span); first-step ttft
+    // (1.2s) stays dialog-only.
     const timeTrigger = view.getByRole('button', { name: /用时 19秒/ })
-    expect(timeTrigger.textContent).toBe('用时 19秒')
-    expect(view.queryByText(/速度 20 tok\/s|首 token/)).toBeNull()
+    expect(timeTrigger.textContent).toBe('用时 19秒·16 tok/s')
+    expect(view.queryByText(/首 token/)).toBeNull()
     fireEvent.click(timeTrigger)
     const timeDialog = view.getByRole('dialog')
     expect(timeDialog.getAttribute('aria-label')).toBe('本轮用时和速度')
     expect(timeDialog.textContent).toContain('本轮总用时19秒')
-    expect(timeDialog.textContent).toContain('输出速度（TPS）20 tok/s')
+    expect(timeDialog.textContent).toContain('输出速度（TPS）16 tok/s')
     expect(timeDialog.textContent).toContain('首 token 用时（TTFT）1.2秒')
   })
 

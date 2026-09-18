@@ -141,6 +141,16 @@ A paged window holds only part of a long session, and a Turn the window enters m
 
 The dock sits outside the Chat view, so its registration injects `loadThrough` from the Session binding rather than inheriting the view's prop. The rail's hover card went back to a read-only tooltip.
 
+## Per-turn throughput
+
+The Chat turn footer already carried a clock pill reading `Ran for 2m 18s`, and the Turn-time dialog behind it already had a `Tokens per second (TPS)` row. The figure was invisible unless a reader thought to click the clock, so the pill now carries it directly: `Ran for 2m 18s · 63 tok/s`, for that Turn only. It reuses the composer stats row's own `·` separator rather than inventing a second convention, and a Turn with no sampled generation keeps the plain duration with no dangling separator.
+
+**Why the basis changed.** The dialog's rate divided output tokens by the *decode window* — first token to final message. That window needs `firstTokenTime`, which the client can only observe from live stream deltas: the session format persists no timing, so the value is gone the moment the page reloads. A rate that vanishes on refresh is not a per-Turn reading, and the first live check proved it — a restored Turn showed neither a speed row nor a TTFT row.
+
+The fold now divides the Turn's summed output tokens by the summed **LLM span** of its steps (`completedTime − stepStartTime`). Both boundaries are persisted events, so the figure survives a reload; the span also excludes the tool execution between steps, which is not generation time. The span does include each step's time-to-first-token, so a Turn with a long think reports a slightly lower rate than the decode-only figure did — a few percent on a long generation, and the honest number for "tokens per second of LLM time". `decodeMs` stays in `StepReading` because the composer stats row still reports its window on the decode basis.
+
+A step that generated no tokens (a pure tool call) contributes no rate at all: a `0 tok/s` reading would be noise, not information.
+
 ## Upstream sync
 
 The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. Two syncs have happened, both onto an identical pair of checkouts:
@@ -219,6 +229,7 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 - **`verify-scoped-events` needs more heap than Node's default.** The generator walks the whole repository and now exceeds the 2 GB default on this 8 GB host: run `NODE_OPTIONS=--max-old-space-size=4096 pnpm run verify-scoped-events`. `gen-scoped-events` has the same requirement, and neither is baked into the npm script because an inline `NODE_OPTIONS=` prefix is not portable to the Windows targets this repository still builds for.
 - **`verify-repository-references` excludes this file.** `CHANGES-AND-FEATURES.md` does not exist upstream and maps each fork feature to the commit that introduced it, so the commit identifiers that gate rejects are this document's primary key. The file carries no organization-URL references, so the exclusion waives only the commit rule.
 - **`verify-doc-site-fragments` needs a built site.** It reads `website/.dist` and fails until `pnpm run docs:build` has run at least once; `docs:build` ends by running the gate itself.
+- **TTFT is still live-only.** The per-Turn rate now survives a reload because its boundaries are persisted events, but `Time to first token` cannot: it needs `firstTokenTime`, which only live stream deltas supply, and the session format persists no timing. A Turn the page did not stream itself therefore shows a speed row and no TTFT row. Fixing that means adding a timing record to the session format, which is a versioned-format change and was not worth taking for a display figure.
 
 ## Commit index
 

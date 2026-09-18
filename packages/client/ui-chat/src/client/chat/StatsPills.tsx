@@ -74,10 +74,8 @@ export function deriveStats(nodes: ChatSnapshot['legacy']['nodes']): WindowStats
     if (node.kind !== 'assistant') continue
     turns.add(node.turn)
     steps += 1
-    if (node.timing !== undefined && node.timing.stepStartTime !== null) {
-      llmMs += Math.max(0, node.timing.completedTime - node.timing.stepStartTime)
-    }
     const reading = assistantStepReading(node)
+    if (reading.llmMs !== null) llmMs += reading.llmMs
     if (reading.ttftMs !== null) {
       ttftMs += reading.ttftMs
       ttftSteps += 1

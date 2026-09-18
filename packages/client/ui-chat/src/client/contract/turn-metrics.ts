@@ -18,6 +18,8 @@ export interface StepReading {
   ttftMs: number | null
   /** First token delta → final message, in ms. */
   decodeMs: number | null
+  /** step/start → final message, in ms: the step's whole LLM span. */
+  llmMs: number | null
   /** Provider-reported completion tokens. */
   outputTokens: number | null
 }
@@ -35,7 +37,8 @@ function usageOutputTokens(usage: unknown): number | null {
 }
 
 /**
- * Read one assistant node's TTFT, decode wall time, and output tokens.
+ * Read one assistant node's TTFT, decode wall time, whole LLM span, and output
+ * tokens.
  * @param node - A settled assistant node.
  * @returns Per-part readings with `null` for unrecorded values.
  */
@@ -47,13 +50,16 @@ export function assistantStepReading(node: AssistantNode): StepReading {
   const decodeMs = timing !== undefined && timing.firstTokenTime !== null
     ? Math.max(0, timing.completedTime - timing.firstTokenTime)
     : null
-  return { ttftMs, decodeMs, outputTokens: usageOutputTokens(node.usage) }
+  const llmMs = timing !== undefined && timing.stepStartTime !== null
+    ? Math.max(0, timing.completedTime - timing.stepStartTime)
+    : null
+  return { ttftMs, decodeMs, llmMs, outputTokens: usageOutputTokens(node.usage) }
 }
 
 interface TurnFold {
   firstStep: number
   firstStepTtftMs: number | null
-  decodeMs: number
+  llmMs: number
   outputTokens: number
   sampled: boolean
 }
@@ -64,8 +70,14 @@ interface TurnFold {
  * TTFT is the turn's lowest-step request-dispatch-to-first-token reading, so
  * it is only meaningful when the turn's start is inside
  * the loaded window (the caller gates on `turnTimings`, which shares that
- * window). Throughput divides summed output tokens by summed decode wall time,
- * counting only steps that carry both.
+ * window). Throughput divides summed output tokens by the summed LLM span of
+ * the steps that carry both.
+ *
+ * The span is used rather than the narrower first-token-to-final window
+ * because only the span survives a reload: `firstTokenTime` is observed from
+ * live stream deltas, and the session format persists no timing, so a
+ * decode-window rate would disappear for every restored Turn. The span also
+ * excludes the tool execution between steps, which is not generation time.
  * @param nodes - Snapshot nodes of the loaded window.
  * @returns Turn number → available metrics; turns with none are absent.
  */
@@ -76,14 +88,14 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
     const reading = assistantStepReading(node)
     let fold = folds.get(node.turn)
     if (fold === undefined) {
-      fold = { firstStep: node.step, firstStepTtftMs: reading.ttftMs, decodeMs: 0, outputTokens: 0, sampled: false }
+      fold = { firstStep: node.step, firstStepTtftMs: reading.ttftMs, llmMs: 0, outputTokens: 0, sampled: false }
       folds.set(node.turn, fold)
     } else if (node.step < fold.firstStep) {
       fold.firstStep = node.step
       fold.firstStepTtftMs = reading.ttftMs
     }
-    if (reading.decodeMs !== null && reading.outputTokens !== null) {
-      fold.decodeMs += reading.decodeMs
+    if (reading.llmMs !== null && reading.outputTokens !== null) {
+      fold.llmMs += reading.llmMs
       fold.outputTokens += reading.outputTokens
       fold.sampled = true
     }
@@ -92,7 +104,10 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
   for (const [turn, fold] of folds) {
     const entry: TurnMetrics = {}
     if (fold.firstStepTtftMs !== null) entry.ttftMs = fold.firstStepTtftMs
-    if (fold.sampled && fold.decodeMs > 0) entry.tokensPerSecond = fold.outputTokens / (fold.decodeMs / 1000)
+    // A step that generated nothing (a pure tool call) has no rate to report.
+    if (fold.sampled && fold.llmMs > 0 && fold.outputTokens > 0) {
+      entry.tokensPerSecond = fold.outputTokens / (fold.llmMs / 1000)
+    }
     if (entry.ttftMs !== undefined || entry.tokensPerSecond !== undefined) metrics.set(turn, entry)
   }
   return metrics

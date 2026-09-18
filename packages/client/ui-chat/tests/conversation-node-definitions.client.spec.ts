@@ -942,7 +942,7 @@ describe('built-in conversation node Definitions', () => {
     })
   })
 
-  it('omits first-token metrics after live settlement and after reopening the same history', () => {
+  it('keeps LLM throughput but omits ttft after live settlement and after reopening the same history', () => {
     const attemptId = LlmAttemptId('settled-chat-timing')
     const starts = [
       at(1, 'turn/start', { turn: 1 }, { time: 1_000 }),
@@ -987,8 +987,11 @@ describe('built-in conversation node Definitions', () => {
       })
       const tail = node(view, 'turn-tail')?.data as TurnTailChatData
       expect(tail.turn).toBe(1)
+      // No live delta was observed, so the first-token reading stays absent…
       expect(tail.ttftMs).toBeUndefined()
-      expect(tail.tokensPerSecond).toBeUndefined()
+      // …but the recorded span (10 tokens over 40ms) still yields a rate, which
+      // is what keeps a reopened Turn's throughput on screen.
+      expect(tail.tokensPerSecond).toBe(250)
     }
   })
 
