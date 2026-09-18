@@ -145,7 +145,7 @@ The dock sits outside the Chat view, so its registration injects `loadThrough` f
 
 The Chat turn footer already carried a clock pill reading `Ran for 2m 18s`, and the Turn-time dialog behind it already had a `Tokens per second (TPS)` row. The figure was invisible unless a reader thought to click the clock, so the pill now carries it directly: `Ran for 2m 18s · 63 tok/s`, for that Turn only. It reuses the composer stats row's own `·` separator rather than inventing a second convention, and a Turn with no sampled generation keeps the plain duration with no dangling separator.
 
-**Why the basis changed.** The dialog's rate divided output tokens by the *decode window* — first token to final message. That window needs `firstTokenTime`, which the client can only observe from live stream deltas: the session format persists no timing, so the value is gone the moment the page reloads. A rate that vanishes on refresh is not a per-Turn reading, and the first live check proved it — a restored Turn showed neither a speed row nor a TTFT row.
+**Why the basis changed** (`83c4ef781f`). The dialog's rate divided output tokens by the *decode window* — first token to final message. That window needs `firstTokenTime`, which the client can only observe from live stream deltas: the session format persists no timing, so the value is gone the moment the page reloads. A rate that vanishes on refresh is not a per-Turn reading, and the first live check proved it — a restored Turn showed neither a speed row nor a TTFT row.
 
 The fold now divides the Turn's summed output tokens by the summed **LLM span** of its steps (`completedTime − stepStartTime`). Both boundaries are persisted events, so the figure survives a reload; the span also excludes the tool execution between steps, which is not generation time. The span does include each step's time-to-first-token, so a Turn with a long think reports a slightly lower rate than the decode-only figure did — a few percent on a long generation, and the honest number for "tokens per second of LLM time". `decodeMs` stays in `StepReading` because the composer stats row still reports its window on the decode basis.
 
@@ -254,6 +254,7 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `b153587a45` | fix: repair what the 0.1.6-alpha.2 merge dropped or left stale |
 | `17c26f5958` | docs: describe the assistant metadata rename without the blocked term |
 | `34cd59ef4b` | feat(web): declare trusted hosts and allow disabling browser auth |
+| `83c4ef781f` | feat(ui-chat): show each Turn's throughput beside its run time |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
