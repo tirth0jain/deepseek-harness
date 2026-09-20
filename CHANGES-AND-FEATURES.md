@@ -81,6 +81,11 @@ Neither name may use a `DSH_` prefix: the harness's own boot `.env` loader treat
 
 One compatibility detail. The VS Code sidebar discovers its target by matching `?token=` in `~/.dsh/current-token.txt`, and reports no target at all when the file holds none. With the handshake off the harness prints a clean URL, so the launcher records `?token=disabled` — a value the harness ignores, and one that can never collide with a real token, which is random per process.
 
+**Running the mirror as a second instance.** `/usr/local/bin/dsh-old` starts the pre-sync checkout at `/root/projects/deepseek-harness` beside the primary one, sharing `DSH_HOME` so both see the same sessions. Two things make that work rather than merely start:
+
+- **The two checkouts must be on the same commit.** Every boot re-points the home's profile module-fallback symlinks at its own install, so a mirror that has drifted silently changes what the *other* instance resolves. Sync with `git fetch new && git merge --ff-only new/master`; the mirror carries the primary checkout as its `new` remote.
+- **The launcher now passes the fence flags**, which the original bare `bin.js "$@"` invocation never did: the page loaded, but an undeclared authority answered 403 on every `/api` request, which reads as a broken GUI rather than as a fence. It reads the same `WEBGUI_*` keys, defaults to port 3082, and keeps its heap cap lower (`WEBGUI_OLD_MAX_SPACE`, default 2048 MB) because two 4 GB heaps do not fit beside a web IDE on one host. Running it when the port is already served now prints the URL and stops, instead of dying inside plugin activation behind a wall of dependency diagnostics. It deliberately does **not** write `current-token.txt`: that file is the sidebar extension's target for the primary harness.
+
 ## Web search providers
 
 **Bright Data Web Unlocker** (`9712944bae`, `bbec969caa`, `71a4364138`) adds a fourth `ctx.web` search backend in `packages/web/web-search-brightdata`, alongside the shipped `exa`, `perplexity` and `deepseek` ones. It calls no vendor search endpoint: it asks a Web Unlocker zone for the DuckDuckGo HTML result page (`format: 'raw'`) and parses the organic results locally, so a search returns citeable `url`/`title`/`snippet` sources and never an invented answer or a publication date. It is selected like any other backend — `searchProvider: brightdata` — and the token resolves through `ctx.credentials` (whose local provider also reads the launch environment), or from the launch environment alone when that seam is absent.
@@ -127,23 +132,27 @@ The cache-hit rate earns its place in the row: on a long agent conversation most
 
 One wrinkle in those cards worth knowing: CommandCode's page for DeepSeek V4 Flash Vision (exp) prints the peak cache-read cell as `$0.01` when every other cell on the page is exactly double. The band is stated as a factor of 2, so that row follows the arithmetic (`$0.014`) rather than the rounded cell. Context-tiered cards (Grok 4.6, Qwen3.7/3.6 Plus, GPT 5.6 Luna, Grok 4.6) still record only their base tier, since tier is a property of the request's size rather than of the clock — so those estimates remain a floor.
 
-**A route that publishes no list price can be priced by configuration** (`7e964834b9`). The chain reads a rate off the adapter, so a third-party adapter that keeps its tariff to itself prices nothing downstream — the amounts simply never render, with no way for a reader to tell "free" from "never said". `llm.cost` on the harness's own `llm` service states a list price for any route, keyed by provider route and then by exact model id, in the same shape the pi-ai profile already used:
+**A route that publishes no list price can be priced by configuration** (`7e964834b9`). The chain reads a rate off the adapter, so a third-party adapter that keeps its tariff to itself prices nothing downstream — the amounts simply never render, with no way for a reader to tell "free" from "never said". `llm.cost` on the harness's own `llm` service states a list price for any route, keyed by provider route and then by exact model id, in the same shape the pi-ai profile already used. It belongs in the profile's patch layer, not in `settings.yaml`:
 
 ```yaml
-llm:
-  cost:
-    commandcode:
-      deepseek/deepseek-v4.1-flash:
-        input: 0.15
-        output: 0.6
-        cacheRead: 0.003
-        peak:
-          multiplier: 2
-          windows:
-            - days: [mon, tue, wed, thu, fri]
-              start: '01:00'
-              end: '04:00'
+- id: llm
+  name: '@deepseek-ai/dsh-llm'
+  config:
+    cost:
+      commandcode:
+        deepseek/deepseek-v4.1-flash:
+          input: 0.15
+          output: 0.6
+          cacheRead: 0.003
+          peak:
+            multiplier: 2
+            windows:
+              - days: [mon, tue, wed, thu, fri]
+                start: '01:00'
+                end: '04:00'
 ```
+
+**Where the rates go is not obvious, and the wrong place fails silently.** `settings.yaml` reads like a per-plugin config file — its top-level keys are plugin ids, and its `llm-pi-ai:` and `llm-commandcode:` sections genuinely do reach those plugins — but it is not one. The settings service is a *namespace* registry: a plugin sees a section only because it registered a schema for that namespace, which `llm-pi-ai` does and the core `llm` service does not. A `llm:` key in `settings.yaml` therefore loads without complaint and changes nothing at all. Measured both ways on this deployment: the same table placed in `settings.yaml` left the catalog at **0/46** priced commandcode models, and moved into the profile's patch layer it reports **41/46**. The five that stay unpriced are models the plugin lists that the table has no rate for — its free rows — which is the correct outcome, because an absent rate is not a zero one.
 
 The model id keeps its own slash because the provider route is the outer key, so nothing has to split a compound string back apart. A stated rate wins over the adapter's own: the table exists for routes whose adapter reports none, and stating one is also how a wrong rate gets corrected. A malformed entry is refused with `INVALID_MODEL_COST` naming `llm.cost`, at the same point a malformed adapter report is refused, and a rate missing its `output` price is refused rather than billing that bucket at nothing. An unpriced route stays unpriced rather than becoming free.
 
