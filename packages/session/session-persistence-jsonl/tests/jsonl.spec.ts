@@ -1478,6 +1478,67 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     expect(readTally.bySuffix.get(rawLogPath(root, '/work', third.id))).toBe(1)
   })
 
+  it('refuses a handoff past its byte budget even with the entry window empty', async () => {
+    const budgetRoot = await freshRoot()
+    const budgetCtx = new Context()
+    // One decoded log is already past the whole budget, so the byte bound — not
+    // the two-entry window, which has room — is what refuses to retain it.
+    await budgetCtx.plugin(JsonlSessionPersistence, {
+      root: budgetRoot,
+      compression: 'none',
+      coldLogMemoMaxBytes: 1,
+    })
+    const m = meta('memo-byte-refuse', '/work')
+    await writeLog(budgetCtx.sessionPersistence, m, oneTurnLog())
+    readTally.enabled = true
+
+    await readAll(budgetCtx.sessionPersistence, m.id)
+    const afterFirstRead = readTally.bySuffix.get(rawLogPath(budgetRoot, '/work', m.id)) ?? 0
+    await readAll(budgetCtx.sessionPersistence, m.id)
+    // Nothing was retained, so the second read goes back to the artifact
+    // instead of reusing a handoff: the graph is not held to save the decode.
+    expect(afterFirstRead).toBeGreaterThan(0)
+    expect(readTally.bySuffix.get(rawLogPath(budgetRoot, '/work', m.id)))
+      .toBeGreaterThan(afterFirstRead)
+
+    await budgetCtx.fiber.dispose()
+  })
+
+  it('evicts the oldest handoff once the byte budget is spent, before two entries are held', async () => {
+    const budgetRoot = await freshRoot()
+    const first = meta('memo-byte-a', '/work')
+    const second = meta('memo-byte-b', '/work')
+    // Measure one log's decoded size through a permissive instance, then budget
+    // for exactly one of them: two logs cannot both be held although the entry
+    // window allows two.
+    const probe = new Context()
+    await probe.plugin(JsonlSessionPersistence, { root: budgetRoot, compression: 'none' })
+    for (const m of [first, second]) await writeLog(probe.sessionPersistence, m, oneTurnLog())
+    await readAll(probe.sessionPersistence, first.id)
+    const decodedBytes = (probe.sessionPersistence as unknown as { memoBytes: Map<SessionId, number> })
+      .memoBytes.get(first.id)
+    if (decodedBytes === undefined) throw new Error('the handoff memo recorded no decoded size to budget with')
+    expect(decodedBytes).toBeGreaterThan(0)
+    await probe.fiber.dispose()
+
+    const budgetCtx = new Context()
+    await budgetCtx.plugin(JsonlSessionPersistence, {
+      root: budgetRoot,
+      compression: 'none',
+      coldLogMemoMaxBytes: decodedBytes,
+    })
+    readTally.enabled = true
+
+    await readAll(budgetCtx.sessionPersistence, first.id)
+    await readAll(budgetCtx.sessionPersistence, second.id) // spends the budget, evicts the first
+    await readAll(budgetCtx.sessionPersistence, second.id) // still memoized
+    await readAll(budgetCtx.sessionPersistence, first.id) // re-parses after eviction
+    expect(readTally.bySuffix.get(rawLogPath(budgetRoot, '/work', first.id))).toBe(2)
+    expect(readTally.bySuffix.get(rawLogPath(budgetRoot, '/work', second.id))).toBe(1)
+
+    await budgetCtx.fiber.dispose()
+  })
+
   it('a handle read retries once when the file revision changes during the read', async () => {
     const m = meta('read-revision-race', '/work')
     await writeLog(ctx.sessionPersistence, m, oneTurnLog())

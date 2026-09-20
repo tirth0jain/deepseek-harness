@@ -14599,7 +14599,7 @@
         "packages/llm/llm/src/types.ts#StreamChunk"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:487"
+        "packages/llm/llm/src/types.ts:504"
       ]
     },
     {
@@ -14859,7 +14859,7 @@
         "packages/llm/llm/src/types.ts#ReplayEnvelope"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:465"
+        "packages/llm/llm/src/types.ts:482"
       ]
     },
     {
@@ -23601,7 +23601,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[2]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:490"
+        "packages/llm/llm/src/types.ts:507"
       ]
     },
     {
@@ -36826,7 +36826,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[0]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:488"
+        "packages/llm/llm/src/types.ts:505"
       ]
     },
     {
@@ -40722,7 +40722,7 @@
         "packages/llm/llm/src/types.ts#ToolSchema"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:508"
+        "packages/llm/llm/src/types.ts:525"
       ]
     },
     {
@@ -42299,7 +42299,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[3]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:491"
+        "packages/llm/llm/src/types.ts:508"
       ]
     },
     {
@@ -43988,7 +43988,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[4]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:492"
+        "packages/llm/llm/src/types.ts:509"
       ]
     },
     {
@@ -44363,7 +44363,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[1]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:489"
+        "packages/llm/llm/src/types.ts:506"
       ]
     },
     {
@@ -46741,7 +46741,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[6]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:494"
+        "packages/llm/llm/src/types.ts:511"
       ]
     },
     {
@@ -59874,7 +59874,7 @@
         "event:assistant/attempt.data.stream[0][3].chunk[5]"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:493"
+        "packages/llm/llm/src/types.ts:510"
       ]
     },
     {
@@ -59955,7 +59955,7 @@
         "packages/llm/llm/src/types.ts#SystemPromptUpdate"
       ],
       "sources": [
-        "packages/llm/llm/src/types.ts:442"
+        "packages/llm/llm/src/types.ts:459"
       ]
     },
     {

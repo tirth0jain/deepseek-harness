@@ -127,6 +127,30 @@ The cache-hit rate earns its place in the row: on a long agent conversation most
 
 One wrinkle in those cards worth knowing: CommandCode's page for DeepSeek V4 Flash Vision (exp) prints the peak cache-read cell as `$0.01` when every other cell on the page is exactly double. The band is stated as a factor of 2, so that row follows the arithmetic (`$0.014`) rather than the rounded cell. Context-tiered cards (Grok 4.6, Qwen3.7/3.6 Plus, GPT 5.6 Luna, Grok 4.6) still record only their base tier, since tier is a property of the request's size rather than of the clock — so those estimates remain a floor.
 
+**A route that publishes no list price can be priced by configuration.** The chain reads a rate off the adapter, so a third-party adapter that keeps its tariff to itself prices nothing downstream — the amounts simply never render, with no way for a reader to tell "free" from "never said". `llm.cost` on the harness's own `llm` service states a list price for any route, keyed by provider route and then by exact model id, in the same shape the pi-ai profile already used:
+
+```yaml
+llm:
+  cost:
+    commandcode:
+      deepseek/deepseek-v4.1-flash:
+        input: 0.15
+        output: 0.6
+        cacheRead: 0.003
+        peak:
+          multiplier: 2
+          windows:
+            - days: [mon, tue, wed, thu, fri]
+              start: '01:00'
+              end: '04:00'
+```
+
+The model id keeps its own slash because the provider route is the outer key, so nothing has to split a compound string back apart. A stated rate wins over the adapter's own: the table exists for routes whose adapter reports none, and stating one is also how a wrong rate gets corrected. A malformed entry is refused with `INVALID_MODEL_COST` naming `llm.cost`, at the same point a malformed adapter report is refused, and a rate missing its `output` price is refused rather than billing that bucket at nothing. An unpriced route stays unpriced rather than becoming free.
+
+This is what priced this deployment's default route. On 2026-09-18 the `commandcode` route moved from `llm-pi-ai` — which carried its rate blocks, peak windows included, in `settings.yaml` — to `@mars-sea/dsh-commandcode-provider`, whose `resolveModel()` never returns `LlmModelCost`; the plugin's own price table feeds only its composer readout. The live catalog after the move had `commandcode` at 46 models with **0** priced, `deepseek-official` 2 with 0, and `opencode-go` 37 with 29.
+
+**The amount is on the pill, not only behind a click.** The per-Turn estimate previously existed only inside the click-opened Turn-usage dialog, so a reader scanning a transcript saw tokens and never a price. The clock pill now carries it after the run time and the throughput — `Ran for 2m 18s·63 tok/s·$0.012345` — reusing the same separator the throughput figure uses, and the same amount repeats as an `Estimated cost (list price)` row in that pill's own dialog, where the `(peak)` / `(off-peak)` band note has room to sit. A Turn no rate could price stays a plain duration with no dangling separator.
+
 ## Turn loading control
 
 A paged window holds only part of a long session, and a Turn the window enters midway reports no token aggregate — so its cost cannot be shown until the Turn is whole. Two changes address that.
@@ -218,6 +242,14 @@ Two conventions that bite: client-side test files under `packages/client` must u
 
 Live confirmation used a real 97-Turn session: the control rendered `Load turn 100` beside `965M tok · Cache hit 99%`, and the target seq matched the session log (`turn/start` for turn 100 at seq 25703, window head at 26180 — genuinely partial).
 
+## Session memory
+
+**The measured problem.** A long conversation is held in memory in full, and one Session dominates. The largest Session in this deployment — `/root/projects`, 139,208 records — is 125 MB of Zstandard frames that decode to **571 MB** of JSONL, and the parsed graph it becomes measures **1.32 GB of heap / 1.93 GB of RSS**. Two coexisting copies (the cold-read memo beside the observation cache, or a memo miss followed by a resume) measure 2.64 GB / 3.26 GB, and a third whole-log copy peaks at 3.98 GB heap / 4.60 GB RSS — which is the 4.78 GB peak observed on the live process, sitting exactly at its `--max-old-space-size=4096` ceiling. Retention is per event and it stays: opening or resuming a Session keeps its whole log for the life of the process, and there is no close, detach or release path. Half those bytes are redundant — 301 MB of the 571 MB is `assistant/message.data.stream` token-chunk arrays duplicated against `data.message` inside the same event.
+
+**The handoff memo is bounded by bytes, not by entries.** `coldLogMemo` was capped at two entries, which bounds nothing when one entry can be a gigabyte: two Sessions of the size above is 2.6 GB of heap, and the two-entry window is exactly what made the second copy resident. The budget is now decoded JSONL — a figure the decoder already computes as it scans, so nothing is estimated — with `coldLogMemoMaxBytes` (default 64 MiB) as the operator's knob. A log past the whole budget is not memoized at all: the handoff pays a second decode instead of holding the graph, which is the trade the bound exists to make. Migration results are decoded from a source that never reports a decoded size, so they are published and not retained — an entry the budget cannot measure is an entry it cannot bound.
+
+**What this does not fix.** The live `Session.log` is still unbounded for the life of the process, because nothing releases an opened Session: the agent is created inside a service-owned effect and `AgentHandle.dispose` has no production caller. That is the largest single contributor — the 1.32 GB heap figure above is that log, not the memo — and it is the next thing to take. The container is also unsupervised: there is no unit for the harness, `memory.max` is unlimited, and the process reports no heap or RSS figure anywhere, so this was invisible until it fell over.
+
 ## Known limitations
 
 - **A headless client can lose its remote channel.** Verification browsers occasionally showed `Reconnect now` with the websocket failing (`HTTP Authentication failed`), which makes *every* paging action — including the pre-existing "Load earlier" — a no-op. Confirm the channel is alive before concluding that a load control is broken.
@@ -230,6 +262,7 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 - **`verify-repository-references` excludes this file.** `CHANGES-AND-FEATURES.md` does not exist upstream and maps each fork feature to the commit that introduced it, so the commit identifiers that gate rejects are this document's primary key. The file carries no organization-URL references, so the exclusion waives only the commit rule.
 - **`verify-doc-site-fragments` needs a built site.** It reads `website/.dist` and fails until `pnpm run docs:build` has run at least once; `docs:build` ends by running the gate itself.
 - **TTFT is still live-only.** The per-Turn rate now survives a reload because its boundaries are persisted events, but `Time to first token` cannot: it needs `firstTokenTime`, which only live stream deltas supply, and the session format persists no timing. A Turn the page did not stream itself therefore shows a speed row and no TTFT row. Fixing that means adding a timing record to the session format, which is a versioned-format change and was not worth taking for a display figure.
+- **An opened Session is never released.** Its parsed log is held for the lifetime of the harness process — there is no close, detach or release RPC, and no production caller of `AgentHandle.dispose` — so resident memory grows with the Sessions opened since the last restart and never comes back. Measured at 1.32 GB heap / 1.93 GB RSS for the 139k-record Session above. `/compact` does not help: compaction's own contract keeps the shadowed content in the session log, and the log is what is retained. The handoff memo is now byte-bounded, which removes the second copy but not the first.
 
 ## Commit index
 

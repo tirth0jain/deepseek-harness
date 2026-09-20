@@ -755,6 +755,119 @@ describe('LlmRuntime', () => {
     })
   })
 
+  it('prices a route its adapter left unpriced from the configured table', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime, {
+      cost: { route: { model: { input: 0.15, output: 0.6, cacheRead: 0.003 } } },
+    })
+    // The live shape of a third-party adapter that keeps its tariff to itself:
+    // it answers with real metadata and no rate at all.
+    ctx.llm.registerAdapter(['route'], new CatalogAdapter(
+      { id: 'route', name: 'Route' },
+      [],
+      { model: { contextWindow: 32_000 } },
+    ))
+
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).resolves.toMatchObject({
+      cost: { input: 0.15, output: 0.6, cacheRead: 0.003 },
+    })
+  })
+
+  it('prefers a configured rate over the one its adapter reports', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime, { cost: { route: { model: { input: 1, output: 2 } } } })
+    const adapter = new class extends ScriptedAdapter {
+      override resolveModel(): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider: 'route', id: 'model', name: 'Model', cost: { input: 0.15, output: 0.6 },
+        })
+      }
+    }(SCRIPT)
+    ctx.llm.registerAdapter(['route'], adapter)
+
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).resolves.toMatchObject({
+      cost: { input: 1, output: 2 },
+    })
+  })
+
+  it('leaves an unpriced route unpriced rather than reading it as free', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime, { cost: { route: { other: { input: 0.15, output: 0.6 } } } })
+    ctx.llm.registerAdapter(['route'], new CatalogAdapter({ id: 'route', name: 'Route' }, []))
+
+    const resolved = await ctx.llm.resolveModelInfo('route', 'model')
+    expect(resolved.cost).toBeUndefined()
+  })
+
+  it('refuses a configured rate that could not price a total, naming the config', async () => {
+    const ctx = new Context()
+    // A config file is not typechecked, so a half-stated pair reaches resolution
+    // from YAML; the cast states the shape being validated, not past it.
+    await ctx.plugin(LlmRuntime, {
+      cost: { route: { model: { input: 0.15 } as LlmModelCost } },
+    })
+    ctx.llm.registerAdapter(['route'], new CatalogAdapter({ id: 'route', name: 'Route' }, []))
+
+    // A rate without an output price would compute a total that is silently
+    // wrong, so it is refused where a bad adapter report is refused.
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
+      code: 'INVALID_MODEL_COST',
+      message: expect.stringContaining('llm.cost states invalid cost metadata') as unknown as string,
+    })
+  })
+
+  it('reads the peak block its schema materializes for an absent band as no band', async () => {
+    const ctx = new Context()
+    // The real arrival path: schemastery materializes `peak: {}` for a rate that
+    // states no band, so this is the shape resolution actually receives.
+    const config = LlmRuntime.Config({ cost: { route: { model: { input: 1, output: 2 } } } })
+    await ctx.plugin(LlmRuntime, config)
+    ctx.llm.registerAdapter(['route'], new CatalogAdapter({ id: 'route', name: 'Route' }, []))
+
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).resolves.toMatchObject({
+      cost: { input: 1, output: 2 },
+    })
+  })
+
+  it('refuses a configured band with no window to open on', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime, {
+      cost: { route: { model: { input: 1, output: 2, peak: { multiplier: 2, windows: [] } } } },
+    })
+    ctx.llm.registerAdapter(['route'], new CatalogAdapter({ id: 'route', name: 'Route' }, []))
+
+    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
+      code: 'INVALID_MODEL_COST',
+      message: expect.stringContaining('at least one window') as unknown as string,
+    })
+  })
+
+  it('accepts the documented nested cost table through its own schema', () => {
+    const parsed = LlmRuntime.Config({
+      cost: {
+        commandcode: {
+          'deepseek/deepseek-v4.1-flash': {
+            input: 0.15,
+            output: 0.6,
+            cacheRead: 0.003,
+            cacheWrite: 0,
+            peak: { multiplier: 2, windows: [{ days: ['mon'], start: '01:00', end: '04:00' }] },
+          },
+        },
+      },
+    }) as { cost?: Record<string, Record<string, unknown>> }
+
+    // The model id keeps its own slash: the provider route is the outer key, so
+    // no consumer has to split a compound string back apart.
+    expect(parsed.cost?.commandcode?.['deepseek/deepseek-v4.1-flash']).toMatchObject({
+      input: 0.15,
+      output: 0.6,
+      cacheRead: 0.003,
+      cacheWrite: 0,
+      peak: { multiplier: 2, windows: [{ days: ['mon'], start: '01:00', end: '04:00' }] },
+    })
+  })
+
   it('resolves detached adapter-owned reasoning metadata and materializes its default', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)

@@ -393,6 +393,23 @@ export interface LlmModelCostPeak {
 }
 
 /**
+ * List prices stated by configuration, keyed by provider route and then by
+ * exact model id.
+ *
+ * A route's rate normally comes from its adapter. An adapter that reports no
+ * rate therefore prices nothing downstream, and no consumer can tell "this
+ * route is free" from "this route never said" — a third-party adapter that
+ * keeps its tariff to itself leaves every estimate silently blank. This table
+ * is the operator's answer for exactly those routes, and it is also the place
+ * to correct a rate an adapter reports wrongly.
+ *
+ * Model ids are matched exactly, so a key may itself contain `/` (as
+ * `deepseek/deepseek-v4.1-flash` does) without ambiguity: the provider route is
+ * the outer key and is never split.
+ */
+export type LlmCostOverrides = Readonly<Record<string, Readonly<Record<string, LlmModelCost>>>>
+
+/**
  * Request-image budget one exact image-capable route enforces over the
  * retained occurrences' exact request-version bytes; for the `base64`
  * representation each byte count expands to its encoded length. A route whose

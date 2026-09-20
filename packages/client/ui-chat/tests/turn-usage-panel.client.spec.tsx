@@ -173,4 +173,36 @@ describe('TurnTimePanel', () => {
     expect(dialog.textContent).not.toContain('Tokens per second')
     expect(dialog.textContent).not.toContain('Time to first token')
   })
+
+  it('prices the Turn in the pill beside its wall time and speed', () => {
+    const view = render(
+      <TurnTimePanel
+        runMs={19_000}
+        tokensPerSecond={20}
+        cost={{ amount: 0.012345, bands: ['peak'] }}
+        t={t}
+      />,
+    )
+    // The amount is readable without opening anything, in the same pill as the
+    // run time it was spent over.
+    expect(view.getByRole('button').textContent).toBe('Ran for 19s·20 tok/s·$0.012345')
+
+    fireEvent.click(view.getByRole('button'))
+    const details = view.getByRole('dialog').querySelector('[data-turn-time-details]') as HTMLElement
+    // The dialog row is where the band note has room to sit.
+    expect(details.textContent).toContain('Estimated cost (list price)$0.012345 (peak)')
+  })
+
+  it('still prices a Turn whose speed was never sampled', () => {
+    const view = render(<TurnTimePanel runMs={19_000} cost={{ amount: 0.5, bands: [] }} t={t} />)
+    // One separator, not two: the amount follows the duration directly.
+    expect(view.getByRole('button').textContent).toBe('Ran for 19s·$0.500000')
+  })
+
+  it('leaves the pill unpriced when no rate could price the Turn', () => {
+    const view = render(<TurnTimePanel runMs={19_000} tokensPerSecond={20} t={t} />)
+    expect(view.getByRole('button').textContent).toBe('Ran for 19s·20 tok/s')
+    fireEvent.click(view.getByRole('button'))
+    expect(view.getByRole('dialog').textContent).not.toContain('Estimated cost')
+  })
 })

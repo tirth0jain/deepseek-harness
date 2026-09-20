@@ -1162,6 +1162,100 @@ export interface Config {
 
 来源：[`packages/jobs/jobs-local/src/index.ts:31`](../packages/jobs/jobs-local/src/index.ts)
 
+<a id="deepseek-aidsh-llm"></a>
+
+## `@deepseek-ai/dsh-llm`
+
+```ts config-catalog
+/** Configuration for the `llm` service. */
+export interface Config {
+  /**
+   * List prices for routes whose adapter reports none, keyed by provider route
+   * and then by exact model id. A stated rate wins over the adapter's own, so
+   * this is also where a wrongly reported rate is corrected.
+   */
+  cost?: LlmCostOverrides
+}
+
+/**
+ * List prices stated by configuration, keyed by provider route and then by
+ * exact model id.
+ *
+ * A route's rate normally comes from its adapter. An adapter that reports no
+ * rate therefore prices nothing downstream, and no consumer can tell "this
+ * route is free" from "this route never said" — a third-party adapter that
+ * keeps its tariff to itself leaves every estimate silently blank. This table
+ * is the operator's answer for exactly those routes, and it is also the place
+ * to correct a rate an adapter reports wrongly.
+ *
+ * Model ids are matched exactly, so a key may itself contain `/` (as
+ * `deepseek/deepseek-v4.1-flash` does) without ambiguity: the provider route is
+ * the outer key and is never split.
+ */
+export type LlmCostOverrides = Readonly<Record<string, Readonly<Record<string, LlmModelCost>>>>
+
+/**
+ * List price for one exact provider/model route, in USD per million tokens.
+ *
+ * What a deployment actually pays is its own contract — a subscription
+ * gateway bills nothing per call, a routed provider may price a model
+ * differently from its author — so this is a published rate carried for
+ * display, never a billing record. An absent bucket stays absent rather than
+ * defaulting to zero: "this route does not charge for cache writes" and
+ * "nobody published a rate" are different facts, and only the first may be
+ * multiplied into a total.
+ *
+ * The fields above are the rate's base band. A tariff that raises the same
+ * rate inside recurring windows states those windows in {@link LlmModelCost.peak},
+ * and an estimate read against a moment inside one applies that band instead.
+ */
+export interface LlmModelCost {
+  /** Uncached prompt tokens. */
+  input: number
+  /** Generated tokens, reasoning included (reasoning is a reported subset, not an extra charge). */
+  output: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
+  /**
+   * Second band this rate moves to inside recurring windows, when the tariff
+   * publishes one. Absent means every moment prices at the fields above: a
+   * flat card is the absence of a band, not a window that never opens.
+   */
+  peak?: LlmModelCostPeak
+}
+
+/**
+ * The band a route's published rate moves to inside recurring windows.
+ *
+ * A tariff that doubles its peak is stated once as a factor rather than as a
+ * second table of prices: the ratio is what the card publishes, so an edit to
+ * the base band cannot leave the two bands describing different tariffs.
+ */
+export interface LlmModelCostPeak {
+  /** Factor applied to every rate of the base band while a window is open. */
+  readonly multiplier: number
+  /** Windows the peak band is in force in, in UTC; an unlisted moment is base band. */
+  readonly windows: readonly LlmModelCostPeakWindow[]
+}
+
+/** One recurring window in which a route's rate moves to its peak band. */
+export interface LlmModelCostPeakWindow {
+  /** Days the window opens on; a day it does not name stays on the base band. */
+  readonly days: readonly LlmModelCostWeekday[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  readonly start: string
+  /** Window end, `HH:MM` UTC, exclusive, later in the same day than the start. */
+  readonly end: string
+}
+
+/** Weekday names a rate window may name, in UTC. */
+export type LlmModelCostWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+```
+
+来源：[`packages/llm/llm/src/index.ts:379`](../packages/llm/llm/src/index.ts)
+
 <a id="deepseek-aidsh-llm-deepseek"></a>
 
 ## `@deepseek-ai/dsh-llm-deepseek`
@@ -2292,13 +2386,25 @@ export interface Config {
   root: string
   /** Physical encoding; defaults to checksummed Zstandard frames. */
   compression?: JsonlCompression
+  /**
+   * Ceiling on the decoded JSONL one cold-read handoff may keep resident,
+   * across every memoized Session.
+   *
+   * A Session log on a long conversation decodes to hundreds of megabytes and
+   * the parsed graph it becomes is several times that, so this bound — not the
+   * entry cap beside it — is what decides how much a handoff may hold. Raise it
+   * to trade memory for a repeated decode when reopening a large Session;
+   * lower it on a memory-constrained host. A log past the budget is not
+   * memoized at all.
+   */
+  coldLogMemoMaxBytes?: number
 }
 
 /** Physical encoding selected for JSONL session artifacts. */
 export type JsonlCompression = 'zstd' | 'none'
 ```
 
-来源：[`packages/session/session-persistence-jsonl/src/index.ts:88`](../packages/session/session-persistence-jsonl/src/index.ts)
+来源：[`packages/session/session-persistence-jsonl/src/index.ts:100`](../packages/session/session-persistence-jsonl/src/index.ts)
 
 <a id="deepseek-aidsh-session-projection-cache"></a>
 
@@ -3961,7 +4067,6 @@ export interface Config {
 - `@deepseek-ai/dsh-host-directory-picker-auto` — 需要 `webServer` · `loader`（[`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts)）
 - `@deepseek-ai/dsh-host-directory-picker-native`（[`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts)）
 - `@deepseek-ai/dsh-host-plugin-inventory` — 需要 `loader`（[`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts)）
-- `@deepseek-ai/dsh-llm`（[`packages/llm/llm/src/index.ts`](../packages/llm/llm/src/index.ts)）
 - `@deepseek-ai/dsh-lsp`（[`packages/lsp/lsp/src/index.ts`](../packages/lsp/lsp/src/index.ts)）
 - `@deepseek-ai/dsh-mcp-resources` — 需要 `tools`（[`packages/mcp/mcp-resources/src/index.ts`](../packages/mcp/mcp-resources/src/index.ts)）
 - `@deepseek-ai/dsh-sandbox-ssh` — 需要 `ssh`（[`packages/ssh/sandbox-ssh/src/index.ts`](../packages/ssh/sandbox-ssh/src/index.ts)）

@@ -7,11 +7,13 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
   GenerateOptions,
   LlmConfigurableProvider,
+  LlmCostOverrides,
   LlmDiscoveredModel,
   LlmFailure,
   LlmImageRequestPricing,
@@ -332,11 +334,66 @@ export interface DirectoryRegistrationHandle {
   replace(entries: readonly LlmConfigurableProvider[]): void
 }
 
+/** Which layer stated a rate: the adapter's own report, or `llm.cost` config. */
+type CostOrigin = 'adapter' | 'config'
+
+/**
+ * Diagnostic naming the layer that stated a malformed rate. A rejected rate is
+ * never dropped silently, so the message has to say where to look: a bad
+ * adapter report and a bad `llm.cost` entry are fixed in different places.
+ * @param origin - layer that stated the rate.
+ * @param provider - route being resolved.
+ * @param model - model being resolved.
+ * @param reason - why the rate was refused, when the check has one.
+ * @returns the message for the `INVALID_MODEL_COST` rejection.
+ */
+function costDiagnostic(origin: CostOrigin, provider: string, model: string, reason?: string): string {
+  const subject = origin === 'adapter'
+    ? `adapter returned invalid cost metadata for provider "${provider}" model "${model}"`
+    : `llm.cost states invalid cost metadata for provider "${provider}" model "${model}"`
+  return reason === undefined ? subject : `${subject}: ${reason}`
+}
+
+/**
+ * The rate fields a configured override may state, matching what an adapter
+ * reports so both paths reach the same validation. The window rule is checked
+ * in {@link detachedPeak}, which owns the wording a config author needs; the
+ * schema fixes only the shape.
+ */
+const configuredCost = z.object({
+  input: z.number().min(0),
+  output: z.number().min(0),
+  cacheRead: z.number().min(0),
+  cacheWrite: z.number().min(0),
+  peak: z.object({
+    multiplier: z.number(),
+    windows: z.array(z.object({
+      days: z.array(z.string()),
+      start: z.string(),
+      end: z.string(),
+    })),
+  }),
+})
+
+/** Configuration for the `llm` service. */
+export interface Config {
+  /**
+   * List prices for routes whose adapter reports none, keyed by provider route
+   * and then by exact model id. A stated rate wins over the adapter's own, so
+   * this is also where a wrongly reported rate is corrected.
+   */
+  cost?: LlmCostOverrides
+}
+
 /**
  * The abstract `llm` service: an adapter registry plus a streaming model-call
  * API, interceptable via the `llm/stream` waterfall.
  */
 export class LlmRuntime extends TypertRemoteService {
+  static Config: z<Config> = z.object({
+    cost: z.dict(z.dict(configuredCost)),
+  }) as unknown as z<Config>
+
   private adapters = new Map<string, AdapterRegistration>()
   private directory = new Map<string, LlmConfigurableProvider>()
   private discoveries = new Map<
@@ -344,7 +401,7 @@ export class LlmRuntime extends TypertRemoteService {
     (request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<readonly LlmDiscoveredModel[]>
   >()
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, public config: Config = {}) {
     super(ctx, 'llm')
   }
 
@@ -698,6 +755,7 @@ export class LlmRuntime extends TypertRemoteService {
    * @param cost - rate the adapter reported, if any.
    * @param provider - route being resolved, for the diagnostic.
    * @param model - model being resolved, for the diagnostic.
+   * @param origin - which layer stated the rate, so a rejection names it.
    * @returns a detached rate, or undefined when the adapter stated none.
    * @throws LlmError when a stated rate is malformed.
    */
@@ -705,6 +763,7 @@ export class LlmRuntime extends TypertRemoteService {
     cost: LlmModelCost | undefined,
     provider: string,
     model: string,
+    origin: CostOrigin = 'adapter',
   ): LlmModelCost | undefined {
     if (cost === undefined) return undefined
     const price = (value: number | undefined): boolean =>
@@ -714,17 +773,14 @@ export class LlmRuntime extends TypertRemoteService {
       || !price(cost.cacheRead) || !price(cost.cacheWrite)
       || cost.input === undefined || cost.output === undefined
     ) {
-      throw new LlmError(
-        `adapter returned invalid cost metadata for provider "${provider}" model "${model}"`,
-        'INVALID_MODEL_COST',
-      )
+      throw new LlmError(costDiagnostic(origin, provider, model), 'INVALID_MODEL_COST')
     }
     return {
       input: cost.input,
       output: cost.output,
       ...cost.cacheRead === undefined ? {} : { cacheRead: cost.cacheRead },
       ...cost.cacheWrite === undefined ? {} : { cacheWrite: cost.cacheWrite },
-      ...cost.peak === undefined ? {} : { peak: detachedPeak(cost.peak, provider, model) },
+      ...cost.peak === undefined ? {} : { peak: detachedPeak(cost.peak, provider, model, origin) },
     }
   }
 
@@ -789,7 +845,33 @@ export class LlmRuntime extends TypertRemoteService {
     return this.normalizeModelInfo(registration, model, resolved)
   }
 
-  /** Validate and detach one adapter-returned exact model result. */
+  /**
+   * Read the rate `llm.cost` states for one route, if any.
+   *
+   * Schemastery materializes an absent nested block rather than omitting it, so
+   * a rate that states no band arrives as `{ windows: [] }`. A block that names
+   * neither a factor nor a window is therefore read as no band — the flat card
+   * the operator wrote. A block that names either one still reaches
+   * {@link detachedPeak} and is refused there, because a half-written band
+   * would price every moment at the base rate and look like a working estimate.
+   * @param provider - route being resolved.
+   * @param model - model being resolved.
+   * @returns the stated rate, or undefined when the table states none.
+   */
+  private configuredCostFor(provider: string, model: string): LlmModelCost | undefined {
+    const configured = this.config.cost?.[provider]?.[model]
+    if (configured === undefined) return undefined
+    const { peak, ...rest } = configured
+    // Materialization is a schema artifact, so read the band's own fields
+    // rather than trusting its presence.
+    const band = peak as { multiplier?: number; windows?: readonly unknown[] } | undefined
+    const unstated = band !== undefined && band.multiplier === undefined && (band.windows?.length ?? 0) === 0
+    return unstated ? rest : configured
+  }
+
+  /**
+   * Validate and detach one adapter-returned exact model result.
+   */
   private normalizeModelInfo(
     registration: AdapterRegistration,
     model: string,
@@ -836,7 +918,15 @@ export class LlmRuntime extends TypertRemoteService {
         'INVALID_MODEL_MAX_TOKENS',
       )
     }
-    const cost = this.detachedCost(resolved.cost, provider, model)
+    // A stated rate wins over the adapter's own: this table exists for routes
+    // whose adapter reports none, and stating one is also how a rate an adapter
+    // reports wrongly gets corrected. An unpriced route stays unpriced rather
+    // than becoming free.
+    const configured = this.configuredCostFor(provider, model)
+    const cost = configured === undefined
+      ? this.detachedCost(resolved.cost, provider, model)
+      : this.detachedCost(configured, provider, model, 'config')
+
     const info: LlmResolvedModelInfo = {
       provider,
       id: model,
@@ -1194,15 +1284,18 @@ const RATE_WINDOW_DAYS: readonly LlmModelCostWeekday[] = ['mon', 'tue', 'wed', '
  * @param peak - band the adapter reported.
  * @param provider - route being resolved, for the diagnostic.
  * @param model - model being resolved, for the diagnostic.
+ * @param origin - which layer stated the rate, so a rejection names it.
  * @returns a detached band.
  * @throws LlmError when the band is malformed.
  */
-function detachedPeak(peak: LlmModelCostPeak, provider: string, model: string): LlmModelCostPeak {
+function detachedPeak(
+  peak: LlmModelCostPeak,
+  provider: string,
+  model: string,
+  origin: CostOrigin = 'adapter',
+): LlmModelCostPeak {
   const invalid = (reason: string): never => {
-    throw new LlmError(
-      `adapter returned invalid cost metadata for provider "${provider}" model "${model}": ${reason}`,
-      'INVALID_MODEL_COST',
-    )
+    throw new LlmError(costDiagnostic(origin, provider, model, reason), 'INVALID_MODEL_COST')
   }
   if (!Number.isFinite(peak.multiplier) || peak.multiplier <= 0) {
     invalid('a peak multiplier must be a positive finite number')

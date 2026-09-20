@@ -34,6 +34,13 @@ export interface TurnTimePanelProps {
   tokensPerSecond?: number | undefined
   /** Turn first-step TTFT in ms, a dialog row when known. */
   ttftMs?: number | undefined
+  /**
+   * Estimated spend at the rate the Turn's attempts billed in USD. Shown in the
+   * pill beside the run time so a Turn is priced at a glance, and repeated as a
+   * dialog row where the band note has somewhere to sit; undefined when a route
+   * is unpriced or unrecorded, in which case no amount is rendered at all.
+   */
+  cost?: TurnCostEstimate | undefined
   /** The owning view's locale seat, passed down as a plain prop. */
   t: ChatViewSlotProps['t']
 }
@@ -183,8 +190,9 @@ export function TurnUsagePanel({ usage, cost, t }: TurnUsagePanelProps) {
  * @param props - Turn timing facts and locale seat.
  * @returns The clock-and-duration trigger and, while open, its portaled dialog anchored above the trigger.
  */
-export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePanelProps) {
+export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, cost, t }: TurnTimePanelProps) {
   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  const costBand = cost === undefined ? undefined : formatCostBand(cost.bands, t)
   return (
     <span ref={rootRef} className={css.root}>
       <button
@@ -201,6 +209,12 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
             <>
               <span className={css.sep} aria-hidden>·</span>
               {t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}
+            </>
+          )}
+          {cost !== undefined && (
+            <>
+              <span className={css.sep} aria-hidden>·</span>
+              {formatCost(cost.amount)}
             </>
           )}
         </span>
@@ -233,6 +247,17 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
               <>
                 <dt>{t('message.turnTime.ttft')}</dt>
                 <dd>{t('duration.seconds', { seconds: formatLatencySeconds(ttftMs) })}</dd>
+              </>
+            )}
+            {cost !== undefined && (
+              <>
+                <dt>{t('message.turnUsage.cost')}</dt>
+                <dd className={dialogCss.route}>
+                  {formatCost(cost.amount)}
+                  {costBand !== undefined && (
+                    <span className={dialogCss.reasoning}>{costBand}</span>
+                  )}
+                </dd>
               </>
             )}
           </dl>

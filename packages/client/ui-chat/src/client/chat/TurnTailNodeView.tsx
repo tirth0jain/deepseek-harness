@@ -63,6 +63,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
                 runMs={runMs}
                 tokensPerSecond={data.tokensPerSecond}
                 ttftMs={data.ttftMs}
+                cost={turnCost}
                 t={t}
               />
             )}
