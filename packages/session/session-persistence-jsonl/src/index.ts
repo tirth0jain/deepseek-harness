@@ -30,10 +30,16 @@ import {
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
-import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
+import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState, type StoredLogWindow } from './storage.ts'
 import { SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+import type {
+  SessionEvent,
+  SessionId,
+  SessionHeader,
+  SessionLogOffset as SessionLogOffsetType,
+} from '@deepseek-ai/dsh-session'
+import type { SessionFormatEventWindow } from '@deepseek-ai/dsh-session-format'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath, logPath, logSuffix,
   parseGenerationLogFilename, projectDir, scanLog, sessionDir, SessionLogScanner, toHeaderLine,
@@ -750,6 +756,84 @@ class JsonlSessionPersistence extends SessionPersistence {
     return this.decodeStoredLog(path, expectedId, bytes, fileRevision(identity), signal)
   }
 
+  /**
+   * Decode one complete current generation and retain only a bounded window of it.
+   *
+   * The scan still decodes and validates every row, so this is an integrity-
+   * equivalent alternative to {@link readStoredLog} that trades the full event
+   * list for the window — the difference between a few megabytes and gigabytes
+   * of heap when one page of a long Session is all the caller needs.
+   *
+   * The result is deliberately never memoized: `coldLogMemo` is keyed by
+   * session id alone, so caching a partial list there would hand it to a later
+   * full read as if it were the whole log.
+   *
+   * @param path - the selected current generation's physical path.
+   * @param expectedId - logical identity the log must declare.
+   * @param offset - first expanded event index to retain.
+   * @param length - number of expanded events to retain from `offset`.
+   * @param signal - optional cancellation for the read.
+   * @returns the retained window plus the complete log's event count.
+   */
+  async readStoredLogWindow(
+    path: string,
+    expectedId: SessionId,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ): Promise<StoredLogWindow> {
+    signal?.throwIfAborted()
+    const { bytes, identity } = await readStableJsonlFile(path, signal)
+    const window: SessionFormatEventWindow = { from: offset, length }
+    let parsed: {
+      meta: SessionHeader
+      inheritedEventCount: SessionLogOffsetType
+      events: SessionEvent[]
+      eventCount: number
+      recoveredTail: SessionEvent[]
+    }
+    try {
+      if (this.compression === 'zstd') {
+        parsed = await this.readZstdPrefix(bytes, signal, window)
+      } else {
+        signal?.throwIfAborted()
+        const { meta, inheritedEventCount, events, eventCount } = scanLog(bytes, window)
+        signal?.throwIfAborted()
+        parsed = { meta, inheritedEventCount, events, eventCount, recoveredTail: [] }
+      }
+    } catch (error: unknown) {
+      signal?.throwIfAborted()
+      if (error instanceof SessionFormatUnsupportedError) {
+        throw new SessionFormatUnsupportedError(`${error.message} (raw log: ${path})`, { kind: 'jsonl', path })
+      }
+      throw new SessionPersistenceCorruptionError(`session "${expectedId}": stored log is corrupt: ${String(error)} (raw log: ${path})`, { cause: error })
+    }
+    signal?.throwIfAborted()
+    await this.assertStoredIdentity(path, SESSION_FORMAT_VERSION, parsed.meta, expectedId, signal)
+    signal?.throwIfAborted()
+    assertStoredId(expectedId, parsed.meta)
+    const location = this.locate(parsed.meta)
+    validateStoredEvents(parsed.meta, parsed.events, location)
+    // The decode walked every row, so a retained window must begin exactly at
+    // the requested offset. A different seq means the log is not the dense
+    // zero-based sequence this window arithmetic assumes, and silently serving
+    // the events at the wrong positions would be worse than refusing.
+    const first = parsed.events[0]
+    if (first !== undefined && Number(first.seq) !== offset) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${expectedId}": stored log window begins at seq ${String(first.seq)} but offset ${String(offset)} was requested (raw log: ${path})`,
+        {},
+      )
+    }
+    return {
+      meta: parsed.meta,
+      inheritedEventCount: parsed.inheritedEventCount,
+      ...freezeStoredEvents(parsed.events),
+      eventCount: parsed.eventCount,
+      revision: fileRevision(identity),
+    }
+  }
+
   /** Decode and memoize one already-stable current physical snapshot. */
   private async decodeStoredLog(
     path: string,
@@ -762,6 +846,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       meta: SessionHeader
       inheritedEventCount: SessionLogOffsetType
       events: SessionEvent[]
+      eventCount: number
       tornTruncateTo: number | undefined
       recoveredTail: SessionEvent[]
       decodedBytes: number
@@ -771,12 +856,13 @@ class JsonlSessionPersistence extends SessionPersistence {
         parsed = await this.readZstdPrefix(buffer, signal)
       } else {
         signal?.throwIfAborted()
-        const { meta, inheritedEventCount, events, committedBytes } = scanLog(buffer)
+        const { meta, inheritedEventCount, events, eventCount, committedBytes } = scanLog(buffer)
         signal?.throwIfAborted()
         parsed = {
           meta,
           inheritedEventCount,
           events,
+          eventCount,
           tornTruncateTo: committedBytes < buffer.byteLength ? committedBytes : undefined,
           // A torn raw tail is one incomplete JSONL line; it holds no complete
           // record to recover.
@@ -801,7 +887,16 @@ class JsonlSessionPersistence extends SessionPersistence {
     assertStoredId(expectedId, parsed.meta)
     const location = this.locate(parsed.meta)
     validateStoredEvents(parsed.meta, parsed.events, location)
-    const { events, decodedBytes, ...rest } = parsed
+    const { events, decodedBytes, eventCount, ...rest } = parsed
+    // An unwindowed decode retains every event it counted; a divergence means
+    // the scanner's row accounting and the restored list disagree, which would
+    // silently corrupt every length this handle reports from here on.
+    if (eventCount !== events.length) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${expectedId}": decoded ${String(eventCount)} events but restored ${String(events.length)} (raw log: ${path})`,
+        {},
+      )
+    }
     const stored: CurrentStoredLog = {
       status: 'current',
       ...rest,
@@ -982,10 +1077,12 @@ class JsonlSessionPersistence extends SessionPersistence {
   private async readZstdPrefix(
     buffer: Buffer,
     signal?: AbortSignal,
+    window?: SessionFormatEventWindow,
   ): Promise<{
     meta: SessionHeader
     inheritedEventCount: SessionLogOffsetType
     events: SessionEvent[]
+    eventCount: number
     tornTruncateTo: number | undefined
     recoveredTail: SessionEvent[]
     decodedBytes: number
@@ -1005,7 +1102,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       /* v8 ignore next -- a non-empty structural frame list makes the decoder yield its first frame or throw. */
       if (headerFrame.done) throw new Error('empty or header-less Zstandard session log')
       assertZstdHeaderFrame(headerFrame.value)
-      const scanner = new SessionLogScanner(headerFrame.value)
+      const scanner = new SessionLogScanner(headerFrame.value, 'recoverable', window)
 
       let remainingFrames = frames.length - 1
       for (const plaintext of decodedFrames) {
@@ -1029,6 +1126,7 @@ class JsonlSessionPersistence extends SessionPersistence {
           meta: prefix.meta,
           inheritedEventCount: prefix.inheritedEventCount,
           events: prefix.events,
+          eventCount: prefix.eventCount,
           tornTruncateTo: undefined,
           recoveredTail: [],
           decodedBytes: prefix.committedBytes,
@@ -1054,8 +1152,14 @@ class JsonlSessionPersistence extends SessionPersistence {
         meta: prefix.meta,
         inheritedEventCount: prefix.inheritedEventCount,
         events: prefix.events,
+        eventCount: prefix.eventCount,
         tornTruncateTo: tornStart,
-        recoveredTail: prefix.events.slice(complete.eventCount),
+        // The recovered tail is the durable-rewrite input a write open needs,
+        // and it is addressed by absolute event index into the complete list —
+        // which a window does not hold. Only read handles ask for a window, and
+        // a read discards the tail, so a windowed decode reports none rather
+        // than mis-slicing the window it does hold.
+        recoveredTail: window === undefined ? prefix.events.slice(complete.eventCount) : [],
         decodedBytes: prefix.committedBytes,
       }
     } catch (error) {

@@ -21,7 +21,11 @@ import type {
 } from '@deepseek-ai/dsh-session'
 import { parseSessionFormatLogFilename, sessionFormatLogFilename, SessionFormatUnsupportedMigrationError } from '@deepseek-ai/dsh-session-format'
 import type { SessionFormatEvent } from '@deepseek-ai/dsh-session-format'
-import type { SessionFormatRecovery, SessionFormatRestore } from '@deepseek-ai/dsh-session-format'
+import type {
+  SessionFormatEventWindow,
+  SessionFormatRecovery,
+  SessionFormatRestore,
+} from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { assertV3RowAdmission } from '@deepseek-ai/dsh-session-format-v2-to-v3'
 import {
@@ -326,6 +330,8 @@ interface SessionLogScan {
   meta: SessionHeader
   inheritedEventCount: SessionLogOffsetType
   events: SessionEvent[]
+  /** Expanded events the complete decode produced, retained or not. */
+  eventCount: number
   committedBytes: number
 }
 
@@ -344,8 +350,15 @@ function refuseForeignFormatVersion(parsed: object): void {
   )
 }
 
-/** Parse one complete header record supplied independently from event rows. */
-function parseHeaderRecord(record: Buffer): { readonly meta: SessionHeader; readonly restore: SessionFormatRestore } {
+/**
+ * Parse one complete header record supplied independently from event rows.
+ * @param record - the newline-terminated first JSONL record.
+ * @param window - expanded-event range to retain; absent retains every event.
+ */
+function parseHeaderRecord(
+  record: Buffer,
+  window?: SessionFormatEventWindow,
+): { readonly meta: SessionHeader; readonly restore: SessionFormatRestore } {
   if (record.length === 0 || record.at(-1) !== 0x0A || record.indexOf(0x0A) !== record.length - 1) {
     throw new Error('empty or header-less session log')
   }
@@ -368,6 +381,7 @@ function parseHeaderRecord(record: Buffer): { readonly meta: SessionHeader; read
     restore = sessionFormatCatalog.createRestore(parsed, {
       recovery: 'strict',
       validation: 'transformed',
+      ...window === undefined ? {} : { window },
     })
   } catch {
     /* v8 ignore next -- isHeaderLine matches the current codec; this preserves classification if it tightens. */
@@ -397,12 +411,17 @@ export class SessionLogScanner {
   /**
    * Create an event scanner from exactly one newline-terminated header record.
    * @param headerRecord - the complete first JSONL record, including its newline.
+   * @param recovery - whether a mid-log damage issue is deferred or thrown.
+   * @param window - expanded-event range to retain; absent retains every event.
+   *   The scan still decodes and validates every row, so a window bounds
+   *   retention and not the work the log's own integrity check requires.
    */
   constructor(
     headerRecord: Buffer,
     private readonly recovery: SessionFormatRecovery = 'recoverable',
+    window?: SessionFormatEventWindow,
   ) {
-    const parsed = parseHeaderRecord(headerRecord)
+    const parsed = parseHeaderRecord(headerRecord, window)
     this.meta = parsed.meta
     this.restore = parsed.restore
     this.inputBytes = headerRecord.length
@@ -468,6 +487,9 @@ export class SessionLogScanner {
       meta: this.meta,
       inheritedEventCount: SessionLogOffset(artifact.inheritedEventCount),
       events: artifact.events as unknown as SessionEvent[],
+      // The scanner counts every committed row it decodes, so this is the whole
+      // log's length even when the restore retained only a window of it.
+      eventCount: this.eventCount,
       committedBytes: this.committedBytes,
     }
   }
@@ -525,12 +547,13 @@ export class SessionLogScanner {
  * event rows to {@link SessionLogScanner}.
  *
  * @param buffer - the raw bytes of the log file (header line first).
+ * @param window - expanded-event range to retain; absent retains every event.
  * @returns the header, preserved event prefix, and byte offset safe to append at.
  */
-export function scanLog(buffer: Buffer): SessionLogScan {
+export function scanLog(buffer: Buffer, window?: SessionFormatEventWindow): SessionLogScan {
   const headerEnd = buffer.indexOf(0x0A)
   if (headerEnd === -1) throw new Error('empty or header-less session log')
-  const scanner = new SessionLogScanner(buffer.subarray(0, headerEnd + 1))
+  const scanner = new SessionLogScanner(buffer.subarray(0, headerEnd + 1), 'recoverable', window)
   scanner.write(buffer.subarray(headerEnd + 1))
   return scanner.finish()
 }

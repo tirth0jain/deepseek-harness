@@ -11,7 +11,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { errorChain } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset, SessionSeedEventState } from '@deepseek-ai/dsh-session'
 import {
   assertContiguous,
   SessionAlreadyExistsError,
@@ -35,6 +35,24 @@ import type { SessionWriteLease } from './lease.ts'
 /** Maximum intentional wait before a routed live session batch starts writing. */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200
 
+/**
+ * One bounded retention window out of a complete decode.
+ *
+ * Every row of the generation was decoded and validated to produce this, so it
+ * is exactly as trustworthy as a full read; what it does not carry is the rest
+ * of the events, which is the whole point. `eventCount` is the complete log's
+ * length, which a window cannot infer from what it holds.
+ */
+export interface StoredLogWindow {
+  readonly meta: SessionHeader
+  readonly inheritedEventCount: SessionLogOffset
+  readonly eventState: SessionSeedEventState
+  readonly events: readonly SessionEvent[]
+  /** Expanded events the complete decode produced, retained or not. */
+  readonly eventCount: number
+  readonly revision: SessionPersistenceRevision
+}
+
 /** The file-storage primitives the handle drives on its owning service. */
 export interface JsonlHandleStorage {
   /** Append encoded lines; `isMaterialized` selects create-vs-extend publication. */
@@ -52,6 +70,14 @@ export interface JsonlHandleStorage {
   resolveCurrentLog(id: SessionId, signal?: AbortSignal): Promise<string | undefined>
   /** Read and validate the stored log at `path`, including its established event aliasing state. */
   readStoredLog(path: string, expectedId: SessionId, signal?: AbortSignal): Promise<SessionHandleReadResult>
+  /** Read the same validated log while retaining only `[offset, offset + length)` of its events. */
+  readStoredLogWindow(
+    path: string,
+    expectedId: SessionId,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ): Promise<StoredLogWindow>
   /** Whether the id is still a created-but-unmaterialized session here. */
   hasPendingSession(id: SessionId): boolean
   /** Acquire the session's cross-process write lock in its artifact directory. */
@@ -168,15 +194,28 @@ export class JsonlSessionHandle implements SessionHandle {
     length: number,
     signal?: AbortSignal,
   ): Promise<SessionHandleReadResult> {
-    const source = await this.storage.readStoredLog(path, this.id, signal)
-    if (source.events.length < this.observedLength) {
-      throw new Error(`session "${this.id}": stored log shrank below a previously observed prefix (${source.events.length} < ${this.observedLength})`)
+    // An unbounded request is the "read the whole log" case the handoff memo and
+    // the write path's torn-tail recovery are built around, so it keeps the
+    // complete decode. Any narrower request decodes just as completely — the
+    // scan still validates every row — but retains only the range asked for,
+    // which is the difference between a page and the whole graph in heap.
+    if (offset === 0 && length === Number.MAX_SAFE_INTEGER) {
+      const source = await this.storage.readStoredLog(path, this.id, signal)
+      if (source.events.length < this.observedLength) {
+        throw new Error(`session "${this.id}": stored log shrank below a previously observed prefix (${source.events.length} < ${this.observedLength})`)
+      }
+      this.observedLength = source.events.length
+      return {
+        eventState: source.eventState,
+        events: source.events.slice(offset, offset + length),
+      }
     }
-    this.observedLength = source.events.length
-    return {
-      eventState: source.eventState,
-      events: source.events.slice(offset, offset + length),
+    const window = await this.storage.readStoredLogWindow(path, this.id, offset, length, signal)
+    if (window.eventCount < this.observedLength) {
+      throw new Error(`session "${this.id}": stored log shrank below a previously observed prefix (${window.eventCount} < ${this.observedLength})`)
     }
+    this.observedLength = window.eventCount
+    return { eventState: window.eventState, events: window.events }
   }
 
   /**

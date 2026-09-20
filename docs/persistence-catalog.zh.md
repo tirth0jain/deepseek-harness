@@ -5618,7 +5618,7 @@ SHA-256: `d8f868c6b3e7189de6c1ffe2ea04794ea2aa31315b6347d12536e46020afac87`
 
 SHA-256: `18ee62b8900a4c3d046700f05d7a4d49d6cab2a660a020c87481d1603dd8bd4f`
 
-来源：[`packages/session/session-persistence-jsonl/src/format.ts:82`](../packages/session/session-persistence-jsonl/src/format.ts)
+来源：[`packages/session/session-persistence-jsonl/src/format.ts:86`](../packages/session/session-persistence-jsonl/src/format.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
