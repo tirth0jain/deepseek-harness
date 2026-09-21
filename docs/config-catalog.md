@@ -210,6 +210,19 @@ Requires: `agentDefaultModel` · `agents` · `attachments` · `fileUploads` · `
 export interface Config {
   /** Override platform desktop-opener detection. */
   readonly nativeOpen?: boolean
+  /**
+   * Activate a stored Session's Agent in the background when its history is
+   * opened for reading. Defaults to `true`, the shipped behaviour.
+   *
+   * Activating early costs the Session's whole event graph for the life of the
+   * process — a long conversation measures gigabytes — because nothing releases
+   * an Agent once it exists, and it appends the pickup `session/end-seed` that
+   * makes a merely-opened Session look freshly used. Set `false` to open a
+   * Session read-only: every operation that needs an Agent (prompt, queue,
+   * command, cancel) already resolves one on demand, so the Agent is then
+   * created by the first real use rather than by the first look.
+   */
+  readonly promoteOnHistoryOpen?: boolean
 }
 ```
 

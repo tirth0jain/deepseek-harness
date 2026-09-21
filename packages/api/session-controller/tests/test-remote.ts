@@ -89,6 +89,8 @@ export interface TestSessionRemoteDefaults {
   readonly defaultModelSelection: () => AgentModelSelection
   readonly cwd: string
   readonly nativeOpen?: boolean
+  /** Activate a stored Session's Agent when its history opens; `false` opens read-only. */
+  readonly promoteOnHistoryOpen?: boolean
   readonly saveDefaultModelSelection?: (selection: AgentModelSelection) => void | Promise<void>
   readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>
   readonly revealPath?: (path: string, signal: AbortSignal) => Promise<void>
@@ -282,6 +284,9 @@ function installControllers(
       ctx,
       {
         ...defaults.nativeOpen === undefined ? {} : { nativeOpen: defaults.nativeOpen },
+        ...defaults.promoteOnHistoryOpen === undefined
+          ? {}
+          : { promoteOnHistoryOpen: defaults.promoteOnHistoryOpen },
       },
       {
         ...defaults.openPath === undefined ? {} : { openPath: defaults.openPath },

@@ -71,6 +71,19 @@ declare module '@deepseek-ai/cordis' {
 export interface Config {
   /** Override platform desktop-opener detection. */
   readonly nativeOpen?: boolean
+  /**
+   * Activate a stored Session's Agent in the background when its history is
+   * opened for reading. Defaults to `true`, the shipped behaviour.
+   *
+   * Activating early costs the Session's whole event graph for the life of the
+   * process — a long conversation measures gigabytes — because nothing releases
+   * an Agent once it exists, and it appends the pickup `session/end-seed` that
+   * makes a merely-opened Session look freshly used. Set `false` to open a
+   * Session read-only: every operation that needs an Agent (prompt, queue,
+   * command, cancel) already resolves one on demand, so the Agent is then
+   * created by the first real use rather than by the first look.
+   */
+  readonly promoteOnHistoryOpen?: boolean
 }
 
 /** Host integrations replaceable by direct unit tests. */
@@ -100,6 +113,7 @@ export class SessionController extends TypertRemoteService {
 
   static Config: z<Config> = z.object({
     nativeOpen: z.boolean(),
+    promoteOnHistoryOpen: z.boolean().default(true),
   })
 
   private readonly agents: ApiSessionAgentController
@@ -133,7 +147,14 @@ export class SessionController extends TypertRemoteService {
     ctx.effect(() => async () => {
       await Promise.allSettled([...this.promotions])
     }, 'session-controller.promotions')
-    this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
+    this.history = new SessionHistoryController(
+      ctx,
+      config.promoteOnHistoryOpen === false
+        // Read-only opening: the Agent is resolved by the first operation that
+        // needs one instead of by the act of looking at the Session.
+        ? undefined
+        : (observation) => { this.promote(observation) },
+    )
     this.listState = new ApiSessionList(ctx)
     this.openPath = internals.openPath ?? openNativePath
     this.revealPath = internals.revealPath ?? revealNativePath

@@ -197,6 +197,42 @@ describe('SessionController facade', () => {
     },
   )
 
+  it('leaves opening read-only when background activation is switched off', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = SessionId('readonly-open')
+    const header: SessionHeader = {
+      version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/workspace', isSeeded: false,
+    }
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([header]),
+      inspect: () => Promise.resolve({
+        meta: header,
+        inheritedEventCount: SessionLogOffset(0),
+        events: [],
+      }),
+    }) as never)
+    const controller = createSessionTestController(ctx, { ...defaults, promoteOnHistoryOpen: false })
+    const agents = (controller as unknown as { agents: ApiSessionAgentController }).agents
+    const resolve = vi.spyOn(agents, 'resolveObservedAgent')
+    const abort = new AbortController()
+    const iterator = controller.follow({
+      address: { kind: 'session', sessionId },
+    }, abort.signal)[Symbol.asyncIterator]()
+
+    // The snapshot still arrives: opening stays a read, it just stops being an
+    // activation, so no Agent is composed for a Session nobody has used yet.
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { type: 'snapshot', cursor: -1 },
+    })
+    await new Promise(resolveTick => setTimeout(resolveTick, 20))
+    expect(resolve).not.toHaveBeenCalled()
+    abort.abort()
+    await expect(iterator.next()).resolves.toMatchObject({ done: true })
+    await ctx.fiber.dispose()
+  })
+
   it('waits for an admitted background promotion during teardown', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)

@@ -45,11 +45,13 @@ export class SessionHistoryController {
 
   /**
    * @param ctx - Host context carrying Session query and projection services.
-   * @param promote - starts ordinary Session activation after snapshot delivery.
+   * @param promote - starts ordinary Session activation after snapshot delivery,
+   *   or `undefined` to leave opening read-only so that the Agent is created by
+   *   the first operation that needs one rather than by the first look.
    */
   constructor(
     private readonly ctx: Context,
-    private readonly promote: (observation: SessionObservation) => void,
+    private readonly promote?: (observation: SessionObservation) => void,
   ) {
     ctx.on('agent/assistant-stream', ({ agent, frame }) => {
       let stream = this.assistantStreams.get(agent.session.id)
@@ -200,7 +202,10 @@ export class SessionHistoryController {
           : projectionBlock(source.projections),
         ...assistantStream === undefined ? {} : { assistantStream },
       }
-      if (address.kind === 'session' && source.source === 'prepared') {
+      // An ordinary Session opens read-only when activation is not configured:
+      // the lease is released with this frame rather than retained for a
+      // promotion that will not happen.
+      if (address.kind === 'session' && source.source === 'prepared' && this.promote !== undefined) {
         const promotion = source.retain()
         try {
           this.promote(promotion)
