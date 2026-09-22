@@ -147,6 +147,52 @@ export interface PiAiProviderProfile {
    */
   autoRefresh?: boolean
   /**
+   * Enrich this route's automatically refreshed catalog from an external
+   * metadata source, filling the facts a model listing endpoint structurally
+   * cannot state.
+   *
+   * A listing endpoint reports which ids it serves and, at best, their
+   * capacities. A gateway that reports ids alone leaves every model without a
+   * context window, an accepted-modality claim, or a price — so spend stays
+   * blank and a vision model cannot accept an image, however correct the
+   * model list itself is. `models.dev` publishes those facts per provider and
+   * model, and this option reads them and fills only what the deployment left
+   * unstated.
+   *
+   * The source is a third party and is subordinate to configuration in both
+   * directions that matter: a field the deployment stated — its own tariff, a
+   * narrowed modality claim, its chosen efforts — is never overwritten, and
+   * membership remains the endpoint's alone, so a model the catalog lists but
+   * the gateway does not serve is never added. A fetch failure is contained:
+   * the refresh completes with the fields the listing disclosed, exactly as
+   * if this option were unset.
+   *
+   * The catalog document is fetched at most once every six hours per process
+   * and shared by every route that opts in. This has no effect unless
+   * {@link PiAiProviderProfile.autoRefresh} is also set, since enrichment
+   * rides the same refresh.
+   */
+  enrichFrom?: 'models.dev'
+  /**
+   * The provider id this route's models are filed under in the external
+   * catalog, when it differs from the route key; absent uses the route key.
+   *
+   * Nothing guesses at an alias: a route named `my-gateway` whose models the
+   * catalog files under `opencode-go` names that id here.
+   */
+  modelsDevProvider?: string
+  /**
+   * Take the reasoning efforts the external catalog discloses, for models
+   * whose entry states none.
+   *
+   * Off by default, and deliberately so: declaring a model's efforts is
+   * otherwise the deployment's call, and a level the catalog offers is not
+   * proof the gateway accepts it. Turning this on trades that control for not
+   * having to declare efforts per model. It has no effect unless
+   * {@link PiAiProviderProfile.enrichFrom} is set.
+   */
+  enrichReasoning?: boolean
+  /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
    * field. What neither sets keeps the installed catalog entry's value, then
@@ -382,6 +428,9 @@ const profile = z.object({
   models: z.array(modelProfile),
   modelOverrides: z.dict(modelOverride),
   autoRefresh: z.boolean().default(false),
+  enrichFrom: z.const('models.dev'),
+  modelsDevProvider: z.string(),
+  enrichReasoning: z.boolean().default(false),
   compat: compatProfile,
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),

@@ -76,6 +76,8 @@ import type { PiAiModelProfile, ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels, LISTABLE_PROTOCOLS } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
 import { registerPiAiFlows } from './login.ts'
+import { loadModelsDevCatalog } from './modelsdev.ts'
+import type { ModelsDevCatalog, ModelsDevFacts } from './modelsdev.ts'
 import { AUTO_REFRESH_MIN_INTERVAL_MS, refreshProviderCatalog } from './refresh.ts'
 
 export { PiAiAdapter } from './adapter.ts'
@@ -279,6 +281,33 @@ export function apply(ctx: Context, config: Config): void {
   const lastRefreshStarted = new Map<string, number>()
   const refreshInFlight = new Map<string, Promise<void>>()
   const refreshDeclined = new Set<string>()
+  // One external catalog per refresh pass. The load itself is cached
+  // process-wide under its own TTL, so this only keeps a single pass from
+  // re-entering it once per route.
+  let enrichmentCatalog: Promise<ModelsDevCatalog | undefined> | undefined
+  /**
+   * The external facts for one route, or `undefined` when the route did not
+   * opt in or the catalog could not be read.
+   *
+   * The document is always parsed with reasoning efforts taken, so one fetch
+   * serves routes that disagree about wanting them; a route that did not opt
+   * in has the field stripped here. That is what keeps `enrichReasoning` a
+   * per-route decision instead of a property of whichever route happened to
+   * fetch the document first.
+   */
+  const enrichmentFor = async (
+    provider: string,
+    profile: ResolvedPiAiProviderProfile,
+  ): Promise<ReadonlyMap<string, ModelsDevFacts> | undefined> => {
+    if (profile.enrichFrom !== 'models.dev') return undefined
+    enrichmentCatalog ??= loadModelsDevCatalog({ enrichReasoning: true })
+    const rows = (await enrichmentCatalog)?.get(profile.modelsDevProvider ?? provider)
+    if (rows === undefined || profile.enrichReasoning === true) return rows
+    return new Map([...rows].map(([id, facts]) => {
+      const { reasoningEfforts: _declined, ...rest } = facts
+      return [id, rest] as const
+    }))
+  }
   const refreshAll = (): void => {
     const settings = settingsProvider
     if (settings === undefined) return
@@ -297,7 +326,16 @@ export function apply(ctx: Context, config: Config): void {
       | Record<string, { models?: readonly PiAiModelProfile[]; modelOverrides?: unknown }>
       | undefined
     for (const [provider, profile] of profiles()) {
-      if (profile.autoRefresh !== true) continue
+      if (profile.autoRefresh !== true) {
+        // Enrichment rides the automatic refresh, so a route that asked for it
+        // without autoRefresh would silently receive nothing; say so once.
+        if (profile.enrichFrom !== undefined && !refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          ctx.logger.warn(`llm-pi-ai: route "${provider}" sets enrichFrom but not autoRefresh, so its`
+            + ' models are never refreshed and the enrichment never applies; set autoRefresh too')
+        }
+        continue
+      }
       const api = profile.api ?? 'openai-completions'
       const baseURL = profile.baseURL
       // A route whose listing this build cannot read is declined once per
@@ -335,12 +373,14 @@ export function apply(ctx: Context, config: Config): void {
       const storedProfile = storedDiscoveryProfile(provider)
       lastRefreshStarted.set(provider, now)
       const run = (async () => {
+        const enrichment = await enrichmentFor(provider, profile)
         const outcome = await refreshProviderCatalog({
           provider,
           ...api === undefined ? {} : { api },
           baseURL,
           currentModels,
           ...storedProfile === undefined ? {} : { storedProfile: () => storedProfile },
+          ...enrichment === undefined ? {} : { enrichment },
           persist: async (models) => {
             await settings.update(NS, { providers: { [provider]: { models: [...models] } } })
           },

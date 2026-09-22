@@ -24,9 +24,20 @@
  *   remaining facts from the route's `defaultContextWindow`,
  *   `defaultMaxTokens`, and `defaultInput`.
  *
- * The endpoint is the only truth consulted — never the installed pi-ai
- * catalog. The stored list is replaced only when the merge actually changed
- * it, so an unchanged listing costs one endpoint read and no settings write.
+ * A route may additionally opt into an external metadata source, which fills
+ * the facts a listing endpoint structurally cannot state — accepted
+ * modalities, published rates, and (only when asked) reasoning efforts. That
+ * source is a third party and is treated as a *fallback*, not an authority: it
+ * fills a field the deployment left unstated and never overwrites one it
+ * stated, so a deployment's own tariff or its narrowed modality claim survives
+ * every refresh. Listing-disclosed capacities still win over a stored value,
+ * as above; the external source never displaces either.
+ *
+ * The endpoint is the only truth about *membership* — never the installed
+ * pi-ai catalog, and never the external source, which lists models this
+ * gateway may not serve. The stored list is replaced only when the merge
+ * actually changed it, so an unchanged listing costs one endpoint read and no
+ * settings write.
  *
  * @module dsh-llm-pi-ai/refresh
  */
@@ -36,6 +47,7 @@ import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { discoverModels } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
 import type { PiAiModelProfile } from './config.ts'
+import type { ModelsDevFacts } from './modelsdev.ts'
 
 /**
  * Minimum interval between two automatic refreshes of the same route.
@@ -50,24 +62,58 @@ import type { PiAiModelProfile } from './config.ts'
 export const AUTO_REFRESH_MIN_INTERVAL_MS = 30_000
 
 /**
+ * Fill the facts one stored entry left unstated from an external catalog.
+ *
+ * A stated field is never touched. The deployment's own tariff, its narrowed
+ * modality claim, and the efforts it chose are intent, and a third-party
+ * catalog disagreeing with intent does not win — which is also why this is
+ * separate from the listing's capacity rule, where the endpoint describing
+ * itself is authoritative. Capacities are filled here only because the listing
+ * did not disclose them, which for a gateway that reports ids alone is the
+ * whole point. The display name is included for the same reason: an entry
+ * that names nothing shows its id, and the catalog's label is an improvement
+ * that no stated field loses to.
+ * @param target - the entry being built, mutated in place.
+ * @param facts - what the external catalog discloses for this model id.
+ */
+function fillUnstated(target: PiAiModelProfile, facts: ModelsDevFacts): void {
+  if (target.name === undefined && facts.name !== undefined) target.name = facts.name
+  if (target.input === undefined && facts.input !== undefined) target.input = [...facts.input]
+  if (target.cost === undefined && facts.cost !== undefined) target.cost = facts.cost
+  if (target.reasoningEfforts === undefined && facts.reasoningEfforts !== undefined) {
+    target.reasoningEfforts = facts.reasoningEfforts
+  }
+  if (target.contextWindow === undefined && facts.contextWindow !== undefined) {
+    target.contextWindow = facts.contextWindow
+  }
+  if (target.maxTokens === undefined && facts.maxTokens !== undefined) target.maxTokens = facts.maxTokens
+}
+
+/**
  * Merge one endpoint listing into the route's stored model list.
  *
  * Stored entries keep their order and every field the deployment wrote; the
  * listing can only replace a stored capacity with one it discloses. A stored
  * model the listing no longer serves is dropped — retirement is the
- * gateway's call, and the listing is the only truth consulted. New models
- * are appended in listing order with exactly the fields the listing
+ * gateway's call, and the listing is the only truth about membership. New
+ * models are appended in listing order with exactly the fields the listing
  * discloses; reasoning efforts are never invented onto them, since no
  * listing endpoint reports per-model efforts. The result is the exact list a
  * refresh stores — nothing else reshapes it, so equality between the result
  * and the stored list is what makes a refresh a no-op.
+ *
+ * An `enrichment` map adds the facts the listing structurally cannot state,
+ * under the fill-only-when-unstated rule: the listing's own disclosures and
+ * every stored field outrank it.
  * @param current - the route's stored model entries, in stored order.
  * @param listed - the endpoint's current listing, in endpoint order.
+ * @param enrichment - facts an external catalog discloses, keyed by model id.
  * @returns the merged list, stored shape (no resolved defaults added).
  */
 export function mergeListedIntoConfigured(
   current: readonly PiAiModelProfile[],
   listed: readonly LlmDiscoveredModel[],
+  enrichment?: ReadonlyMap<string, ModelsDevFacts>,
 ): PiAiModelProfile[] {
   const listedById = new Map(listed.map(model => [model.id, model]))
   const merged: PiAiModelProfile[] = []
@@ -87,6 +133,14 @@ export function mergeListedIntoConfigured(
     if (disclosed.maxTokens !== undefined && disclosed.maxTokens !== entry.maxTokens) {
       next.maxTokens = disclosed.maxTokens
     }
+    // The listing's own modality disclosure fills a stored entry that states
+    // none. It is applied before the external catalog so a fact the endpoint
+    // itself disclosed is never sourced from a third party.
+    if (next.input === undefined && disclosed.inputModalities !== undefined && disclosed.inputModalities.length > 0) {
+      next.input = [...disclosed.inputModalities]
+    }
+    const facts = enrichment?.get(entry.id)
+    if (facts !== undefined) fillUnstated(next, facts)
     merged.push(next)
     mergedIds.add(entry.id)
   }
@@ -99,6 +153,15 @@ export function mergeListedIntoConfigured(
     if (model.name !== undefined && model.name !== model.id) entry.name = model.name
     if (model.contextWindow !== undefined) entry.contextWindow = model.contextWindow
     if (model.maxTokens !== undefined) entry.maxTokens = model.maxTokens
+    if (model.inputModalities !== undefined && model.inputModalities.length > 0) {
+      entry.input = [...model.inputModalities]
+    }
+    const facts = enrichment?.get(model.id)
+    if (facts !== undefined) {
+      // A listing entry that is an id alone names nothing, so the catalog's
+      // label is used; a listing that named the model keeps its own.
+      fillUnstated(entry, facts)
+    }
     merged.push(entry)
     mergedIds.add(model.id)
   }
@@ -117,6 +180,15 @@ export interface ProviderCatalogRefreshRequest {
   currentModels: readonly PiAiModelProfile[]
   /** Host-owned headers and credential resolution, when the route has any. */
   storedProfile?: () => StoredModelDiscoveryProfile | undefined
+  /**
+   * Facts an external catalog discloses for this route, keyed by model id.
+   *
+   * Absent when the route did not opt in or the catalog could not be read, so
+   * a refresh never depends on it. The endpoint remains the only source of
+   * membership either way: a model the catalog lists but the endpoint does not
+   * serve is never added.
+   */
+  enrichment?: ReadonlyMap<string, ModelsDevFacts>
   /** Store the merged list; called exactly when the merge changed it. */
   persist: (models: readonly PiAiModelProfile[]) => Promise<void>
 }
@@ -183,7 +255,7 @@ export async function refreshProviderCatalog(
       models: [...request.currentModels],
     }
   }
-  const models = mergeListedIntoConfigured(request.currentModels, listed)
+  const models = mergeListedIntoConfigured(request.currentModels, listed, request.enrichment)
   const currentById = new Map(request.currentModels.map(model => [model.id, model]))
   const mergedIds = new Set(models.map(model => model.id))
   const added: string[] = []

@@ -2,6 +2,8 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mergeListedIntoConfigured, refreshProviderCatalog } from '../src/refresh.ts'
+import type { ModelsDevFacts } from '../src/modelsdev.ts'
+import type { PiAiModelProfile } from '../src/config.ts'
 
 const servers: Server[] = []
 
@@ -70,6 +72,81 @@ describe('mergeListedIntoConfigured', () => {
   it('stores nothing that the listing did not disclose onto an id-only addition', () => {
     const merged = mergeListedIntoConfigured([], [{ id: 'bare' }])
     expect(merged).toEqual([{ id: 'bare' }])
+  })
+
+  it('fills unstated facts from the external catalog and overwrites nothing stated', () => {
+    const enrichment = new Map<string, ModelsDevFacts>([
+      ['curated', { contextWindow: 9, maxTokens: 8, input: ['text'], cost: { input: 99 } }],
+      ['bare', {
+        name: 'Bare Model',
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        input: ['text', 'image'],
+        cost: { input: 0.15, output: 0.6, cacheRead: 0.003 },
+      }],
+    ])
+    const stored: PiAiModelProfile[] = [
+      // States its own tariff and its own narrowed modality claim: a third
+      // party disagreeing with intent does not win. Its capacities are
+      // unstated, so those are filled.
+      { id: 'curated', cost: { input: 0.5 }, input: ['text'] },
+      // States nothing, so every disclosed fact lands — this is the case the
+      // enrichment exists for.
+      { id: 'bare' },
+    ]
+    const merged = mergeListedIntoConfigured(stored, [{ id: 'curated' }, { id: 'bare' }], enrichment)
+    expect(merged).toEqual([
+      { id: 'curated', cost: { input: 0.5 }, input: ['text'], contextWindow: 9, maxTokens: 8 },
+      {
+        id: 'bare',
+        name: 'Bare Model',
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        input: ['text', 'image'],
+        cost: { input: 0.15, output: 0.6, cacheRead: 0.003 },
+      },
+    ])
+  })
+
+  it('never adds a model the catalog lists but the endpoint does not serve', () => {
+    const enrichment = new Map<string, ModelsDevFacts>([['ghost', { contextWindow: 1 }]])
+    expect(mergeListedIntoConfigured([], [{ id: 'served' }], enrichment)).toEqual([{ id: 'served' }])
+    // Membership stays the endpoint's alone, including for a stored entry.
+    expect(mergeListedIntoConfigured([{ id: 'ghost' }], [{ id: 'served' }], enrichment))
+      .toEqual([{ id: 'served' }])
+  })
+
+  it('lets the endpoint capacity win over both the stored value and the catalog', () => {
+    const stored = [{ id: 'a', contextWindow: 100 }]
+    const listed = [{ id: 'a', contextWindow: 200 }]
+    const enrichment = new Map<string, ModelsDevFacts>([['a', { contextWindow: 300 }]])
+    expect(mergeListedIntoConfigured(stored, listed, enrichment)).toEqual([{ id: 'a', contextWindow: 200 }])
+  })
+
+  it('names an id-only addition from the catalog, keeping a listing name over it', () => {
+    const enrichment = new Map<string, ModelsDevFacts>([
+      ['bare', { name: 'From Catalog' }],
+      ['named', { name: 'From Catalog' }],
+    ])
+    const merged = mergeListedIntoConfigured(
+      [],
+      [{ id: 'bare' }, { id: 'named', name: 'From Listing' }],
+      enrichment,
+    )
+    expect(merged).toEqual([
+      { id: 'bare', name: 'From Catalog' },
+      { id: 'named', name: 'From Listing' },
+    ])
+  })
+
+  it('fills a stored entry from the listing own modality disclosure', () => {
+    // The listing interface declares modalities, so a source that discloses
+    // them must not have them silently dropped on the way into the store.
+    const merged = mergeListedIntoConfigured(
+      [{ id: 'a' }, { id: 'b', input: ['text'] }],
+      [{ id: 'a', inputModalities: ['text', 'image'] }, { id: 'b', inputModalities: ['text', 'image'] }],
+    )
+    expect(merged).toEqual([{ id: 'a', input: ['text', 'image'] }, { id: 'b', input: ['text'] }])
   })
 })
 
@@ -222,5 +299,51 @@ describe('refreshProviderCatalog', () => {
     expect(outcome.removed).toEqual([])
     expect(outcome.models).toEqual(stored)
     expect(persist).not.toHaveBeenCalled()
+  })
+
+  it('enriches an id-only listing from the supplied catalog and stores the result once', async () => {
+    // The gateway reports ids alone, which is the whole payload a listing of
+    // this shape carries; everything a spend estimate or a vision gate needs
+    // comes from the external catalog instead.
+    const server = await listingServer(JSON.stringify({
+      data: [{ id: 'deepseek-v4.1-flash', object: 'model', owned_by: 'opencode' }],
+    }))
+    const persist = vi.fn(async () => {})
+    const outcome = await refreshProviderCatalog({
+      provider: 'opencode-go',
+      baseURL: server.url,
+      currentModels: [],
+      enrichment: new Map<string, ModelsDevFacts>([['deepseek-v4.1-flash', {
+        name: 'DeepSeek V4.1 Flash',
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        input: ['text', 'image'],
+        cost: { input: 0.15, output: 0.6, cacheRead: 0.003 },
+      }]]),
+      persist,
+    })
+    expect(outcome.changed).toBe(true)
+    expect(outcome.added).toEqual(['deepseek-v4.1-flash'])
+    expect(outcome.models).toEqual([{
+      id: 'deepseek-v4.1-flash',
+      name: 'DeepSeek V4.1 Flash',
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      input: ['text', 'image'],
+      cost: { input: 0.15, output: 0.6, cacheRead: 0.003 },
+    }])
+    expect(persist).toHaveBeenCalledWith(outcome.models)
+
+    // Re-running with the enriched list stored is a no-op: enrichment adds no
+    // churn once its facts are in the store.
+    const second = await refreshProviderCatalog({
+      provider: 'opencode-go',
+      baseURL: server.url,
+      currentModels: [...outcome.models],
+      enrichment: new Map(),
+      persist,
+    })
+    expect(second.changed).toBe(false)
+    expect(persist).toHaveBeenCalledTimes(1)
   })
 })
