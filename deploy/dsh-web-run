@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# dsh-web-run — foreground harness runner for systemd.
+#
+# dsh-web-launch is built for interactive use: it setsid-backgrounds the
+# harness and exits once the token is recorded, which systemd reads as "the
+# service stopped". This runner stays in the foreground so systemd owns the
+# process and can restart it, and it builds its flag list from the same
+# /root/.dsh/.env knobs the launcher reads.
+#
+# Knobs are environment variables, NOT .env entries: the harness's own boot
+# .env loader refuses every DSH_* name in a .env file and aborts the launch.
+#   DSH_WEB_PORT     port to bind                (default 3080)
+#   DSH_WEB_HEAP_MB  V8 old-space ceiling in MB  (default 6144)
+#   DSH_WEB_BIN      path to the harness bin.js  (default below)
+#   DSH_NODE         node binary                 (default: first on PATH)
+set -euo pipefail
+
+PORT="${DSH_WEB_PORT:-3080}"
+HEAP="${DSH_WEB_HEAP_MB:-6144}"
+BIN="${DSH_WEB_BIN:-/root/deepseek-harness/apps/cli/lib/bin.js}"
+ENV_FILE="${DSH_HOME:-/root/.dsh}/.env"
+
+export HOME="${HOME:-/root}"
+export DSH_HOME="${DSH_HOME:-/root/.dsh}"
+export DSH_AGENTS_HOME="${DSH_AGENTS_HOME:-$DSH_HOME/.agents}"
+export DSH_TELEMETRY_DISABLED=1
+export NODE_NO_WARNINGS=1
+
+# Read one value out of the env file without exporting the whole thing.
+envval() { sed -n "s/^$1=//p" "$ENV_FILE" 2>/dev/null | head -1; }
+
+for name in COMMANDCODE_API_KEY OPENCODE_GO_API_KEY BRIGHTDATA_API_TOKEN; do
+  val=$(envval "$name") || true
+  [ -n "${val:-}" ] && export "$name=$val"
+done
+
+[ -f "$BIN" ] || { echo "dsh-web-run: no harness at $BIN (set DSH_WEB_BIN)" >&2; exit 1; }
+NODE_BIN="${DSH_NODE:-$(command -v node || true)}"
+[ -n "$NODE_BIN" ] || { echo "dsh-web-run: node not on PATH (set DSH_NODE)" >&2; exit 1; }
+
+ARGS=(web --host 0.0.0.0 --port "$PORT" --no-open)
+for host in $(envval WEBGUI_TRUSTED_HOSTS | tr ',' ' '); do
+  ARGS+=(--trusted-host "$host")
+done
+case "$(envval WEBGUI_BROWSER_AUTH)" in
+  0|false|no|off) ARGS+=(--no-browser-auth) ;;
+esac
+
+echo "dsh-web-run: exec $NODE_BIN --max-old-space-size=$HEAP $BIN ${ARGS[*]}"
+exec "$NODE_BIN" --max-old-space-size="$HEAP" "$BIN" "${ARGS[@]}"

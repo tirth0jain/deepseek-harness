@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# dsh-token-writer — record the current boot's launch-token URL for the sidebar.
+#
+# Runs as the unit's ExecStartPost. The harness prints its token line once at
+# boot:
+#     dsh web: http://127.0.0.1:3080/?token=<random> (LAN: http://...)
+# The unit appends stdout to the boot log, so this waits for that line and
+# writes the URL the VS Code sidebar extension reads first.
+#
+# With the browser handshake disabled (WEBGUI_BROWSER_AUTH=0) the harness
+# prints a clean URL. The extension discovers its target by matching
+# '?token=' in this file, so a sentinel is recorded rather than leaving it
+# empty -- otherwise the panel reports no target. A real token is random per
+# process, so the sentinel can never collide with one.
+#
+# Usage: dsh-token-writer [port] [boot-log] [token-file]
+set -u
+
+PORT="${1:-3080}"
+LOG="${2:-/root/.dsh/web.log}"
+OUT="${3:-/root/.dsh/current-token.txt}"
+
+mkdir -p "$(dirname "$OUT")"
+: > "$OUT"
+
+for _ in $(seq 1 60); do
+  line=$(grep -o 'dsh web: http[^ ]*' "$LOG" 2>/dev/null | tail -1)
+  if [ -n "$line" ]; then
+    url=${line#dsh web: }
+    url=${url%% *}
+    case "$url" in
+      *'?token='*) : ;;
+      *) url="${url}?token=disabled" ;;
+    esac
+    printf '%s\n' "$url" > "$OUT"
+    chmod 600 "$OUT" 2>/dev/null || true
+    echo "dsh-token-writer: recorded $url (port $PORT)"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "dsh-token-writer: no token line in $LOG after 60s" >&2
+exit 0
