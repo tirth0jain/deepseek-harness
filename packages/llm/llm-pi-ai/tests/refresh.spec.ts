@@ -148,6 +148,21 @@ describe('mergeListedIntoConfigured', () => {
     )
     expect(merged).toEqual([{ id: 'a', input: ['text', 'image'] }, { id: 'b', input: ['text'] }])
   })
+
+  it('refuses an excluded id in both directions, so a model can move to another route', () => {
+    const stored = [{ id: 'keep' }, { id: 'moved', contextWindow: 5 }]
+    const listed = [{ id: 'keep' }, { id: 'moved' }, { id: 'fresh' }]
+    const exclude = new Set(['moved', 'fresh'])
+    // Dropped from the stored list and never added from the listing.
+    expect(mergeListedIntoConfigured(stored, listed, undefined, exclude)).toEqual([{ id: 'keep' }])
+    // The same inputs without the exclusion keep all three, so the assertion
+    // above is not passing for some unrelated reason.
+    expect(mergeListedIntoConfigured(stored, listed)).toEqual([
+      { id: 'keep' },
+      { id: 'moved', contextWindow: 5 },
+      { id: 'fresh' },
+    ])
+  })
 })
 
 describe('refreshProviderCatalog', () => {
@@ -345,5 +360,40 @@ describe('refreshProviderCatalog', () => {
     })
     expect(second.changed).toBe(false)
     expect(persist).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports only the exclusions that actually refused something', async () => {
+    const server = await listingServer(JSON.stringify({ data: [{ id: 'keep' }, { id: 'moved' }] }))
+    const persist = vi.fn(async () => {})
+    const outcome = await refreshProviderCatalog({
+      provider: 'acme-gateway',
+      baseURL: server.url,
+      currentModels: [{ id: 'keep' }, { id: 'moved', contextWindow: 5 }],
+      exclude: new Set(['moved', 'typo-that-matches-nothing']),
+      persist,
+    })
+    expect(outcome.changed).toBe(true)
+    expect(outcome.models).toEqual([{ id: 'keep' }])
+    // 'moved' was refused on both sides; the typo matched neither, which is
+    // what lets the caller report dead configuration instead of ignoring it.
+    expect(outcome.excluded).toEqual(['moved'])
+    expect(outcome.removed).toEqual(['moved'])
+    expect(persist).toHaveBeenCalledWith([{ id: 'keep' }])
+  })
+
+  it('evaluates no exclusion against an empty listing, and says so', async () => {
+    const server = await listingServer(JSON.stringify({ data: [] }))
+    const outcome = await refreshProviderCatalog({
+      provider: 'acme-gateway',
+      baseURL: server.url,
+      currentModels: [{ id: 'moved' }],
+      exclude: new Set(['moved']),
+      persist: async () => {},
+    })
+    // Nothing merged, so nothing was refused: an empty `excluded` here must
+    // not read as "the declared exclusion is dead".
+    expect(outcome.empty).toBe(true)
+    expect(outcome.excluded).toEqual([])
+    expect(outcome.models).toEqual([{ id: 'moved' }])
   })
 })

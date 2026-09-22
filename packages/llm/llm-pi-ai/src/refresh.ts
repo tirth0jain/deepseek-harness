@@ -105,15 +105,23 @@ function fillUnstated(target: PiAiModelProfile, facts: ModelsDevFacts): void {
  * An `enrichment` map adds the facts the listing structurally cannot state,
  * under the fill-only-when-unstated rule: the listing's own disclosures and
  * every stored field outrank it.
+ *
+ * An `exclude` set is the one thing that overrides membership in both
+ * directions: an id it carries is neither added from the listing nor kept from
+ * the stored list. That is what lets a gateway advertising models it will not
+ * answer for on this route's protocol have those models declared on another
+ * route instead, without the refresh pulling them back.
  * @param current - the route's stored model entries, in stored order.
  * @param listed - the endpoint's current listing, in endpoint order.
  * @param enrichment - facts an external catalog discloses, keyed by model id.
+ * @param exclude - model ids this route must never hold.
  * @returns the merged list, stored shape (no resolved defaults added).
  */
 export function mergeListedIntoConfigured(
   current: readonly PiAiModelProfile[],
   listed: readonly LlmDiscoveredModel[],
   enrichment?: ReadonlyMap<string, ModelsDevFacts>,
+  exclude?: ReadonlySet<string>,
 ): PiAiModelProfile[] {
   const listedById = new Map(listed.map(model => [model.id, model]))
   const merged: PiAiModelProfile[] = []
@@ -122,6 +130,9 @@ export function mergeListedIntoConfigured(
   // the file stable and a merge that adds models puts them after what the
   // deployment already curated.
   for (const entry of current) {
+    // An excluded id is never held on this route, whatever the listing says,
+    // so naming one is enough to move a model to another route.
+    if (exclude?.has(entry.id) === true) continue
     // A stored model the listing no longer carries is retired; only the
     // listing's own ids survive the merge.
     const disclosed = listedById.get(entry.id)
@@ -148,6 +159,9 @@ export function mergeListedIntoConfigured(
   // for a model that already exists, so a display-name change on an existing
   // id is kept as the deployment wrote it.
   for (const model of listed) {
+    // Excluded before the membership check so an id both excluded and already
+    // merged is still refused.
+    if (exclude?.has(model.id) === true) continue
     if (mergedIds.has(model.id)) continue
     const entry: PiAiModelProfile = { id: model.id }
     if (model.name !== undefined && model.name !== model.id) entry.name = model.name
@@ -189,6 +203,13 @@ export interface ProviderCatalogRefreshRequest {
    * serve is never added.
    */
   enrichment?: ReadonlyMap<string, ModelsDevFacts>
+  /**
+   * Model ids this route must never hold, refused in both directions: never
+   * added from the listing, and a stored entry carrying one is dropped. This
+   * is the only thing that overrides membership, which is otherwise entirely
+   * the endpoint's call.
+   */
+  exclude?: ReadonlySet<string>
   /** Store the merged list; called exactly when the merge changed it. */
   persist: (models: readonly PiAiModelProfile[]) => Promise<void>
 }
@@ -213,6 +234,12 @@ export interface ProviderCatalogRefreshOutcome {
   removed: readonly string[]
   /** Model ids present before and after, unchanged. */
   kept: readonly string[]
+  /**
+   * Model ids the exclusion refused, whether from the listing or from the
+   * stored list. A declared exclusion absent here matched nothing at all,
+   * which is how a typo becomes visible instead of silently doing nothing.
+   */
+  excluded: readonly string[]
   /** The merged list, whether or not it was stored. */
   models: readonly PiAiModelProfile[]
 }
@@ -252,10 +279,13 @@ export async function refreshProviderCatalog(
       updated: [],
       removed: [],
       kept: request.currentModels.map(model => model.id),
+      // No merge ran, so no exclusion was evaluated either; the caller must
+      // not read this as "every declared exclusion matched nothing".
+      excluded: [],
       models: [...request.currentModels],
     }
   }
-  const models = mergeListedIntoConfigured(request.currentModels, listed, request.enrichment)
+  const models = mergeListedIntoConfigured(request.currentModels, listed, request.enrichment, request.exclude)
   const currentById = new Map(request.currentModels.map(model => [model.id, model]))
   const mergedIds = new Set(models.map(model => model.id))
   const added: string[] = []
@@ -275,9 +305,16 @@ export async function refreshProviderCatalog(
   for (const stored of request.currentModels) {
     if (!mergedIds.has(stored.id)) removed.push(stored.id)
   }
+  // An exclusion matched something when it either held a stored entry back or
+  // kept a listed one out. Either side counts, so a declared exclusion that
+  // matches nothing is distinguishable from one doing its job.
+  const excluded = [...new Set([
+    ...request.currentModels.filter(model => request.exclude?.has(model.id) === true).map(model => model.id),
+    ...listed.filter(model => request.exclude?.has(model.id) === true).map(model => model.id),
+  ])]
   // A refreshed route that lost nothing still re-checks its listing; an
   // unchanged result is exactly what makes the write a no-op.
   const changed = !deepEqualJson(models, request.currentModels)
   if (changed) await request.persist(models)
-  return { changed, empty: false, added, updated, removed, kept, models }
+  return { changed, empty: false, added, updated, removed, kept, excluded, models }
 }

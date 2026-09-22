@@ -374,6 +374,7 @@ export function apply(ctx: Context, config: Config): void {
       lastRefreshStarted.set(provider, now)
       const run = (async () => {
         const enrichment = await enrichmentFor(provider, profile)
+        const declared = profile.excludeModels ?? []
         const outcome = await refreshProviderCatalog({
           provider,
           ...api === undefined ? {} : { api },
@@ -381,6 +382,7 @@ export function apply(ctx: Context, config: Config): void {
           currentModels,
           ...storedProfile === undefined ? {} : { storedProfile: () => storedProfile },
           ...enrichment === undefined ? {} : { enrichment },
+          ...declared.length === 0 ? {} : { exclude: new Set(declared) },
           persist: async (models) => {
             await settings.update(NS, { providers: { [provider]: { models: [...models] } } })
           },
@@ -391,7 +393,20 @@ export function apply(ctx: Context, config: Config): void {
         } else if (outcome.changed) {
           ctx.logger.info(`llm-pi-ai: autoRefresh provider "${provider}" — now ${String(outcome.models.length)}`
             + ` models (${String(outcome.added.length)} added, ${String(outcome.updated.length)} updated,`
-            + ` ${String(outcome.removed.length)} removed)`)
+            + ` ${String(outcome.removed.length)} removed, ${String(outcome.excluded.length)} excluded)`)
+        }
+        // A declared exclusion that refused nothing is dead configuration, and
+        // a typo there is otherwise silent: the route simply keeps serving the
+        // model the deployment meant to move elsewhere. Reported only against a
+        // listing that was actually read, since an empty one evaluated nothing.
+        if (!outcome.empty && declared.length > 0) {
+          const refused = new Set(outcome.excluded)
+          const unused = declared.filter(id => !refused.has(id))
+          if (unused.length > 0 && !refreshDeclined.has(`exclude:${provider}`)) {
+            refreshDeclined.add(`exclude:${provider}`)
+            ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" excludes ${unused.join(', ')},`
+              + ' which its listing does not serve and its stored models do not carry; check the ids')
+          }
         }
       })().catch((error: unknown) => {
         ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" refresh failed:`

@@ -123,6 +123,29 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('sends the conversation session id under a route-named session header', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      // A static entry of the same name is the documented fallback, and the
+      // per-conversation id must win it — that is the whole point of naming
+      // the header, since one shared id is what the gateway asks against.
+      headers: { 'x-opencode-session': 'static-fallback' },
+      sessionHeader: 'x-opencode-session',
+    })
+    await assemble(ctx, { model: 'deepseek-v4-flash', messages: [], sessionId: 'conv-42' as never })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('conv-42')
+  })
+
+  it('falls back to the static session header when the request carries no session id', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      headers: { 'x-opencode-session': 'static-fallback' },
+      sessionHeader: 'x-opencode-session',
+    })
+    await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('static-fallback')
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {

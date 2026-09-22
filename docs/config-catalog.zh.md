@@ -1487,6 +1487,44 @@ export interface PiAiProviderProfile {
    */
   enrichReasoning?: boolean
   /**
+   * Model ids this route must never hold, whatever its own endpoint serves.
+   *
+   * A gateway may advertise models it will not actually answer for on this
+   * route's protocol. OpenCode Go is the worked example: one base URL fronts
+   * three APIs, `/chat/completions` for most models but `/responses` for a
+   * few and `/messages` for others, and a model reached on the wrong endpoint
+   * fails every request. `pi-ai`'s protocol is a property of the *route*, not
+   * of a model, so the split cannot be expressed in one route — the models
+   * that need another protocol are declared on a second route and named here,
+   * which is what stops this route's automatic refresh from pulling them back
+   * in. Membership would otherwise be entirely the endpoint's call, and the
+   * endpoint's listing says nothing about which API a model answers on.
+   *
+   * An excluded id is refused in both directions: it is never added from a
+   * listing, and a stored entry already carrying it is dropped, so naming an
+   * id here is enough to move a model between routes. An id no listing and no
+   * stored entry carries is reported as an unused exclusion rather than
+   * ignored, because a typo here is otherwise silent.
+   */
+  excludeModels?: string[]
+  /**
+   * Header name that carries the conversation's own session id on every
+   * request to this route, when a gateway asks for one.
+   *
+   * OpenCode Go requires a stable session id per conversation in
+   * `x-opencode-session` and refuses requests without it; `pi-ai`'s session
+   * affinity sends its own header names (`x-client-request-id`,
+   * `x-session-affinity`), so a gateway naming a different one cannot be
+   * satisfied by compat alone. A static `headers` entry satisfies the letter
+   * of the requirement but gives every conversation the same id, which is
+   * exactly what the gateway asks not to do — it is the per-conversation
+   * value that lets routing and prompt caching work. Naming the header here
+   * sends the real session id under it, winning a static entry of the same
+   * name; a request with no session id (a headless call, a subagent with
+   * none) falls back to whatever `headers` states, or omits the header.
+   */
+  sessionHeader?: string
+  /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
    * field. What neither sets keeps the installed catalog entry's value, then
