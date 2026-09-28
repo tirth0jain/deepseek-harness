@@ -404,6 +404,8 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `2128561ced` | fix: resolve a handoff source instead of requiring a live Agent |
 | `5fc68da79f` | fix: reach a preset's compaction backend through `/compact` |
 | `077769c5e1` | fix: carry the condensed conversation, not the summary declaration |
+| `8c9ff9d6fb` | feat: release what an archived Session costs |
+| `3bdfad037b` | docs: register the new API surface in the cordis catalog |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
