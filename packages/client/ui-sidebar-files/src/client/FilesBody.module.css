@@ -176,3 +176,44 @@
 .titleIcon {
   flex: none;
 }
+
+/* A file's row shares its line with the save control. Only files take this:
+   a directory's nested list has to stay in block flow under its own row. */
+.fileItem {
+  display: flex;
+  align-items: center;
+}
+
+.fileItem .row {
+  flex: 1 1 auto;
+}
+
+/* Saving is a secondary gesture, so it stays out of the way until the row is
+   under the pointer or the control itself holds focus. */
+.save {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
+  line-height: 1;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.fileItem:hover .save,
+.save:focus-visible {
+  opacity: 1;
+}
+
+.save:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}

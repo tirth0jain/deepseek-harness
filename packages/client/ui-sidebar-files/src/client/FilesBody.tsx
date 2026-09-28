@@ -14,7 +14,8 @@ import clsx from 'clsx'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale, PropsRuntime, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  FileTypeIcon, IconFolderCloseRegular, IconFolderOpenRegular, IconRefreshOutlineRegular, Tooltip, classifyFileType,
+  FileTypeIcon, IconDownloadOutlineRegular, IconFolderCloseRegular, IconFolderOpenRegular,
+  IconRefreshOutlineRegular, Tooltip, classifyFileType,
   IconPauseOutlineRegular, IconPlayOutlineRegular, PathLabel,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { fileAddressFor } from '@deepseek-ai/dsh-util-workspace-path'
@@ -66,12 +67,42 @@ export function failureLine(t: TranslateNS<'sidebarFiles'>, failure: RemoteFailu
   }
 }
 
-/** What every level shares: the tab's tree and the two gestures. */
+/** What every level shares: the tab's tree and the three gestures. */
 interface TreeContext {
   readonly state: FilesTabState
   readonly onToggle: (parent: string, path: string) => void
   readonly onOpen: (path: string) => void
+  readonly downloadUrl: (path: string, name: string) => string | undefined
   readonly t: TranslateNS<'sidebarFiles'>
+}
+
+/**
+ * Authenticated byte route owned by the Session Controller.
+ *
+ * Every path in this tree is absolute — the root comes from the Session's
+ * workspace — so the route can read a row directly, with no session-relative
+ * resolution to do here.
+ */
+const FILE_BYTES_PATH = '/api/file'
+
+/**
+ * Same-origin URL that saves one listed file.
+ *
+ * A page with no HTTP origin — an Electron `file://` shell — has no API to
+ * address, so it gets no URL and the row shows no save control rather than a
+ * broken one.
+ * @param page - the page's own transport and origin.
+ * @param path - the row's absolute path.
+ * @param name - the filename to save under.
+ * @returns the download URL, or undefined when the page cannot address the API.
+ */
+export function workspaceFileDownloadUrl(
+  page: { readonly protocol: string; readonly origin: string },
+  path: string,
+  name: string,
+): string | undefined {
+  if (page.protocol !== 'http:' && page.protocol !== 'https:') return undefined
+  return `${page.origin}${FILE_BYTES_PATH}?${new URLSearchParams({ path, download: '1', name })}`
 }
 
 /** One entry's row, and its children when it is an expanded directory. */
@@ -90,12 +121,18 @@ function Entry({ parent, entry, tree }: { parent: string; entry: WorkspaceDirect
     )
   }
   if (entry.type === 'file') {
+    const save = tree.t('entry.download', { name: entry.name })
+    const href = tree.downloadUrl(path, entry.name)
     return (
-      <li className={css.item} data-files-entry="file" data-files-path={path}>
+      <li className={clsx(css.item, css.fileItem)} data-files-entry="file" data-files-path={path}>
         <button type="button" className={css.row} onClick={() => { tree.onOpen(path) }}>
           <FileTypeIcon kind={classifyFileType(entry.name)} size={16} className={css.fileIcon} />
           <span className={css.name}>{entry.name}</span>
         </button>
+        {href !== undefined && <a className={css.save} href={href} download={entry.name}
+          aria-label={save} title={save} data-files-download>
+          <IconDownloadOutlineRegular size={14} />
+        </a>}
       </li>
     )
   }
@@ -181,6 +218,7 @@ export function FilesBody({
     onToggle: (parent, path) => { toggle(tab.id, parent, path, state.expanded, signal) },
     // Every row is under the tree's root, so its address is session-relative.
     onOpen: (path) => { tabActions.openResource(fileAddressFor(sessionId, state.root, path)) },
+    downloadUrl: (path, name) => workspaceFileDownloadUrl(window.location, path, name),
     t,
   }
   const reload = (): void => {

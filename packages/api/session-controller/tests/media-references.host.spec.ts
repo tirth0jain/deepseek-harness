@@ -5,13 +5,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
-import { SessionMediaReferences } from '../src/media-references.ts'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { contentDisposition, SessionMediaReferences } from '../src/media-references.ts'
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
 const DEFAULT_LIMIT = 20 * 1024 * 1024
 
+/** Every Context a mount created, disposed once per test. */
+const sharedContexts: Context[] = []
+
+afterEach(async () => {
+  await Promise.all(sharedContexts.splice(0).map(ctx => ctx.fiber.dispose()))
+})
+
 async function responseBytes(response: Response): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer())
+}
+
+/** One chunk sequence, so a test can prove the body streams instead of arriving whole. */
+async function* chunks(...parts: readonly Uint8Array[]): AsyncIterable<Uint8Array> {
+  for (const part of parts) yield part
 }
 
 describe('SessionMediaReferences /api/file', () => {
@@ -27,24 +41,29 @@ describe('SessionMediaReferences /api/file', () => {
     await rm(root, { recursive: true, force: true })
   })
 
-  async function mount(maxBytes = DEFAULT_LIMIT) {
+  async function mount(
+    maxBytes = DEFAULT_LIMIT,
+    downloadAttachment?: (request: unknown, signal: AbortSignal) => Promise<unknown>,
+  ) {
     const ctx = new Context()
     contexts.push(ctx)
-    let handler: ((request: Request) => Promise<Response>) | undefined
+    const handlers = new Map<string, (request: Request) => Promise<Response>>()
     const unregister = vi.fn(() => {})
     ctx.provide('connection', {
       fetch: {
-        register: (registered: { fetch: (request: Request) => Promise<Response> }) => {
-          handler = registered.fetch
+        register: (registered: { path: string; fetch: (request: Request) => Promise<Response> }) => {
+          handlers.set(registered.path, registered.fetch)
           return unregister
         },
       },
     } as never)
     ctx.provide('attachments', { imageLimits: { maxImageBytes: maxBytes } } as never)
+    if (downloadAttachment !== undefined) ctx.provide('sessionController', { downloadAttachment } as never)
     await ctx.plugin(LocalFileSystem, { cwd: root }).await()
     await ctx.plugin(SessionMediaReferences).await()
     const raw = (url: string, init?: RequestInit) => {
-      if (handler === undefined) throw new Error('route not registered')
+      const handler = handlers.get(new URL(url).pathname)
+      if (handler === undefined) throw new Error(`route not registered: ${new URL(url).pathname}`)
       return handler(new Request(url, init))
     }
     return {
@@ -216,9 +235,151 @@ describe('SessionMediaReferences /api/file', () => {
     expect((await route.call(path, { signal: AbortSignal.abort() })).status).toBe(499)
   })
 
-  it('unregisters the route on disposal', async () => {
+  it('adds an attachment disposition only when the request asks to download', async () => {
+    const route = await mount()
+    const path = join(root, 'report.csv')
+    await writeFile(path, PNG_BYTES)
+    expect((await route.call(path)).headers.get('content-disposition')).toBeNull()
+    expect((await route.call(path)).headers.get('content-security-policy')).toBe("sandbox; default-src 'none'")
+    // The parameter's presence is the request; a bare `?download` is the hand-written spelling.
+    for (const query of ['download=1', 'download=true', 'download=', 'download']) {
+      const response = await route.raw(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}&${query}`)
+      expect(response.headers.get('content-disposition')).toBe('attachment; filename="report.csv"; filename*=UTF-8\'\'report.csv')
+      // Saving is the one thing the display policy would otherwise have to allow.
+      expect(response.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; allow-downloads")
+      expect(await responseBytes(response)).toEqual(PNG_BYTES)
+    }
+    for (const query of ['download=0', 'download=false']) {
+      expect((await route.raw(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}&${query}`))
+        .headers.get('content-disposition')).toBeNull()
+    }
+    // A display request keeps its inline disposition even when a name is offered.
+    expect((await route.raw(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}&name=x.bin`))
+      .headers.get('content-disposition')).toBeNull()
+  })
+
+  it('lets an explicit download name replace the stored leaf without changing what is read', async () => {
+    const route = await mount()
+    const path = join(root, 'report.csv')
+    await writeFile(path, PNG_BYTES)
+    const response = await route.raw(
+      `http://127.0.0.1/api/file?path=${encodeURIComponent(path)}&download=1&name=${encodeURIComponent('日本語 "quoted".csv')}`,
+    )
+    // Quotes are dropped rather than escaped, and the non-ASCII spelling rides in `filename*`.
+    expect(response.headers.get('content-disposition'))
+      .toBe("attachment; filename=\"___ quoted.csv\"; filename*=UTF-8''%E6%97%A5%E6%9C%AC%E8%AA%9E%20quoted.csv")
+    expect(await responseBytes(response)).toEqual(PNG_BYTES)
+  })
+
+  it('never lets a download name smuggle a header or a path', () => {
+    expect(contentDisposition('a"b\r\nX-Evil: 1.txt'))
+      .toBe("attachment; filename=\"abX-Evil: 1.txt\"; filename*=UTF-8''abX-Evil%3A%201.txt")
+    expect(contentDisposition('/etc/passwd')).toBe("attachment; filename=\"passwd\"; filename*=UTF-8''passwd")
+    expect(contentDisposition('...')).toBe("attachment; filename=\"...\"; filename*=UTF-8''...")
+    expect(contentDisposition('')).toBe('attachment; filename="download"; filename*=UTF-8\'\'')
+  })
+
+  it('unregisters every route on disposal', async () => {
     const route = await mount()
     await route.dispose()
-    expect(route.unregister).toHaveBeenCalledTimes(1)
+    expect(route.unregister).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('SessionMediaReferences /api/attachment.download', () => {
+  it('requires both coordinates', async () => {
+    const route = await mountDownload(async () => { throw new Error('must not be called') })
+    expect((await route.raw('http://127.0.0.1/api/attachment.download')).status).toBe(400)
+    expect((await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1')).status).toBe(400)
+    expect((await route.raw('http://127.0.0.1/api/attachment.download?attachmentId=a1')).status).toBe(400)
+    expect((await route.raw('http://127.0.0.1/api/attachment.download?sessionId=&attachmentId=a1')).status).toBe(400)
+  })
+
+  it('refuses every request while no Session owner is mounted', async () => {
+    const route = await mountDownload(undefined, false)
+    const response = await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')
+    expect(response.status).toBe(503)
+  })
+
+  it('streams an uploaded file with its own name and length', async () => {
+    const head = new Uint8Array([1, 2])
+    const tail = new Uint8Array([3, 4, 5])
+    const download = vi.fn(async () => ({
+      name: 'quarterly notes.md',
+      mediaType: undefined,
+      length: head.length + tail.length,
+      bytes: chunks(head, tail),
+    }))
+    const route = await mountDownload(download)
+    const response = await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')
+    expect(response.status).toBe(200)
+    expect(await responseBytes(response)).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
+    expect(response.headers.get('content-type')).toBe('text/markdown')
+    expect(response.headers.get('content-length')).toBe('5')
+    expect(response.headers.get('content-disposition')).toBe('attachment; filename="quarterly notes.md"; filename*=UTF-8\'\'quarterly%20notes.md')
+    expect(download).toHaveBeenCalledWith({ sessionId: 's1', attachmentId: 'a1' }, expect.any(AbortSignal))
+  })
+
+  it('prefers the store media type and answers HEAD without pulling bytes', async () => {
+    const pulled = vi.fn()
+    const download = vi.fn(async () => ({
+      name: 'shot.png',
+      mediaType: 'image/png',
+      length: 4,
+      bytes: (async function* () { pulled(); yield PNG_BYTES })(),
+    }))
+    const route = await mountDownload(download)
+    const response = await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1', { method: 'HEAD' })
+    expect(response.status).toBe(200)
+    expect(response.body).toBeNull()
+    expect(response.headers.get('content-type')).toBe('image/png')
+    expect(response.headers.get('content-length')).toBe('4')
+    expect(pulled).not.toHaveBeenCalled()
+  })
+
+  it('answers an unreferenced attachment and an unknown Session as not found', async () => {
+    const route = await mountDownload(async () => {
+      throw new RemoteError('session/attachment-invalid', 'Attachment is not referenced by this session.', { reason: 'ATTACHMENT_NOT_REFERENCED' })
+    })
+    expect((await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')).status).toBe(404)
+    const missing = await mountDownload(async () => {
+      throw new RemoteError('session/not-found', 'no such session', { sessionId: SessionId('s1') })
+    })
+    const response = await missing.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')
+    expect(response.status).toBe(404)
+    expect(await response.text()).toBe('session/not-found')
+  })
+
+  it('reports an unclassified store failure as a server failure', async () => {
+    const route = await mountDownload(async () => { throw new Error('store exploded') })
+    expect((await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')).status).toBe(500)
+  })
+})
+
+async function mountDownload(
+  downloadAttachment?: (request: unknown, signal: AbortSignal) => Promise<unknown>,
+  provide = true,
+): Promise<{ raw: (url: string, init?: RequestInit) => Promise<Response> }> {
+  const ctx = new Context()
+  sharedContexts.push(ctx)
+  const handlers = new Map<string, (request: Request) => Promise<Response>>()
+  ctx.provide('connection', {
+    fetch: {
+      register: (registered: { path: string; fetch: (request: Request) => Promise<Response> }) => {
+        handlers.set(registered.path, registered.fetch)
+        return () => {}
+      },
+    },
+  } as never)
+  ctx.provide('attachments', { imageLimits: { maxImageBytes: DEFAULT_LIMIT } } as never)
+  if (provide) ctx.provide('sessionController', { downloadAttachment } as never)
+  await ctx.plugin(LocalFileSystem, { cwd: tmpdir() }).await()
+  await ctx.plugin(SessionMediaReferences).await()
+  return {
+    raw: (url, init) => {
+      const handler = handlers.get(new URL(url).pathname)
+      if (handler === undefined) throw new Error(`route not registered: ${new URL(url).pathname}`)
+      return handler(new Request(url, init))
+    },
+  }
+}

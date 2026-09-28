@@ -158,6 +158,24 @@ describe('FilesBody', () => {
     expect(other.querySelector('[aria-disabled="true"]')?.getAttribute('title')).toBe(zh['entry.other'])
   })
 
+  it('saves each file row from its own absolute path, and offers nothing to save for anything else', async () => {
+    const { view, script } = mountBody()
+    await act(() => script.watches.ready(ROOT))
+    await act(() => script.settle({ ok: true, value: ROOT_LEVEL }))
+    const save = view.container.querySelector(`[data-files-path="${ROOT}/README.md"] [data-files-download]`)!
+    expect(save.tagName).toBe('A')
+    expect(save.getAttribute('download')).toBe('README.md')
+    expect(save.getAttribute('aria-label')).toBe(zh['entry.download'].replace('{name}', 'README.md'))
+    const url = new URL(save.getAttribute('href')!, window.location.origin)
+    expect(url.origin).toBe(window.location.origin)
+    expect(url.pathname).toBe('/api/file')
+    expect(Object.fromEntries(url.searchParams))
+      .toEqual({ path: `${ROOT}/README.md`, download: '1', name: 'README.md' })
+    // A directory is not a file to save, and an `other` entry is not either.
+    expect(view.container.querySelector(`[data-files-path="${ROOT}/src"] [data-files-download]`)).toBeNull()
+    expect(view.container.querySelector(`[data-files-path="${ROOT}/pipe"] [data-files-download]`)).toBeNull()
+  })
+
   it('marks a cut listing and an empty one', async () => {
     const { view, script } = mountBody()
     await act(() => script.watches.ready(ROOT))
@@ -168,7 +186,6 @@ describe('FilesBody', () => {
     await act(() => script.settle({ ok: true, value: { entries: [], truncated: false } }))
     expect(view.container.querySelector('[data-files-row="empty"]')?.textContent).toBe(zh.empty)
   })
-
   it('shows a failed level under its directory with the failure code', async () => {
     const { view, script } = mountBody()
     await act(() => script.watches.ready(ROOT))

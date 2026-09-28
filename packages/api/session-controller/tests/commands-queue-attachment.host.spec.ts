@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, Inbox, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { AttachmentError, AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createAssistantMessage, createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import SessionStore, {
@@ -323,6 +323,7 @@ function event(type: string, seq: SessionSeq, data: unknown): SessionEvent {
 async function persistedController(
   events: SessionEvent[],
   readImage: (ref: ImageAttachmentRef) => Promise<{ ref: ImageAttachmentRef; data: Uint8Array }>,
+  readFileStream?: (ref: FileAttachmentRef, signal?: AbortSignal) => AsyncIterable<Uint8Array>,
 ): Promise<{ ctx: Context; controller: SessionCommandController; sessionId: SessionId }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -343,7 +344,7 @@ async function persistedController(
     }),
   }) as never)
   installSessionReadTestServices(ctx)
-  ctx.provide('attachments', { readImage } as never)
+  ctx.provide('attachments', { readImage, readFileStream } as never)
   const agents = { resolveAgent: vi.fn() } as unknown as ApiSessionAgentController
   return { ctx, controller: new SessionCommandController(ctx, agents, '/workspace'), sessionId }
 }
@@ -561,3 +562,133 @@ describe('Session attachment authorization', () => {
     await ctx.fiber.dispose()
   })
 })
+
+describe('Session attachment download', () => {
+  const signal = new AbortController().signal
+
+  it('opens an uploaded file as its own display name and complete byte sequence', async () => {
+    const file = fileRef('uploaded', 'quarterly notes.md', 5)
+    const parts = [Uint8Array.of(1, 2), Uint8Array.of(3), Uint8Array.of(4, 5)]
+    const read = vi.fn((ref: FileAttachmentRef) => (async function* () {
+      // The log is read back through persistence, so the ref arrives value-equal, not identical.
+      expect(ref.attachmentId).toBe(file.attachmentId)
+      for (const part of parts) yield part
+    })())
+    const { ctx, controller, sessionId } = await persistedController(
+      [event('user/message', SessionSeq(0), {
+        id: 'uploaded', role: 'user', source: { kind: 'user' }, content: [{ type: 'file', attachment: file }],
+      })],
+      () => Promise.reject(new Error('not an image')),
+      read,
+    )
+
+    const download = await controller.downloadAttachment({ sessionId, attachmentId: file.attachmentId }, signal)
+    expect(download).toMatchObject({ name: 'quarterly notes.md', mediaType: undefined, length: 5 })
+    const collected: number[] = []
+    for await (const part of download.bytes) collected.push(...part)
+    expect(collected).toEqual([1, 2, 3, 4, 5])
+    expect(read).toHaveBeenCalledTimes(1)
+    await ctx.fiber.dispose()
+  })
+
+  it('serves an empty upload without inventing a chunk', async () => {
+    const file = fileRef('empty-upload', 'empty.bin', 0)
+    const { ctx, controller, sessionId } = await persistedController(
+      [event('user/message', SessionSeq(0), {
+        id: 'empty', role: 'user', source: { kind: 'user' }, content: [{ type: 'file', attachment: file }],
+      })],
+      () => Promise.reject(new Error('not an image')),
+      () => (async function* () { /* no bytes at all */ })(),
+    )
+    const download = await controller.downloadAttachment({ sessionId, attachmentId: file.attachmentId }, signal)
+    const collected: number[] = []
+    for await (const part of download.bytes) collected.push(...part)
+    expect(collected).toEqual([])
+    expect(download.length).toBe(0)
+    await ctx.fiber.dispose()
+  })
+
+  it('falls back to an image when the log reaches the id as one', async () => {
+    const named: ImageAttachmentRef = { ...imageRef('shot'), mediaType: 'image/jpeg', name: 'photo.jpg', bytes: 3 }
+    const anonymous = imageRef('anon')
+    const { ctx, controller, sessionId } = await persistedController(
+      [event('user/message', SessionSeq(0), {
+        id: 'images', role: 'user', source: { kind: 'user' },
+        content: [{ type: 'image', attachment: named }, { type: 'image', attachment: anonymous }],
+      })],
+      ref => Promise.resolve({ ref, data: Uint8Array.of(9, 8, 7) }),
+    )
+
+    const shot = await controller.downloadAttachment({ sessionId, attachmentId: named.attachmentId }, signal)
+    expect(shot).toMatchObject({ name: 'photo.jpg', mediaType: 'image/jpeg', length: 3 })
+    expect([...(await collect(shot.bytes))]).toEqual([9, 8, 7])
+    // An unnamed image still needs a filename with an extension a browser can act on.
+    const fallback = await controller.downloadAttachment({ sessionId, attachmentId: anonymous.attachmentId }, signal)
+    expect(fallback).toMatchObject({ name: 'image.png', mediaType: 'image/png' })
+    await ctx.fiber.dispose()
+  })
+
+  it('refuses an attachment this Session never referenced', async () => {
+    const { ctx, controller, sessionId } = await persistedController(
+      [event('user/message', SessionSeq(0), { id: 'none', role: 'user', source: { kind: 'user' }, content: [] })],
+      () => Promise.reject(new Error('must not read')),
+      () => (async function* () { /* unreachable */ })(),
+    )
+    await expect(controller.downloadAttachment({ sessionId, attachmentId: AttachmentId('stranger') }, signal))
+      .rejects.toMatchObject({ code: 'session/attachment-invalid', details: { reason: 'ATTACHMENT_NOT_REFERENCED' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('classifies a store failure on the first chunk without returning a stream', async () => {
+    const missing = fileRef('gone', 'gone.bin', 4)
+    const broken = fileRef('broken', 'broken.bin', 4)
+    const { ctx, controller, sessionId } = await persistedController(
+      [event('user/message', SessionSeq(0), {
+        id: 'broken-files', role: 'user', source: { kind: 'user' },
+        content: [{ type: 'file', attachment: missing }, { type: 'file', attachment: broken }],
+      })],
+      () => Promise.reject(new Error('not an image')),
+      (ref) => {
+        if (ref.attachmentId === broken.attachmentId) throw new Error('iterator construction failed')
+        return (async function* () {
+          throw new AttachmentError('stored file is unavailable', 'ATTACHMENT_NOT_FOUND')
+        })()
+      },
+    )
+
+    await expect(controller.downloadAttachment({ sessionId, attachmentId: missing.attachmentId }, signal))
+      .rejects.toMatchObject({ code: 'session/attachment-invalid' })
+    await expect(controller.downloadAttachment({ sessionId, attachmentId: broken.attachmentId }, signal))
+      .rejects.toMatchObject({ code: 'gateway/internal' })
+    await ctx.fiber.dispose()
+  })
+
+  it('reports an unknown Session before looking at any store', async () => {
+    const { ctx, controller } = await persistedController([], () => Promise.resolve({
+      ref: imageRef('unused'), data: Uint8Array.of(1),
+    }))
+    await expect(controller.downloadAttachment({
+      sessionId: SessionId('missing'), attachmentId: AttachmentId('att'),
+    }, signal)).rejects.toMatchObject({ code: 'session/not-found' })
+    await ctx.fiber.dispose()
+  })
+})
+
+/** Read one byte sequence to a single array, so a test can compare contents. */
+async function collect(bytes: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const parts: Uint8Array[] = []
+  for await (const part of bytes) parts.push(part)
+  const total = parts.reduce((sum, part) => sum + part.length, 0)
+  const joined = new Uint8Array(total)
+  let at = 0
+  for (const part of parts) {
+    joined.set(part, at)
+    at += part.length
+  }
+  return joined
+}
+
+function fileRef(id: string, name: string, bytes: number): FileAttachmentRef {
+  return { attachmentId: AttachmentId(id), name, bytes }
+}
+

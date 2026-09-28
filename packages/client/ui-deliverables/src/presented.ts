@@ -10,6 +10,15 @@ export const PRESENT_OPEN_PATH = '/api/present.open'
 export const PRESENT_HOST_PATH = '/api/present.host'
 
 /**
+ * Authenticated GET/HEAD byte route owned by the Session Controller.
+ *
+ * Displaying a workspace file and saving it are one route: a download is the
+ * same bytes with an attachment disposition, so saving costs no new
+ * authorization path and no bytes of this page's heap.
+ */
+export const FILE_BYTES_PATH = '/api/file'
+
+/**
  * Browser-relative form of {@link PRESENT_OPEN_PATH}; see
  * .agents/notes/implemented/architecture/2026-09-14-web-document-relative-app-routes.md.
  */

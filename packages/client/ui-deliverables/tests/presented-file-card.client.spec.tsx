@@ -70,3 +70,33 @@ it('renders the supplied action independently from the card preview', () => {
   fireEvent.click(view.getByRole('button', { name: 'Preview out/report.pdf in sidebar' }))
   expect(p.onPreview).toHaveBeenCalledOnce()
 })
+
+it('offers a save beside the native actions even when the Host has no desktop', () => {
+  const p = props()
+  // The contributed native control is what a Host without a desktop withholds;
+  // the save link is the card's own and must survive that.
+  const view = render(<PresentedFileCard {...p} cwd="/work" host={null} actions={null} />)
+  const save = view.getByRole('link', { name: en['presented.download'] })
+  const url = new URL(save.getAttribute('href')!, window.location.origin)
+  expect(url.origin).toBe(window.location.origin)
+  expect(url.pathname).toBe('/api/file')
+  expect(Object.fromEntries(url.searchParams)).toEqual({
+    path: '/work/out/report.pdf', download: '1', name: 'report.pdf',
+  })
+  expect(save.getAttribute('download')).toBe('report.pdf')
+})
+
+it('offers no save when the workspace root cannot make the declaration absolute', () => {
+  const p = props()
+  const view = render(<PresentedFileCard {...p} />)
+  expect(view.queryByRole('link', { name: en['presented.download'] })).toBeNull()
+  // The rest of the card is untouched by the missing address.
+  expect(view.getByRole('button', { name: 'Native file action' })).toBeTruthy()
+  expect(view.getByRole('button', { name: 'Preview out/report.pdf in sidebar' })).toBeTruthy()
+})
+
+it('localizes the save link', () => {
+  const p = { ...props(), cwd: '/work', t: makeTranslate(zh) }
+  const view = render(<PresentedFileCard {...p} />)
+  expect(view.getByRole('link', { name: zh['presented.download'] })).toBeTruthy()
+})
