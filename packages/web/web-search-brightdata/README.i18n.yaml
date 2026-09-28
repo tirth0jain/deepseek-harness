@@ -1,0 +1,64 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/web/web-search-brightdata/README.md
+/:
+  en: 638f15be1a3e87e5
+  zh: daac13ff925c1fcd
+/deepseek-ai-dsh-web-search-brightdata:
+  en: 4f2045acb6f86afa
+  zh: 46bfe846b93e372f
+/deepseek-ai-dsh-web-search-brightdata/summary:
+  en: 1f02fde063fdeebe
+  zh: c1b06df172cab057
+/deepseek-ai-dsh-web-search-brightdata/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-web-search-brightdata/use-this-package:
+  en: b8863516a2e1470d
+  zh: 6cb161191f0f471f
+/deepseek-ai-dsh-web-search-brightdata/use-this-package/when-to-choose-it:
+  en: 43a2c8d7f737cd75
+  zh: 5e6b1815d4593102
+/deepseek-ai-dsh-web-search-brightdata/use-this-package/minimal-configuration:
+  en: c8015c5e107376c5
+  zh: 7d8357c038b65583
+/deepseek-ai-dsh-web-search-brightdata/use-this-package/what-a-search-returns:
+  en: f1ec8c84e49b4d96
+  zh: 1b2af9de9be43a69
+/deepseek-ai-dsh-web-search-brightdata/use-this-package/failures-and-recovery:
+  en: 0a1e7b4a55c54e5c
+  zh: 1c39c96a50df6917
+/deepseek-ai-dsh-web-search-brightdata/understand-the-implementation:
+  en: 9842c69ad3636bb3
+  zh: 3cdc3f816cbdd0cb
+/deepseek-ai-dsh-web-search-brightdata/understand-the-implementation/design-philosophy:
+  en: 71996cad8a64bf8b
+  zh: 9c64e044b2168c0b
+/deepseek-ai-dsh-web-search-brightdata/understand-the-implementation/source-map:
+  en: e12965d06b5a4980
+  zh: 47d88703cbc47ed1
+/deepseek-ai-dsh-web-search-brightdata/understand-the-implementation/request-and-mapping-flow:
+  en: a7b0524805275d13
+  zh: 5e4646a1cdbf330a
+/deepseek-ai-dsh-web-search-brightdata/further-exploration:
+  en: b6d4f1980f4735f3
+  zh: 9c07d1fc38a6c366
+/deepseek-ai-dsh-web-search-brightdata/model-experience:
+  en: beb319a91ff5934c
+  zh: 4624b8ffa17db2cd
+/deepseek-ai-dsh-web-search-brightdata/model-experience/kv-cache-effect:
+  en: 40294c1c31b74824
+  zh: d75d48f485447a74
+/deepseek-ai-dsh-web-search-brightdata/known-limitations-and-deferred-work:
+  en: 097357183b2d9f69
+  zh: c2a06e527f831b76
+/deepseek-ai-dsh-web-search-brightdata/known-limitations-and-deferred-work/dev-note:
+  en: 7f775cc79dbce94b
+  zh: 12b8f68f9e7c48ca
+/deepseek-ai-dsh-web-search-brightdata/known-limitations-and-deferred-work/dev-note/future-provider-neutral-search-controls:
+  en: 76228df73d0397ee
+  zh: eda8223faeaba63a
+/deepseek-ai-dsh-web-search-brightdata/known-limitations-and-deferred-work/dev-note/open-question-parser-durability:
+  en: 128e683403f4f4b4
+  zh: ba0093f4c53c9612
