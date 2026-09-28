@@ -1,0 +1,450 @@
+# Fork changes and added features
+
+This is the running record of everything this fork adds on top of upstream DeepSeek Harness, written for whoever picks it up next. It covers what changed, why each change exists, how to rebuild and verify it, and what is still rough. Upstream's own history and docs remain authoritative for everything not listed here.
+
+Sources of truth: the code and tests in this repository, `~/.dsh/settings.yaml` for this deployment's configuration, and the Agent Notes under `.agents/notes/`. Where a claim here can drift from the code, the code wins.
+
+## Repository layout and current state
+
+Two checkouts of the same history are kept side by side, and they are expected to stay byte-identical:
+
+| Path | Role | Restart helper |
+| --- | --- | --- |
+| `/root/projects/dsh-new-upstream` | Primary checkout; the live GUI runs from here | `dshkill-new` / `dshstart` |
+| `/root/projects/deepseek-harness` | Mirror checkout on an alternate port (3082) | `dshstart-old` |
+
+Only one harness runs at a time: both share `~/.dsh`, and booting one re-points that profile's module symlinks at its own build. The sync direction is always **new → old**; the mirror is fast-forwarded and rebuilt, never edited independently. The mirror reaches the primary through its own `new` remote (its `origin` is this fork on GitHub and is not the sync source), and it must be rebuilt before it can serve, because `lib/` is gitignored:
+
+```bash
+git -C /root/projects/deepseek-harness fetch new
+git -C /root/projects/deepseek-harness merge --ff-only new/master
+(cd /root/projects/deepseek-harness && pnpm install && pnpm run build:lib)
+diff -r --brief /root/projects/dsh-new-upstream/packages /root/projects/deepseek-harness/packages \
+  -x node_modules -x lib -x dist -x '*.tsbuildinfo'
+```
+
+A mirror build must never run while the other harness is serving — see the rebuild/restart rule under the upstream sync below.
+
+## Upstream sync: 0.1.6-alpha.2
+
+`94210c9097` merges `upstream/master` (1548 commits) into the fork, taking the tree from `0.1.5-rc.2` to `0.1.6-alpha.2`. All 20 conflicts were resolved by hand, and three fork features had to be adapted because upstream had reworked the same code.
+
+**Rebuild and restart together, or the client half breaks.** The Host process and the client plugin bundles it serves are two halves of one build. Rebuilding `lib/` while a harness is running leaves the old Host in memory serving the new bundles, so the browser pairs a new `@deepseek-ai/dsh-client-ui-conversation` against an old slots core and reports *Failed to load plugins* with `this._core.registerFactory is not a function`. Nothing is corrupted — the fix is to restart the harness so both halves come from the same build. Treat the rebuild and the restart as one step, and hard-reload the tab afterwards.
+
+Adaptations the merge forced:
+
+- **`client-connection` settings write access.** Upstream replaced the fixture-based `apply` with `installConnection(ctx, options)`, so `canWriteSettings` moved onto that seam: `ConnectionInstallOptions.trustedHosts` is now an explicit input beside `transport` / `recovery` / `location`, `ConnectionLocation` gained an optional `host` (the port-qualified page authority the fence compares), and `apply` reads the injected `__DSH_TRUSTED_HOSTS__` global and passes it through. Behavior is unchanged.
+- **`ui-chat` / `ui-trajectory` pricing.** Kept our `costOf` / `useModelCosts` / turn-loader wiring while taking upstream's `MarkdownDelegateProvider`, `jsonStringWrapping`, and its removal of `renderSlotChain`. Our `requestRoute` in `TrajectoryView.tsx` followed upstream's rename of the assistant metadata field to `AssistantProviderMetadata`.
+- **Tests.** Followed upstream's `SessionPendingInteractionSnapshot` → `SessionStatusSnapshot` rename and its removal of `SessionSnapshot.queue` and the fixture `search` location field.
+
+**Version and closure.** Upstream's root version is now `0.1.6-alpha.2`, which every dsh-family manifest must match; `packages/web/web-search-brightdata` was still on `0.1.5-rc.2` and is bumped here. `python/sdk-runtime` also gained `@deepseek-ai/dsh-host-webserver`, the peer `llm-pi-ai` needs for the auto-refresh feature. Eight orphaned build directories left behind by packages upstream deleted (`packages/e2b/*`, `packages/fs/tool-present`, and friends) were removed; they held only ignored `lib/` and `node_modules/`, and the workspace `constraints` gate reads the filesystem, so it failed on them.
+
+**Lifting the `--host 0.0.0.0` guard is still ours.** Upstream had already shipped the LAN trust machinery — `resolveLanTrust`, the `trustedHosts` config, the `/api` browser-trust fence and the `--trusted-host` flag all predate the fork. What upstream still refuses is the bind itself: its `startup.ts` errors on `--host 0.0.0.0` "for safety". `165591cce5` removes that guard and nothing else, so the merge kept our `startup.ts` and took upstream's everywhere else.
+
+## Upstream sync: 0.2.0-rc.1
+
+The fork's 52 local commits are ported onto `upstream/master` at dsh **0.2.0-rc.1** (`4878cdabd8`), 2,224 commits past the `0.1.6-alpha.2` merge base `ddefc45fbc`. Our 52 commits touched 228 files; upstream had also changed **157** of them, so this is a re-application rather than a merge: the work was done on `sync/upstream-0.2.0-rc.1` in a **separate git worktree** so the live checkout kept running from its own build, and `master` was not moved until both type graphs, the test suites and the gates were green.
+
+The port is organized as ten clusters, each re-applied against the new base's APIs rather than patched across:
+
+| cluster | commits | state |
+| --- | --- | --- |
+| host flag + `deploy/` | `165591cce5`, `e9ee5c1302` | ported |
+| trusted hosts, browser-auth off, settings authority | `34cd59ef4b`, `8ab51e8613` | ported |
+| Bright Data web search | `9712944bae`, `bbec969caa`, `71a4364138` | ported |
+| llm-pi-ai catalogs (refresh, models.dev, exclusions, session header) | `8269a9f757`, `1d6fa0c310`, `a91cf74b9d`, `c220ee998b`, `071cc8f20b` | ported |
+| published-rate pricing and per-attempt bands | `c30df9864e`, `35e16d23a1`, `943c10eb61`, `7e964834b9` | ported |
+| per-turn throughput and the walk-back loader | `83c4ef781f`, `4329c8a4cb`, `b0156a62f8` | ported |
+| bounded read and archive release | `530f4d6e98`, `8aff1634e9`, `8c9ff9d6fb` | ported |
+| handoff: continue in a condensed chat | `6178175e2e`, `2128561ced`, `5fc68da79f`, `077769c5e1` | ported |
+| saving uploaded and delivered files | `66141a12b7` | ported |
+
+### The four decisions this port was built to
+
+- **The handoff is a session-menu slot entry.** Upstream replaced the hardcoded session-row action array with list slots and registers its own built-ins as entries (`pin` 100, `rename` 200, `fork` 300, `archive` 400, "orders step by 100 so a plugin entry can land between them"). Handoff registers as `sidebar.workspaces.session.menu.item` at order 350 instead of being threaded through `Rows.tsx` as a prop.
+- **Per-turn throughput survives, behind upstream's preference.** Upstream *deleted* the per-turn fold and kept only a decode-basis tok/s in the composer dock, plus a `performanceUsage` display preference. Our per-turn LLM-span readout is restored and gated on that same preference, so `compact` hides it and the dock figure still exists beside it.
+- **Opening a file and saving a file are different jobs.** Upstream opens presented and sidebar files in the OS default application; our `?download=1` / `/api/attachment.download` save action renders in the same `.actions` row rather than replacing it.
+- **Archiving both stops work and frees memory.** Upstream's archive gate (`workspace/session-activity` / `workspace/session-stop`, refusing while anything runs) is kept, and our `workspace/session-archived` announcement follows it: the release never races a stop that is still settling the same Session. The handoff archives its source through the same path.
+
+### What the new base forced
+
+- **The session log is a new generation.** V4 replaced the `plugin` message-source wrapper with producer-owned kinds (`compact-checkpoint`, and a namespaced `plugin:<name>` for anything else), so `speakerOf` recognizes checkpoints through `isCompactCheckpointSource` and the handoff writes its own `handoff` kind. Two consequences bit the bounded read: the handle could no longer assert that an unwindowed decode retains one event per counted row (V4 refuses retired content and folds relationships, so N rows can retain fewer), and the migration preparation and publish paths must *retain* their memo entry — the next preparation compares against it, and dropping it hid published facts so a changed child went undetected.
+- **Config is volatile.** The `installSection` settings seam is gone. A plugin's config fields are `Volatile<T>` read through `.get()`, its settings namespace is its loader entry id, and a configuration write arrives as `loader/volatile-update`. Every ported feature that read or wrote settings was rewritten onto that shape, including `llm-pi-ai`'s catalog refresh and `llm`'s `cost` table.
+- **The connection plugin admits through one operator peer.** `peer-scope.ts` is gone and `requestRejection` became `admit()`, so `browserAuth: false` had to be layered onto the new seam rather than the old one; upstream's document-relative mount handling in `browser-auth.ts` was kept as-is.
+- **Upstream rewrote the session list.** `Rows.tsx` and `WorkspaceBrowser.tsx` lost their `onFork`/`onArchive` props (23 upstream commits), which is why the handoff became a slot entry rather than a prop.
+
+### Known gaps in the port
+
+- The `ui-chat` rail keeps upstream's virtualized marks; our reachable hover card was rebuilt on top of them, but the rail's read-only tooltip state is upstream's.
+- `attachmentDownloadUrl` is optional on the chat contract, because upstream's `ChatView.tsx` / `ChatNodeSeat.tsx` build that owner props object and were kept as-is.
+- Upstream has no monetary pricing at all — no `LlmModelCost`, no peak bands, no per-attempt buckets — so every part of that feature is ours and had to be re-added whole rather than merged.
+
+## Deployment and access
+
+**LAN and reverse-proxy binding.** Upstream's startup guard rejected `--host 0.0.0.0` even though the web runtime, LAN-trust sampling, and URL announcement already handled it. Commit `165591cce5` removes that guard, so `dsh web --host 0.0.0.0 --port 3080` serves behind a LAN reverse proxy. The `/api` browser-trust fence is unchanged: it still requires a loopback, sampled-LAN, or declared `--trusted-host` authority, so pair `0.0.0.0` with `--trusted-host` when browsers reach the server through a different host name. This is what the live instance runs:
+
+```
+node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open
+```
+
+**Token handshake.** `dsh web` prints a tokenized URL; the browser exchanges the token for a signed session cookie and redirects to the clean root. The token is written to `~/.dsh/current-token.txt`. Hitting the server without it returns `401 dsh web authentication required`. In headless verification, fetch the tokenized URL once and let the cookie jar keep the session — a bare page reload without the cookie comes back as the 401 text page, so re-authenticate rather than reusing a stale tab. The live instance no longer enforces this handshake; see *Disabling the token handshake* below for the switch and what it does and does not turn off.
+
+**Editor access.** A code-server / VS Code route was scripted separately during setup: it installs `@deepseek-ai/dsh` and `@vscode/vsce` globally, patches the published bundle for LAN binding, and builds a VSIX. That script is kept at `/root/projects/dsh-vscode.md` and is not part of either repository.
+
+**Settings write access over the network** (`8ab51e8613`). Upstream gated the settings document on `ctx.remote.$host.isLoopback`, so any page whose authority was not `localhost` / `127.x.x.x` ran its settings scope in `'memory'` mode: no describe read, no write, and every settings surface greyed out as read-only. A headless host reached only over the LAN could therefore not edit its own settings at all — the Command Code plugin's "Settings are read-only." banner and its disabled *Add account* button were this, not a plugin fault. The `/api` fence never had that limitation: it already admits a loopback, sampled-LAN, or declared `--trusted-host` authority, so the two halves simply disagreed about which pages are "ours".
+
+The browser half now reaches the same verdict from the same rule. The Host injects its `trustedHosts` list as the `__DSH_TRUSTED_HOSTS__` page global beside the recovery config — the index-inject table carries no request, so the deployment-wide list, not a per-request verdict, is what can ride the page — and `ctx.connection.canWriteSettings` is true for a loopback page, a page whose authority matches a declared entry (port-less entries match any port, exactly as the fence matches them), or a worker-local transport that owns the Host. `ui-settings` resolves its persistence from that fact instead of `isLoopback`, and it travels to the browser as `$host.canWriteSettings`. `isTrustedAuthority` is now exported from `api-request-trust.ts` so one matcher serves both the fence and the page's self-judgement.
+
+Two deliberate narrowings. `isLoopback` keeps its meaning, because `ui-settings-general`'s "open the settings document in a native editor" affordance acts on the *Host* machine and is meaningless to a remote browser. And the fence itself is unchanged: a page still needs a trusted authority **and** a valid session cookie before any `/api` call lands, so this widens which browsers may write settings, not who may reach the server. A global that is not an array declares nothing, and a non-string or empty entry is dropped on its own, so no invalid value can ever admit an authority. For a deployment reached through a name the LAN sampler does not derive — a public domain or reverse proxy — add it with `dsh web --trusted-host <authority>`, which is required for the fence anyway.
+
+**Declaring the name you browse with** (`34cd59ef4b`). The fence judges the browser's *own page authority*, so a name the LAN sampler never derived — an `/etc/hosts` alias such as `codeserver`, or the host a reverse proxy forwards, such as `dsh.993051.xyz` — is refused with 403 on every `/api` request. The page still loads, because static assets are public, so the failure looks like a broken settings page rather than a blocked one: `ui-settings` falls back to its memory scope, every settings surface greys out, and a plugin card such as Command Code's reports "Settings are read-only." with an empty account and catalog section. The 403 is what proves it — a plugin fault would not break the catalog too. Declare the name and the same page becomes fully writable:
+
+```
+node .../apps/cli/lib/bin.js web --host 0.0.0.0 --port 3080 --no-open \
+  --trusted-host dsh.993051.xyz --trusted-host codeserver
+```
+
+`--trusted-host` is repeatable, and its entries are port-less authorities, so one entry covers every port. What matters is the name in the address bar, not the address it resolves to — a proxy that rewrites the forwarded `Host` to the upstream address still needs the name declared, because the browser half judges `location.host`.
+
+**Disabling the token handshake** (`34cd59ef4b`). Where something upstream already authenticates every visitor, the per-process launch token is redundant friction. `browserAuth: false` — `dsh web --no-browser-auth` — mounts `BrowserAuth.open` in place of the signing-secret owner: every request the fence admits is authorized, `GET /` is served directly instead of redirecting through a token exchange, no browser-session secret is read or created, and the printed URL carries no token. The fence itself is untouched, so an undeclared authority is still 403; reachability simply becomes the whole access policy once the fence has spoken, and the plugin warns on stderr at load so the state is never silent.
+
+The launcher reads both knobs from `/root/.dsh/.env`, so the live instance needs no flag editing:
+
+```
+WEBGUI_TRUSTED_HOSTS=dsh.993051.xyz codeserver
+WEBGUI_BROWSER_AUTH=0
+```
+
+Neither name may use a `DSH_` prefix: the harness's own boot `.env` loader treats `DSH_`, `XDG_`, `DYLD_`, and `BASH_FUNC_` as bootstrap-only and **aborts the launch** when a `.env` file sets one, because those names decide how the process starts and what it loads. A first attempt used `DSH_BROWSER_AUTH` and killed the boot outright — which is exactly why the throwaway-port check below exists.
+
+One compatibility detail. The VS Code sidebar discovers its target by matching `?token=` in `~/.dsh/current-token.txt`, and reports no target at all when the file holds none. With the handshake off the harness prints a clean URL, so the launcher records `?token=disabled` — a value the harness ignores, and one that can never collide with a real token, which is random per process.
+
+**Running the mirror as a second instance.** `/usr/local/bin/dsh-old` starts the pre-sync checkout at `/root/projects/deepseek-harness` beside the primary one, sharing `DSH_HOME` so both see the same sessions. Two things make that work rather than merely start:
+
+- **The two checkouts must be on the same commit.** Every boot re-points the home's profile module-fallback symlinks at its own install, so a mirror that has drifted silently changes what the *other* instance resolves. Sync with `git fetch new && git merge --ff-only new/master`; the mirror carries the primary checkout as its `new` remote.
+- **The launcher now passes the fence flags**, which the original bare `bin.js "$@"` invocation never did: the page loaded, but an undeclared authority answered 403 on every `/api` request, which reads as a broken GUI rather than as a fence. It reads the same `WEBGUI_*` keys, defaults to port 3082, and keeps its heap cap lower (`WEBGUI_OLD_MAX_SPACE`, default 2048 MB) because two 4 GB heaps do not fit beside a web IDE on one host. Running it when the port is already served now prints the URL and stops, instead of dying inside plugin activation behind a wall of dependency diagnostics. It deliberately does **not** write `current-token.txt`: that file is the sidebar extension's target for the primary harness.
+
+## Web search providers
+
+**Bright Data Web Unlocker** (`9712944bae`, `bbec969caa`, `71a4364138`) adds a fourth `ctx.web` search backend in `packages/web/web-search-brightdata`, alongside the shipped `exa`, `perplexity` and `deepseek` ones. It calls no vendor search endpoint: it asks a Web Unlocker zone for the DuckDuckGo HTML result page (`format: 'raw'`) and parses the organic results locally, so a search returns citeable `url`/`title`/`snippet` sources and never an invented answer or a publication date. It is selected like any other backend — `searchProvider: brightdata` — and the token resolves through `ctx.credentials` (whose local provider also reads the launch environment), or from the launch environment alone when that seam is absent.
+
+Three quirks are worth knowing before choosing it: **availability ignores the token** (the plugin always supplies a credential resolver, so `available()` only checks a parseable endpoint and a non-empty zone — a tokenless deployment selects this provider and the *search* fails as `WEB_PROVIDER_ERROR` naming `BRIGHTDATA_API_TOKEN`, not `WEB_PROVIDER_UNAVAILABLE`); **`apiKeyEnv` takes a bare variable name** (`BRIGHTDATA_API_TOKEN`, not `$BRIGHTDATA_API_TOKEN` — the credential-reference grammar rejects the `$` form with a `TypeError`); and **every search spends one credit** from Bright Data's free tier, which is 5,000 credits/month drawn from a single shared pool across Web Unlocker, SERP API, Web Scraper API, Scraper Studio and MCP, with `maxResults` truncating only afterwards.
+
+The package shipped without a README, which the doc gates caught; it now carries a full `package-reference` README pair (`.md`, `.zh.md`, `.i18n.yaml`) and the `indirect` Model Experience registration that its sibling provider backends use. The provider's own behavior did not change — only its documentation, its package version, and the JSDoc on three exported helpers.
+
+## Model catalog management
+
+Two gateway providers are configured in `~/.dsh/settings.yaml` — `commandcode` (69 models) and `opencode-go` (36 declared; the gateway serves 37, and the difference is the undeclared V4.1 Flash alias explained below). Three behaviours were added on top of upstream's catalog handling, all in `packages/llm/llm-pi-ai`:
+
+**Auto-refresh on every web page load** (`8269a9f757`). A provider route with `autoRefresh: true` is re-interrogated at its own `GET {baseURL}/models` on each web page load, and the merged result is written back into the `llm-pi-ai` user settings section. A gateway that gains or retires models, or corrects a context window, therefore shows up in `settings.yaml` without hand-editing. The merge is deliberately conservative: listed entries keep every stored field and only a capacity the listing actually discloses replaces the stored one, and nothing is ever read from pi-ai's installed catalog — the endpoint is the only truth about *which models exist*. It is not a truth about what they can do: see *Capabilities, context and rates from models.dev* below for the third-party source that fills what a listing endpoint structurally cannot state.
+
+**Retired models are dropped, empty listings are refused** (`1d6fa0c310`). A stored model the listing no longer carries is removed on the next refresh; retirement is the gateway's call and a refresh never resurrects a retired model. An empty successful listing is treated as ambiguous rather than as "every model retired", so a transient gateway hiccup cannot erase the stored catalog — the refresh reports that outcome as `empty` and the orchestrator warns.
+
+**Reasoning efforts are never auto-added** (`a91cf74b9d`). Neither gateway discloses per-model reasoning efforts, so stamping a uniform map onto every model a refresh adds would misrepresent models whose real support differs. Auto-added models carry exactly the fields the listing discloses — id, display name, capacities — and efforts are set per model. The route-level `defaultReasoningEfforts` profile field was removed entirely.
+
+**Curated ordering and DeepSeek V4.1 Flash.** The provider `models` list order is the model selector's order, so the curated list is what decides what a reader sees first. `deepseek/deepseek-v4.1-flash` sits directly above `deepseek/deepseek-v4-flash`, with a 1M context window, 384K max output, efforts `off / low / high / max`, and the live Flash tariff. The OpenCode Go route is ordered the same way: its V4.1 Flash is declared first in that provider's `models` list, directly above `deepseek-v4-flash`. A refresh cannot undo that — `mergeRefreshedModels` puts stored order first and appends only what the listing adds — so the curated position survives every page-load refresh. Note that DeepSeek retired the older Flash models on 2026-09-10: `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` are now legacy aliases served by the V4.1 Flash model and billed at Flash prices, and `deepseek-v4-pro` follows on September 14. V4.1 Flash and V4 Flash therefore cost the *same* — the cheaper rows are the retired aliases, not a discount on the new model.
+
+**Which OpenCode id V4.1 Flash is declared under.** OpenCode Go serves this model under two ids — `deepseek-flash` and `deepseek-v4.1-flash` — and both answer a request. Only the second appears on the operator's rate card and endpoint table, so the declaration names `deepseek-v4.1-flash` and the retired alias stays undeclared. That choice has one visible consequence worth knowing: the refresh appends every *served* id the route does not declare, so the undeclared alias comes back as a bare, unpriced row at the bottom of the OpenCode group. Duplicate ids cannot both be suppressed by declaration — declare one and the other is appended, so exactly one extra alias row exists either way. The row is harmless (same model, same price when priced) but it is not evidence the curated list failed; `mergeListedIntoConfigured` only ever appends ids the endpoint actually returned.
+
+**Capabilities, context and rates from models.dev.** A model listing endpoint answers with ids and, at best, capacities. This gateway answers with *less than that* — measured against `GET https://opencode.ai/zen/go/v1/models`, the whole payload per row is `{"id":"deepseek-v4-flash","object":"model","created":1790072059,"owned_by":"opencode"}`, with no capacity, modality or price anywhere in the reply. So `autoRefresh` had almost nothing to merge on this route: every model it added arrived as a bare id, and the 38 hand-declared entries in `settings.yaml` were the only reason the catalog carried a context window, a vision flag or a rate at all. `packages/llm/llm-pi-ai/src/modelsdev.ts` adds a route option, `enrichFrom: models.dev`, that fills them from a public catalog.
+
+The catalog is a third party and is treated as one, which is the whole design:
+
+- **Fill only what the deployment left unstated.** A stated tariff, a stated modality claim and stated reasoning efforts are intent, and a third-party document disagreeing with intent never wins. `deepseek-flash` proves it in the measured run below: models.dev files no row for that id at all, so it keeps the `input: [text, image]` this deployment declared by hand instead of degrading to "modality unknown".
+- **Membership stays the endpoint's.** Enrichment decorates ids the gateway actually serves; a model the catalog lists that the gateway does not serve is never added. The 39 catalog rows against 33 served ids are filtered by the endpoint, not by the catalog.
+- **Listing disclosures still outrank both.** The endpoint describing its own capacity wins over a stored value, exactly as before; the catalog never displaces either.
+- **A failure is contained.** An unreachable or reshaped document leaves the stored configuration untouched rather than failing the page load it rode in on, and the failure is not cached, so the next load retries. The 4.8 MB document is fetched at most once every six hours per process and shared by every opted-in route; the reasoning-effort field is parsed once and stripped per route, so two routes that disagree about wanting it do not each fetch the document.
+
+**Reasoning efforts stay opt-in** (`enrichReasoning: false` by default). The standing rule is that a refresh never auto-adds efforts, because a level a catalog offers is not proof the gateway accepts it. Enrichment does not quietly reverse that: it takes context windows, modalities and rates by default, and efforts only when a route asks in as many words.
+
+**One latent fix came with it.** `mergeListedIntoConfigured` accepted an `inputModalities` field on the listing interface and then discarded it — a source that disclosed modalities had them silently dropped on the way into the store. It is now merged under the same fill-when-unstated rule. Worth stating plainly: this was *not* the mechanism that made vision work here, because the only producer of that field is the installed-catalog discovery path, which a refresh deliberately bypasses; the enrichment is what actually supplies these claims. The fix closes the gap between what the interface promises and what the merge honours.
+
+**Measured against this deployment's live route**, with the real stored entries and the real document: 38 stored models → 33, of which **2 added** (`mimo-v2.6-flash`, `mimo-v2.6-pro`, both arriving fully enriched with vision, rate and a 1,048,576 context window), **7 removed**, **26 updated**, **5 kept** (the five already hand-curated to match). The seven removals are exactly the retired set this fork had been carrying by hand — `kimi-k2.5`, `glm-5`, `qwen3.5-plus`, `mimo-v2-pro`, `mimo-v2-omni`, `hy3-preview`, `grok-4.5` — so the standing "drop retired models" rule is now automatic rather than a chore. The resulting catalog is 21 image-capable and 12 explicitly text-only with **zero** models of unknown modality, against roughly six declarations before; 32 of 33 carry a rate, the single exception being `deepseek-flash`, which the catalog does not list and which is therefore unpriced rather than free. `deepseek-v4-pro` gained a rate it never had (`0.66 / 1.98`, cache `0.022`).
+
+**The CommandCode route cannot use this.** models.dev publishes no `commandcode` provider, so its rates stay where they already are — declared per model in the `llm.cost` patch layer described under *Published rates and estimated spend*. A route whose own key differs from the catalog's provider id names the catalog's id in `modelsDevProvider`; nothing guesses at an alias.
+
+**One base URL, three APIs, and six models that never answered.** OpenCode Go's endpoint table gives each model its own API, and the split is real rather than cosmetic. Probing every model the listing advertises against `/chat/completions` on 2026-09-22: **27 answer, 6 fail** with `HTTP 503 Upstream request failed: Endpoint is unavailable`. The five that need `/v1/responses` (`grok-4.7`, `grok-4.6`, `gpt-5.6-luna`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`) answer **200** on that endpoint, and `minimax-m2.7` answers **200** on `/v1/messages` with `x-api-key`. Retried to rule out a transient upstream, and it is not one — the model is up and the endpoint is what matters. It is per-model, not per-family: `minimax-m2.5` and `minimax-m3` answer fine on completions. So a third of a gigabyte of priced, selectable, listed catalog entries were dead on arrival, and nothing in the UI said so.
+
+`pi-ai`'s protocol is a property of the **route**, not of a model, so one route cannot serve them. `excludeModels` is what makes the split expressible: an id it names is refused in both directions, never added from a listing and dropped from the stored list, so a model can be moved to a route that speaks its API without the automatic refresh pulling it straight back. Membership is otherwise entirely the endpoint's call, and the listing says nothing about which API a model answers on — which is exactly why the exclusion has to exist. A declared exclusion that refuses nothing is reported rather than ignored, because a typo there is otherwise silent and the route simply keeps serving a model the deployment meant to move.
+
+**The session header is now per-conversation** (`sessionHeader`). OpenCode Go requires a stable session id per conversation in `x-opencode-session` and lists **DeepSeek Harness under its known problematic clients** for not sending it on every adapter path; a request without it fails `400 MissingSessionID`. `pi-ai`'s session affinity exists but sends its own names (`x-client-request-id`, `x-session-affinity`), so a gateway naming a different one cannot be satisfied by compat. A static `headers` entry satisfies the letter of the requirement while giving every conversation the same id — precisely what the gateway asks against, since the per-conversation value is what lets it route and cache. Naming the header in `sessionHeader` sends the real session id under it, winning a static entry of the same name, which stays as the fallback for a request that carries no session id.
+
+**And one more 400, from behind the same gateway.** DeepSeek in thinking mode demands the previous assistant turn's `reasoning_content` echoed back, and answers `400 The reasoning_content in the thinking mode must be passed back to the API` when it is absent. `pi-ai` sets that field on assistant messages only when `compat.requiresReasoningContentOnAssistantMessages` is on, and auto-detects it from `isDeepSeek` — a test this route fails, because it is named `opencode-go` and points at `opencode.ai` even though a DeepSeek model answers behind it. It has to be stated. This is the general hazard of a gateway that fronts someone else's models: every provider-shaped heuristic in the client is keyed off a name or a URL that no longer describes what is answering.
+
+## Published rates and estimated spend
+
+Before this work, every usage surface reported tokens and nothing else, so comparing a cheap Flash route against a flagship meant looking rates up by hand — even though `catalog.ts` was already reading the installed catalog's `cost` field and discarding it behind an all-zero sentinel.
+
+**`LlmModelCost` is a published list price, not a billing record** (`c30df9864e`). It lives in `packages/llm/llm/src/types.ts`, travels on `LlmResolvedModelInfo.cost`, and reaches the browser through `buildModelCatalog` as `ModelCatalogModel.cost`, in USD per million tokens. `PiAiModelProfile.cost` lets a deployment state a rate the installed catalog does not carry — necessary here, because neither gateway publishes prices on its model endpoint. `input` and `output` must be stated together; a half-stated pair throws `PiAiCatalogError` rather than silently billing the missing bucket at nothing. An absent bucket stays absent: an unpriced model surfaces no amount at all rather than `$0.00`, because "no published rate" and "free" are different facts.
+
+**One fold, refusing dishonest totals.** `estimateUsageCost` in `packages/llm/token-meter/src/usage-cost.ts` multiplies each carrying bucket by its per-million rate. It returns `undefined` — not a partial sum — when a bucket carries tokens the rate does not price.
+
+**Peak hours are priced at the moment each request ran.** DeepSeek bills two bands: the rates above, and a band that is exactly double inside `01:00–04:00` and `06:00–10:00` UTC **on weekdays only** — weekends are entirely off-peak, and the card says so in as many words ("Peak runs Monday to Friday only, so it is never charged at the weekend"). `LlmModelCost.peak` states that rule as a multiplier plus its windows, since a ratio is what the card publishes and a second table of prices would be four more numbers per model to drift out of step. Windows name weekdays in lowercase three-letter form and times as zero-padded `HH:MM` UTC, so lexicographic order is clock order. A malformed band — non-positive factor, no window, no weekday, unplaceable clock, or an end that does not follow its start — is refused where it is written (`INVALID_MODEL_COST` in the core, `PiAiCatalogError` on the config side), and every way a window can fail to place is closed in the reader, so a bad rule prices at the base band rather than doubling every estimate.
+
+**Pricing moved from per-turn to per-attempt.** A turn's summed buckets cannot be multiplied by one rate when the model changed mid-turn *or* when a band boundary opened while the turn was running. `deriveTurnTokenUsage` now also publishes `attempts`: each billed attempt's own buckets, its route, and `at` — the epoch-ms of the event that closed it (the completion itself, or the retry or step end that closed an attempt having none). `turn-cost.ts` prices each attempt at the band its *own* instant falls in and sums the amounts, and reports nothing only when a route is unrecorded or unpriced, or a rate cannot price a bucket that attempt carried. Measured against this deployment's largest session (226 turns carrying attempt records): **5 turns genuinely straddle a band boundary** and previously could not be priced honestly; **1 turn billed more than one route** and previously got no amount at all. Across that whole session the per-attempt bands total **$19.4952** against **$19.3715** if each turn were priced at its first attempt's band — small in total, but concentrated in exactly the long turns a reader is inspecting.
+
+**A flat tariff names no band.** GLM, Kimi and the rest of these gateways publish one rate that never moves, so their rows show the amount alone — "off-peak" is not a synonym for "flat", and labelling them would report a distinction their operator never published. The band note appears only when the route's own catalog carries a `peak` band, which makes it evidence: seeing `(peak)` or `(off-peak)` proves the deployment's settings supplied the rule, and seeing nothing proves they did not.
+
+**The band comes from the record, never from the clock at render time.** A transcript is a record: a turn that ran on Saturday must not re-price at Monday's peak rate because the reader opened it on Monday. Every surface takes the instant from the durable event that closed the attempt, and falls back to the base band when none was recorded — the direction that understates rather than invents. The rule itself lives once, in `packages/llm/token-meter/src/rate-schedule.ts`, so the transcript and the ledger cannot disagree about the same request.
+
+**Where the amounts appear.** The Chat turn-usage dialog shows an `Estimated cost (list price)` row at six decimals (a single turn is routinely under a cent), followed by `(peak)`, `(off-peak)` or `(peak and off-peak)` when that turn's own requests straddled the boundary — an amount that is double the off-peak one for the same tokens has to say why. The Trajectory Usage inspector shows both the per-request amount and the running session cumulative, each with the same band note. Both read the model selector's own per-session directory and load it themselves, so a rate edited in Settings prices the next turn without a reload. Every model row in both the `/model` popup and the composer seat shows the rate as `$in / $out · cache hit $cacheRead`, rendered by one shared `formatRate` in `packages/client/ui-model-selection/src/client/rates.ts` (`943c10eb61` fixed a bug where the live `$0.60` output rate rendered as `$0.6`).
+
+The cache-hit rate earns its place in the row: on a long agent conversation most prompt tokens are cache reads, so that rate — not the headline pair — is what actually sets the bill.
+
+**Where the published rates came from.** The bundled pi-ai catalog ages, and it still carried the pre-2026-09-10 Flash tariff. Deriving gateway rates from it would have priced a route at `$0.22/$0.66` whose live CommandCode and OpenCode Go rate cards both say `$0.15/$0.60` — wrong by half again, while still looking authoritative. The rates in `settings.yaml` were transcribed from the operators' live rate cards instead: [CommandCode](https://commandcode.ai/models), [OpenCode Go](https://opencode.ai/docs/go/), and [DeepSeek's own pricing page](https://api-docs.deepseek.com/quick_start/pricing/). Seven DeepSeek-backed entries carry a peak band — `commandcode/deepseek-v4.1-flash`, `.../deepseek-v4-flash`, `.../deepseek-v4-flash-vision-exp`, `.../deepseek-v4-pro`, and the OpenCode Go rows `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-flash`.
+
+One wrinkle in those cards worth knowing: CommandCode's page for DeepSeek V4 Flash Vision (exp) prints the peak cache-read cell as `$0.01` when every other cell on the page is exactly double. The band is stated as a factor of 2, so that row follows the arithmetic (`$0.014`) rather than the rounded cell. Context-tiered cards (Grok 4.6, Qwen3.7/3.6 Plus, GPT 5.6 Luna, Grok 4.6) still record only their base tier, since tier is a property of the request's size rather than of the clock — so those estimates remain a floor.
+
+**A route that publishes no list price can be priced by configuration** (`7e964834b9`). The chain reads a rate off the adapter, so a third-party adapter that keeps its tariff to itself prices nothing downstream — the amounts simply never render, with no way for a reader to tell "free" from "never said". `llm.cost` on the harness's own `llm` service states a list price for any route, keyed by provider route and then by exact model id, in the same shape the pi-ai profile already used. It belongs in the profile's patch layer, not in `settings.yaml`:
+
+```yaml
+- id: llm
+  name: '@deepseek-ai/dsh-llm'
+  config:
+    cost:
+      commandcode:
+        deepseek/deepseek-v4.1-flash:
+          input: 0.15
+          output: 0.6
+          cacheRead: 0.003
+          peak:
+            multiplier: 2
+            windows:
+              - days: [mon, tue, wed, thu, fri]
+                start: '01:00'
+                end: '04:00'
+```
+
+**Where the rates go is not obvious, and the wrong place fails silently.** `settings.yaml` reads like a per-plugin config file — its top-level keys are plugin ids, and its `llm-pi-ai:` and `llm-commandcode:` sections genuinely do reach those plugins — but it is not one. The settings service is a *namespace* registry: a plugin sees a section only because it registered a schema for that namespace, which `llm-pi-ai` does and the core `llm` service does not. A `llm:` key in `settings.yaml` therefore loads without complaint and changes nothing at all. Measured both ways on this deployment: the same table placed in `settings.yaml` left the catalog at **0/46** priced commandcode models, and moved into the profile's patch layer it reports **41/46**. The five that stay unpriced are models the plugin lists that the table has no rate for — its free rows — which is the correct outcome, because an absent rate is not a zero one.
+
+The model id keeps its own slash because the provider route is the outer key, so nothing has to split a compound string back apart. A stated rate wins over the adapter's own: the table exists for routes whose adapter reports none, and stating one is also how a wrong rate gets corrected. A malformed entry is refused with `INVALID_MODEL_COST` naming `llm.cost`, at the same point a malformed adapter report is refused, and a rate missing its `output` price is refused rather than billing that bucket at nothing. An unpriced route stays unpriced rather than becoming free.
+
+This is what priced this deployment's default route. On 2026-09-18 the `commandcode` route moved from `llm-pi-ai` — which carried its rate blocks, peak windows included, in `settings.yaml` — to `@mars-sea/dsh-commandcode-provider`, whose `resolveModel()` never returns `LlmModelCost`; the plugin's own price table feeds only its composer readout. The live catalog after the move had `commandcode` at 46 models with **0** priced, `deepseek-official` 2 with 0, and `opencode-go` 37 with 29.
+
+**The amount is on the pill, not only behind a click** (`7e964834b9`). The per-Turn estimate previously existed only inside the click-opened Turn-usage dialog, so a reader scanning a transcript saw tokens and never a price. The clock pill now carries it after the run time and the throughput — `Ran for 2m 18s·63 tok/s·$0.012345` — reusing the same separator the throughput figure uses, and the same amount repeats as an `Estimated cost (list price)` row in that pill's own dialog, where the `(peak)` / `(off-peak)` band note has room to sit. A Turn no rate could price stays a plain duration with no dangling separator.
+
+## Turn loading control
+
+A paged window holds only part of a long session, and a Turn the window enters midway reports no token aggregate — so its cost cannot be shown until the Turn is whole. Two changes address that.
+
+**Where it lives.** The control sits in the composer dock's stats row, immediately after the usage pill and just above the composer (`b0156a62f8`). It began life inside the turn rail's hover card, which a reader only finds by hunting a dot on a thin rail, and was moved after it proved effectively invisible.
+
+**What one press loads.** It pages through the targeted Turn's `turn/start` seq, which the loop logs *before* the Turn's prompt and steps, so a press brings in the whole Turn — the reader's message through the end of the model's response — rather than a fragment.
+
+**It walks back through history.** The control targets the Turn the window's head sits inside when the window started midway through one (that Turn must be finished before reaching past it); once the window begins exactly at a Turn's start, it targets the Turn immediately before — the next Turn the window does not hold. Repeating it therefore walks backwards one Turn at a time through the whole session, and the label always names the Turn a press will bring in. It is hidden once the pager has nothing left.
+
+**Why `SessionSnapshot.baseSeq` was added.** Telling a Turn held whole from one the window enters midway needs the seq of the window's oldest *event*. The head *node*'s anchor cannot do it: a Turn's `turn/start` precedes its first visible node, so that node's anchor sits after the Turn's own seq whether or not the window covers the Turn's start. `SessionSnapshot.baseSeq` now exposes it, and the exact test is `baseSeq <= turn/start`. Without it the control stuck on the newest Turn and could not reach the ones before it.
+
+The dock sits outside the Chat view, so its registration injects `loadThrough` from the Session binding rather than inheriting the view's prop. The rail's hover card went back to a read-only tooltip.
+
+## Per-turn throughput
+
+The Chat turn footer already carried a clock pill reading `Ran for 2m 18s`, and the Turn-time dialog behind it already had a `Tokens per second (TPS)` row. The figure was invisible unless a reader thought to click the clock, so the pill now carries it directly: `Ran for 2m 18s · 63 tok/s`, for that Turn only. It reuses the composer stats row's own `·` separator rather than inventing a second convention, and a Turn with no sampled generation keeps the plain duration with no dangling separator.
+
+**Why the basis changed** (`83c4ef781f`). The dialog's rate divided output tokens by the *decode window* — first token to final message. That window needs `firstTokenTime`, which the client can only observe from live stream deltas: the session format persists no timing, so the value is gone the moment the page reloads. A rate that vanishes on refresh is not a per-Turn reading, and the first live check proved it — a restored Turn showed neither a speed row nor a TTFT row.
+
+The fold now divides the Turn's summed output tokens by the summed **LLM span** of its steps (`completedTime − stepStartTime`). Both boundaries are persisted events, so the figure survives a reload; the span also excludes the tool execution between steps, which is not generation time. The span does include each step's time-to-first-token, so a Turn with a long think reports a slightly lower rate than the decode-only figure did — a few percent on a long generation, and the honest number for "tokens per second of LLM time". `decodeMs` stays in `StepReading` because the composer stats row still reports its window on the decode basis.
+
+A step that generated no tokens (a pure tool call) contributes no rate at all: a `0 tok/s` reading would be noise, not information.
+
+## File downloads
+
+A file that reached the harness — one you uploaded, or one the Agent wrote — could be looked at and nothing else. Uploaded attachments were the worse half: an upload lives in content-addressed storage under an opaque `attachmentId` with **no filesystem path at all**, so once its composer card was gone the bytes were unreachable from the browser by any route. The conversation card for a sent file was an inert `<span>`, and the only byte route in the harness, `GET /api/file?path=…`, serves absolute paths and answers with an inline disposition.
+
+Three surfaces now offer a save, and two host routes back them.
+
+**`/api/file` gained a download spelling.** A `download` parameter — present at all, so a hand-written `?download` works, with `0` and `false` as the explicit opt-outs — adds `Content-Disposition: attachment` and an optional `name` override for the saved filename. The path read is unchanged, so the same route serves a preview and a save; nothing else about the request or the authorization differs. Download responses also carry `allow-downloads` on the existing `sandbox` policy. That flag is probably unnecessary — a browser hands an attachment to its download manager without creating a document to sandbox — but "probably" is not a thing to leave in a save path, and naming it costs nothing.
+
+**`GET /api/attachment.download` is new.** It takes `sessionId` and `attachmentId`, proves the attachment is reachable from that Session's log (the same authorization the image route already performed, generalized over file and image blocks), and streams the stored bytes straight to the socket — an upload never lands in the harness process's heap on the way out. Bytes stream from the store with the store's own backpressure; the first chunk is pulled before the response is committed, so an unreadable store fails the request instead of truncating a response that already promised `200`.
+
+**Where the saves are.** The delivered-file card's menu gained `Download`, and it is deliberately the one item that survives a Host with no desktop: opening a file in a native app needs a desktop, saving one only needs the bytes the Host already serves, so the menu now opens with only the desktop rows disabled. The workspace file tree gives every file row a save control that appears on hover, built from the row's own absolute path. A sent file in the conversation is now an anchor rather than an inert card.
+
+**One honest limit.** A declared file is addressed through its workspace root, so a card whose Session root is unknown *and* whose path is relative offers no save at all — the item is disabled rather than pointing at a URL that cannot resolve. In practice the root comes from the session list and is always present, and the pure helper is tested for the degraded case rather than assuming it away.
+
+**What is not covered.** The sidebar document preview has no save control of its own; the same files are reachable from the file tree and the delivered-file card. Uploaded *images* download through the attachment route (they are the second branch of its authorization), but the lightbox offers no save gesture yet.
+
+## Continuing a large chat in a new one
+
+A long Session is retained in full for the life of the process, and the two obvious remedies do not touch that. **Archiving releases nothing**: `WorkspaceRegistry.archiveSession` appends the id to a durable `archivedSessionIds` list and stops. **`/compact` does not shrink the log**, by contract — *"the shadowed content stays in the session log, so replaying the session deterministically reproduces the same condensed conversation."* The model sees less; the process holds the same. And **a fork is not smaller**: `session.fork` seeds the child with `source.events.slice(0, cut)`, the same events.
+
+So the only thing that actually shrinks the working set is a Session whose log is small. The session row's menu now offers **Continue in a new chat (condense this one)**: it condenses the source, carries the condensation into a new Session as that Session's entire history, opens it, and archives the source.
+
+**The summary is the compaction backend's own output**, not a second summarizer, so a continuation is condensed exactly the way an in-place `/compact` would condense it. `CompactionResult` already carries `summary: ContentBlock[]`, so the operation reads it from the call rather than re-parsing the log. A Session already condensed and untouched since has nothing new to condense — `compactNow` returns `null` — so the newest recorded `compaction/summary` is carried instead of refusing the handoff.
+
+**The continuation is a new conversation, not a seeded one.** It is created unseeded (`isSeeded: false`, `inheritedEventCount: 0`) and its one opening message is appended to it, attributed to the plugin rather than to the reader:
+
+```ts
+{ kind: 'plugin', plugin: 'handoff', form: 'notice', summary: boundContextSummary('Continued from an earlier conversation; its condensed history follows.') }
+```
+
+`plugin` is a source kind the Session format already classifies and `notice` is an allowed form, so the transcript shows one collapsed line instead of a wall of carried-over prose. A dedicated `handoff` kind would have been a versioned-format change for a display distinction: `session-format-v2-to-v3` holds `SOURCE_KINDS` as a closed set and throws `SessionFormatUnsupportedMigrationError` on an unclassified source, which blocks *migration*, not just rendering. The measured consequence of the choice is that the continuation's surface is exactly one node, and `deriveMessages()` returns that summary verbatim.
+
+**The compaction seam is read, not injected.** `ctx.get('compaction')` rather than a declared injection, so the Session Controller keeps working in a deployment that mounts no backend — and so a backend is not a build-time dependency of the controller. The slice the operation calls is declared locally as `HandoffSummarizer`, the same idiom `ui-sidebar-documentpreview` uses for the Remote it calls. A deployment without a backend refuses with `reason: 'no-compaction-backend'` rather than failing at mount time.
+
+**Every refusal names its precondition.** `session/handoff-unavailable` carries a stable `reason` — `no-command-registry`, `no-compaction-command`, `compaction-refused`, `nothing-to-carry` — so a caller can say which one failed without parsing prose. A backend error with no `code` is **not** classified: it surfaces as itself, because swallowing a genuine fault into a business code is how a bug becomes a mystery. Archiving runs last and its failure is reported in the result (`archived: false`) rather than thrown, because a caller that cannot open the continuation has lost the work of producing it.
+
+**The source is resolved, never required to be live.** `handoff` first refused when `ctx.agents.get(sessionId)` found no Agent, on the reasoning that `compactNow` serializes against driver turns and therefore needs one. That reasoning was right about the requirement and wrong about who supplies it. This deployment sets `promoteOnHistoryOpen: false`, which is deliberate: opening a Session to read it must not create an Agent, and every operation that genuinely needs one resolves it on demand. A handoff is such an operation, so it was the one caller demanding that looking at a Session had already done the work — and it therefore refused on exactly the deployments whose Sessions are large enough to need condensing. It now resolves the Agent from the observation it already holds (`resolveObservedAgent`), which resumes the Session and costs no second read. Resolution is ownership-neutral: an Agent that was already live is handed back as-is and never resumed, so an operation does not take over — or later release — one that was already someone else's.
+
+**The backend is reached through `/compact`, not a service lookup.** The first version read `ctx.get('compaction')` at the controller's own plane and refused with `no-compaction-backend` when it was absent. On this deployment it is always absent, and that refusal fired before the liveness check ever ran — so it, not the promotion, is what the dead button actually hit. `packages/bundle/web-app/cordis.patch.yml` disables the host-plane `compaction-basic` row, and each agent preset mounts its own inside a group with `isolate: { compaction: true }`. Isolation mints a fresh service key for the group: measured with a scratch spec, a service provided only inside such a group reads back from the group and is `undefined` from its parent and from any sibling. The only context that can see a preset's backend is the one its own `/compact` runs in, which is why the shipped command works and a host-plane lookup never could.
+
+So the operation now condenses by executing `/compact` for the Agent (`ctx.commands.execute(agent, '/compact', [], signal)`). That makes a handoff condense exactly as typing `/compact` does, refusals included, and it costs the structured error codes: the command answers expected failures with human prose, so `compaction-<code>` is replaced by `compaction-refused` carrying the command's own explanation. The `commands` seam is still read with `ctx.get` rather than declared as an injection, so a deployment that mounts no registry is a runtime refusal instead of a route that waits on one to exist.
+
+**The carried history is the condensed conversation, not the summary declaration.** Compaction replaces the shadowed nodes with a checkpoint message and deliberately keeps a recent tail verbatim — `retainRatio` defaults to 0.16 of the context window — so reading the `compaction/summary` event's blocks carries strictly less than the condensed conversation: it drops the most recent turns, which are the ones a continuation is continued from. The operation carries the source's own derived history (`session.deriveMessages()`) instead, which is that condensed view by construction, because a `replace` surface op deletes the shadowed nodes from the derivation. The opening message labels each carried turn — `User`, `Assistant`, and `Condensed history` for the checkpoint, which is the condensation rather than something the reader said — and carries text blocks only: tool calls and their results are plumbing whose useful output the condensation already keeps, and replaying raw tool traffic into one message would cost the continuation more context than it restores. `nothing-to-carry` is therefore narrower than it was: it now means a Session with no history at all, not a backend that produced an empty summary, since a retained tail is history and carrying it is the point.
+
+**A refused handoff is visible.** The click is a background operation on a row that re-renders underneath it, and every refusal leaves the source Session untouched, so the reason is the whole of what the clicker needs. Reporting it through the row would lose it on the next render; instead it is held in a small store and rendered by `HandoffNotice` in `shell.overlay` — the frame-wide list slot the terminal's failed-cleanup notice already occupies, additive beside it. The notice explains the refusal in the reader's language and prints the Host's own message underneath it (wire prose passes through untranslated by policy), and dismissal is per failure. This is the fix for the real defect the other two exposed: a click that visibly does nothing is indistinguishable from a broken one, which is what made two deterministic refusals look like a dead button.
+
+**All three wrong versions passed their tests.** The handoff's first spec registered a live Agent for every case and provided a host-plane `compaction` service, so it could not observe either deployment condition; it asserted `session-not-live` as *expected* behaviour, which is how a bug becomes a requirement. `commands-handoff-promotion.host.spec.ts` now mounts the production Session Controller with `promoteOnHistoryOpen: false`, a Session on disk that this process has never resumed, and the real command registry plus the real `/compact` command inside an isolating scope with the only backend. It asserts `ctx.get('compaction')` is `undefined` at the controller's plane, and it fails against both earlier versions — with `session-not-live` against the first, and with `no-compaction-backend` against the second. The retained-tail spec is a regression test on the same terms: against the version that read the summary declaration it fails on the missing tail.
+
+**Archiving now gives back what a Session costs.** Until this change the archive set was a durable flag and nothing more: the Session's Agent stayed live, its parsed log stayed in the observation cache, and a decoded log could stay memoized, all for the life of the process. That is what made "retire a big chat" a two-restart operation, and it is measurable — the 139k-record Session above cost ~3.2 GB the moment it was opened, and opening it again after an archive put that straight back.
+
+Three layers each hold the same Session, and each is now asked in turn when one is archived. The workspace registry announces a durable archive as `workspace/session-archived` (after `setState`, so a listener never releases for an archive a later write could still lose, and only when it actually wrote — an idempotent repeat announces nothing). The Session Controller listens and releases:
+
+- **The Agent**, through the handle this controller kept. `create` and `resume` both return an `AgentHandle` whose `dispose` is a capability, and both call sites used to read `.agent` off it and drop the rest — which is why nothing in the process could release a Session. `ApiSessionAgentController` now records every handle it obtains in `disposers`, and `releaseAgent` disposes one. Ownership decides it: an Agent this controller made live is released, one that was already live belongs to whoever was using it and is left alone, and so is one that is not `idle`, because stopping a loop mid-turn discards work instead of freeing idle memory. The handoff's continuation is created through `createOwned` for the same reason, so a Session this operation created is releasable exactly like one it resumed.
+- **The parsed cold graph**, through a new `sessionQuery.releaseSession`. `SessionObservationReader` caches one fully materialized event graph per prepared id; `release` drops it, and the next observation re-reads persistence — a latency cost, not a correctness one. A pinned entry (an active lease) is deliberately left alone: dropping the map's reference would free nothing while making the next read parse a second copy.
+- **The decoded log**, through a new `SessionPersistence.release`, overridden by the JSONL backend to drop its byte-bounded cold-log memo. The default is a documented no-op, because a backend that memoizes nothing has nothing to implement; the 202 MB log above is past the memo budget and was never held there, so this is about the mid-sized logs the memo does hold.
+
+Read state is released before the Agent, so a caller that observes the Agent gone can rely on the graph being gone too. Everything is best-effort and idempotent, and a failure is logged rather than thrown: an archive that succeeds must not fail because a cache could not be dropped.
+
+The measured consequence is the point of the whole exercise: **archive, then keep working — no restart.** Releasing the read state is what covers the case that actually hurt (a Session that was opened to read and never prompted, which is exactly what `promoteOnHistoryOpen: false` produces), and releasing the Agent covers the case where the chat was used. Neither is a licence to keep the old chat open in a tab: opening an archived Session reads it again, and it costs what it always cost. What changes is that putting it away now pays that back.
+
+**One UI consequence worth stating.** Condensing requires an idle Agent, so the menu item is disabled while the Session is running. A refusal that gets past that — a backend that is busy, a deployment with no backend, a chat with nothing to condense — now surfaces as a notice instead of doing nothing.
+
+
+## Upstream sync
+
+The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. Two syncs have happened, both onto an identical pair of checkouts:
+
+**288 commits, `aa8262ec09`** (0.1.5-rc.1), kept every local feature through four conflicts: `llm-pi-ai/src/index.ts` (kept both upstream's `registering` flag and the local `settingsProvider`), `bundle/web-app/README.zh.md` (kept the local `--host 0.0.0.0` paragraph), `llm-pi-ai/README.i18n.yaml` (took upstream hashes and re-recorded), and `docs/config-catalog.md` (took upstream, then regenerated).
+
+**134 commits, `c291e7961a`** (0.1.5-rc.2). Three conflicts, all in `ui-chat` and all additive on *both* sides, resolved by keeping both: `apply.ts` (upstream's `input-trigger` declaration merge is unrelated to the local `ui-model-selection` one), and `ChatNodeSeat.tsx` / `ChatView.tsx` (upstream threads a new `openSkill` owner prop while the local work carries `costOf` and `useModelCosts`; the destructures and memo dependency lists now name both). No local feature needed a semantic change — upstream did not touch a single file in `llm-pi-ai/src` or `token-meter/src`, and the only edits inside those packages were version strings.
+
+Gates that went stale in that merge and were regenerated: `docs/config-catalog.md` (+ its `.i18n.yaml` pairing), `docs/module-graph.*`, `docs/event-producer-consumer.md`, and `extensions/cordis-client-runner/src/client/slot-catalog.ts`. Three unrelated gate failures were also repaired because the fork had introduced them: the missing `packages/web/web-search-brightdata/README.{md,zh.md,i18n.yaml}`, its package version (the root-version rule in `scripts/check-workspace-constraints.ts` requires every dsh-family manifest to match `0.1.5-rc.2`), and `@deepseek-ai/dsh-token-meter` missing from `ui-trajectory`'s devDependencies. Two further failures are upstream's own and were left alone: `verify-client-domain-graph` reports pre-existing layering violations in `ui-sidebar-documentpreview` (a package neither side edited), and `verify-doc-site-fragments` needs `website/.dist`, which only `docs:build` produces.
+
+Derived artifacts must be regenerated after any merge that touches their sources; they are freshness-gated, so a stale one fails `doc-sync`:
+
+```bash
+pnpm run gen-config-catalog            # docs/config-catalog.md + .zh.md
+pnpm run gen-cordis-inspect-catalog    # cordis_inspect API catalog
+pnpm run gen-module-graph              # docs/module-graph.md/.zh.md/.i18n.yaml
+pnpm run gen-doc-graphs                # docs/event-producer-consumer.md + siblings
+pnpm run gen-client-catalog            # cordis-client-runner slot catalog
+node_modules/.bin/tsx scripts/gen-third-party-notices.ts
+pnpm run verify-translation-pairing --write <changed EN docs>
+```
+
+`gen-doc-graphs` rewrites only the English side of `event-producer-consumer.md`; the Chinese counterpart keeps translated prose but must take the regenerated tables' line numbers, or `verify-translation-pairing` fails on the pair.
+
+## Building, testing, restarting
+
+The pipeline, in the order that works:
+
+```bash
+pnpm install --frozen-lockfile --config.confirmModulesPurge=false
+pnpm run build:lib:host      # tsc -b tsconfig.host.json + tsdown
+pnpm run build:lib:client
+pnpm run build:web
+pnpm run typecheck           # host + typecheck:contracts-ready (tsc -b tsconfig.client.json)
+```
+
+Client-plugin edits (anything under `packages/client/*/src/client`) reach the live page from `packages/client/*/lib/client.js` on a page refresh once `build:lib:client` has run; no server restart is needed. Host-side edits require the harness to be restarted by the operator.
+
+The gates a change must pass before it is committed, all of which the git hooks or CI will run anyway:
+
+```bash
+pnpm exec vitest run <paths>
+node_modules/.bin/tsx scripts/run-oxlint.ts --config .oxlintrc.staged.json <files>
+pnpm run verify-translation-pairing     # EN/zh pairs
+pnpm run verify-type-equiv              # documented type blocks
+pnpm run verify-doc-budgets
+pnpm run verify-md-wrap
+pnpm run verify-cordis-inspect-catalog
+```
+
+Two conventions that bite: client-side test files under `packages/client` must use the `.client.spec.ts` suffix or the host tsconfig rejects them, and non-null assertions are lint errors in this repository.
+
+## Verified behaviour and test inventory
+
+- `packages/llm/token-meter/tests/usage-cost.spec.ts` — the scaled sum, sub-million amounts, skipped empty buckets, the unpriceable-bucket refusal.
+- `packages/llm/token-meter/tests/rate-schedule.spec.ts` — both window bounds and the exclusive end, the weekend rule at the same clock times that peak on a weekday, a window naming only other days, six unplaceable windows (all failing closed to the base band), an unplaceable instant, and the scaled bands.
+- `packages/llm/token-meter/tests/turn-usage.spec.ts` — each attempt's buckets, route and closing instant, including an attempt closed by a retry and one the provider never attributed.
+- `packages/llm/llm-pi-ai/tests/model-cost.spec.ts` — a declared rate through the real profile resolver, a catalog rate, an unpriced gateway model, a half-stated pair, a declared peak band, a band applied over a catalog rate, and seven refused bands.
+- `packages/llm/llm/tests/service.spec.ts` — the core's own detached-band validation and its refusal of a band it cannot place.
+- `packages/client/ui-chat/tests/turn-cost.client.spec.ts` — one routed attempt, cache buckets, a peak-band attempt, a turn straddling the boundary at both bands, a model switched mid-turn priced per route, an unpriced route, an unrecorded route, an absent per-attempt record, and a rate missing a billed bucket.
+- `packages/client/ui-chat/tests/turn-usage-panel.client.spec.tsx` — the amount at six decimals with each band note, including the straddling case.
+- `packages/client/ui-trajectory/tests/table.client.spec.tsx` — the per-request and cumulative amounts, their band notes, and the straddling prefix.
+- `packages/client/ui-model-selection/tests/rates.client.spec.ts` — cell formatting: two decimals kept, sub-cent precision kept, whole numbers trimmed, an absent cache rate omitted rather than shown as `$0.00`.
+- `packages/client/ui-chat/tests/chat-stats.client.spec.tsx` — the load control: targeting the Turn the window entered midway, walking back one Turn when the window begins at a Turn start, paging through the right `turn/start` seq, hiding when history is exhausted, the busy state, and keeping the row alive when the only thing to show is an incomplete Turn.
+
+Live confirmation used a real 97-Turn session: the control rendered `Load turn 100` beside `965M tok · Cache hit 99%`, and the target seq matched the session log (`turn/start` for turn 100 at seq 25703, window head at 26180 — genuinely partial).
+
+## Session memory
+
+**The measured problem.** A long conversation is held in memory in full, and one Session dominates. The largest Session in this deployment — `/root/projects`, 139,208 records — is 125 MB of Zstandard frames that decode to **571 MB** of JSONL, and the parsed graph it becomes measures **1.32 GB of heap / 1.93 GB of RSS**. Two coexisting copies (the cold-read memo beside the observation cache, or a memo miss followed by a resume) measure 2.64 GB / 3.26 GB, and a third whole-log copy peaks at 3.98 GB heap / 4.60 GB RSS — which is the 4.78 GB peak observed on the live process, sitting exactly at its `--max-old-space-size=4096` ceiling. Retention is per event and it stays: opening or resuming a Session keeps its whole log for the life of the process, and there is no close, detach or release path. Half those bytes are redundant — 301 MB of the 571 MB is `assistant/message.data.stream` token-chunk arrays duplicated against `data.message` inside the same event.
+
+**The handoff memo is bounded by bytes, not by entries** (`7e964834b9`). `coldLogMemo` was capped at two entries, which bounds nothing when one entry can be a gigabyte: two Sessions of the size above is 2.6 GB of heap, and the two-entry window is exactly what made the second copy resident. The budget is now decoded JSONL — a figure the decoder already computes as it scans, so nothing is estimated — with `coldLogMemoMaxBytes` (default 64 MiB) as the operator's knob. A log past the whole budget is not memoized at all: the handoff pays a second decode instead of holding the graph, which is the trade the bound exists to make. Migration results are decoded from a source that never reports a decoded size, so they are published and not retained — an entry the budget cannot measure is an entry it cannot bound.
+
+**A read can now retain a window instead of a log** (`530f4d6e98`). `SessionHandle.read(offset, length)` has always documented that an offset at or past the end returns an empty list — a promise that only means anything if the read is bounded, and until now the JSONL backend decoded the entire generation and *then* sliced it, so asking for one event cost the whole log. The window is threaded to the point where events are actually retained: `SessionFormatRestoreOptions.window` names a half-open expanded-event range and `SessionFormatEventCollector` keeps only that range while still offering every row to the decoder, so validation is unchanged — a damaged row outside the window still refuses the read, which a test pins. A compact run lying wholly outside the window is counted from its declared `eventCount` and never expanded, which is where a long log's bulk actually sits. The scanner counts every committed row regardless of retention, so the complete log's length still comes back as `eventCount`, and a windowed decode is deliberately never memoized: `coldLogMemo` is keyed by session id alone, so a partial list cached there would be served to a later full read as though it were the log. `read(0, undefined)` keeps the complete, memoized, torn-tail-aware path that write open and resume depend on, and a windowed restore of a log that needs migration is refused rather than handed a truncated transformation input. Measured on a real 59 MiB Session log (82,922 events) the window is byte-identical to the full read's slice and holds heap at 864 MiB against the 939 MiB the full read leaves resident. **It bounds retention, not work**: the scan still decodes every row, so it is not a latency win, and `open` still performs its own complete validating decode before any read is issued — which is what stands between this and a page-cost cold open.
+
+**The observation cache is bounded by configuration.** `ctx.sessionQuery`'s prepared-observation cache retains one *fully materialized* event graph per cold Session, and the shipped bound of 5 is a bound on entries — which bounds nothing when one entry is the 1.32 GB graph measured above. This deployment sets `preparedSessionCacheSize: 2` in the web profile's patch layer: enough to cover the open-then-page handoff the cache exists for, past which a read re-parses from disk and costs latency rather than correctness. Entries pinned by an active observation lease are exempt from the bound by design, so this bounds browsing and not concurrent work. It is a profile-patch value rather than a harness default, it restates `path`/`openAt` because the web-app layer restates them too, and **it takes effect on the next harness start.**
+
+**Opening a Session is a read again** (`8aff1634e9`). `history.follow` handed every prepared observation to `agents.resolveObservedAgent`, so opening a chat in the browser composed and resumed a live Agent as a side effect of looking at it — and nothing releases an Agent once it exists. Every conversation merely opened therefore kept its whole event graph for the life of the process, which is the 1.32 GB figure above, and the pickup `session/end-seed` it appended made a merely-opened Session look freshly used, an error direction an earlier note had already rejected for recency ordering. Every operation that genuinely needs an Agent — prompt, queue mutation, commands, cancel — already resolves one on demand through `resolveAgent`, so the activation was never load-bearing for correctness. `promoteOnHistoryOpen` now selects it, defaulting to `true` so the shipped behaviour is unchanged; this deployment sets `false` in the profile patch. The observation lease is released with the snapshot frame instead of being retained for an activation that will not happen, and a Session that goes live while its follower is open — because the reader sent a prompt — still streams, through the follower's existing `session/created` handler. The measured signature: the live harness held **4** Session write leases before this (two of them filepicker Sessions nobody had deliberately opened, purely from browsing) and holds **1** after.
+
+**What that trade costs.** The resume moves from open time to first-prompt time, so the first message in a chat this process has not yet resumed pays one full decode of its log before the prompt is admitted — seconds, on the Sessions that dominate this deployment's store. Opening a large Session already paid a decode for the snapshot, so this is one extra decode per chat per restart, and only for chats actually prompted in. That is the memory-for-latency trade this deployment chose: resident memory stops scaling with how many chats have been *looked at* and starts scaling with how many are *in use*.
+
+**What this does not fix.** The remaining copy is the live `Session.log` itself, which nothing releases: the agent is created inside a service-owned effect and `AgentHandle.dispose` has no production caller. So resident memory still grows with the Sessions actually worked in since the last restart, and never comes back. `/compact` does not help either — compaction's own contract keeps the shadowed content in the session log, and the log is what is retained. The container is also unsupervised: there is no unit for the harness, `memory.max` is unlimited, and the process reports no heap or RSS figure anywhere, so this was invisible until it fell over.
+
+## Known limitations
+
+- **A headless client can lose its remote channel.** Verification browsers occasionally showed `Reconnect now` with the websocket failing (`HTTP Authentication failed`), which makes *every* paging action — including the pre-existing "Load earlier" — a no-op. Confirm the channel is alive before concluding that a load control is broken.
+- **Context-tiered rates are floors.** DeepSeek's peak band is now modelled and priced per request, but pricing that varies with request *size* (Grok 4.6, Qwen3.7/3.6 Plus, GPT 5.6 Luna) still records its base tier only — the tier is not a function of the clock, and the transcript does not carry the token count the provider tiered on.
+- **Only curated models have rates.** The rest of the CommandCode card was filled from its published table, but any model whose operator publishes nothing shows no amount rather than a guess.
+- **`opencode-go` serves a different V4.1 Flash id.** Its production name is `deepseek-flash`, declared explicitly because the bundled catalog has no entry for it. The same API key also authenticates against OpenCode **Zen** (`https://opencode.ai/zen/v1`), but Zen does not serve V4.1 Flash at all — its listing has no such id and a request for `deepseek-flash` answers `401 "Model deepseek-flash is not supported"` — so V4.1 Flash is reachable only through Go (or DeepSeek directly, or CommandCode). Adding a Zen provider would be worth doing for its *other* DeepSeek rows, which are cheaper than Go's (`deepseek-v4-flash` at `$0.14/$0.28` against Go's `$0.15/$0.60`), but not for this model.
+- **Pre-existing suite failure.** `packages/llm/plugin-package-inventory-deepseek/tests/inventory.spec.ts` fails on this machine because of a stray `/tmp/package.json` (`"name": "tmp"`); it fails on a pristine checkout too and is unrelated to these changes.
+- **`verify-client-domain-graph` fails on upstream's own code.** The gate reports 38 violations, all in packages this fork has never touched (`ui-sidebar-documentpreview` 28, `ui-sidebar-browser` 7, `ui-conversation` 3). It was already failing before the sync — 26 violations on the pre-merge tree, confirmed by running the same script in a worktree at the pre-merge commit — and upstream's 1548 commits added the other 12. Our own single violation (`ui-chat/src/client/contract/slots.ts` importing `TurnRateLookup` from the sibling `chat` domain) is fixed by moving the alias to `contract/turn-cost.ts`, so the `ui-chat` package is clean. Nothing here is a regression from the sync.
+- **`verify-scoped-events` needs more heap than Node's default.** The generator walks the whole repository and now exceeds the 2 GB default on this 8 GB host: run `NODE_OPTIONS=--max-old-space-size=4096 pnpm run verify-scoped-events`. `gen-scoped-events` has the same requirement, and neither is baked into the npm script because an inline `NODE_OPTIONS=` prefix is not portable to the Windows targets this repository still builds for.
+- **`verify-repository-references` excludes this file.** `CHANGES-AND-FEATURES.md` does not exist upstream and maps each fork feature to the commit that introduced it, so the commit identifiers that gate rejects are this document's primary key. The file carries no organization-URL references, so the exclusion waives only the commit rule.
+- **`verify-doc-site-fragments` needs a built site.** It reads `website/.dist` and fails until `pnpm run docs:build` has run at least once; `docs:build` ends by running the gate itself.
+- **TTFT is still live-only.** The per-Turn rate now survives a reload because its boundaries are persisted events, but `Time to first token` cannot: it needs `firstTokenTime`, which only live stream deltas supply, and the session format persists no timing. A Turn the page did not stream itself therefore shows a speed row and no TTFT row. Fixing that means adding a timing record to the session format, which is a versioned-format change and was not worth taking for a display figure.
+- **An opened Session is released only when it is archived.** Its parsed log is held until then: there is no close or detach RPC, and nothing releases a Session merely because the UI stopped looking at it. Measured at 1.32 GB heap / 1.93 GB RSS for the 139k-record Session above. `/compact` does not help — compaction's own contract keeps the shadowed content in the session log, and the log is what is retained — and neither does `promoteOnHistoryOpen: false`, which stops opening a Session from *resuming its Agent* but not from retaining the graph the read parses. Archiving now gives all of it back (see *Archiving now gives back what a Session costs*), so the working set is set by how many chats have been opened **and left unarchived** since the last restart. A Session that is read again after being archived costs what it always cost; the release is a way to stop paying, not a way to look for free.
+
+## Commit index
+
+| Commit | Subject |
+| --- | --- |
+| `165591cce5` | web: allow `--host 0.0.0.0` for LAN and reverse-proxy access |
+| `8269a9f757` | feat(llm-pi-ai): auto-refresh provider model catalogs on web page loads |
+| `1d6fa0c310` | feat(llm-pi-ai): drop models the gateway retired from auto-refreshed catalogs |
+| `a91cf74b9d` | feat(llm-pi-ai): never auto-add reasoning efforts to refreshed models |
+| `c30df9864e` | feat(usage): price tokens at published model rates |
+| `943c10eb61` | fix(ui-model-selection): keep two decimals in model rate cells |
+| `b0156a62f8` | feat(ui-chat): move the turn loader beside the usage pill, show cache rates |
+| `0b4e1333d9` | Merge remote-tracking branch `upstream/master` |
+| `4329c8a4cb` | feat(ui-chat): walk the turn loader back through earlier turns |
+| `35e16d23a1` | feat(usage): price each attempt at its own route and rate band |
+| `6abf54ced1` | docs: record OpenCode V4.1 Flash ordering and the Zen availability limit |
+| `24f40ec67d` | Merge remote-tracking branch `upstream/master` (0.1.5-rc.2, 134 commits) |
+| `bf04e71d95` | docs: complete the Bright Data package and re-point OpenCode's V4.1 Flash id |
+| `8ab51e8613` | feat(settings): let a declared trusted authority write settings |
+| `a787753134` | docs: record the settings write-access rule for declared authorities |
+| `94210c9097` | Merge `upstream/master` (dsh 0.1.6-alpha.2, 1548 commits) |
+| `b153587a45` | fix: repair what the 0.1.6-alpha.2 merge dropped or left stale |
+| `17c26f5958` | docs: describe the assistant metadata rename without the blocked term |
+| `34cd59ef4b` | feat(web): declare trusted hosts and allow disabling browser auth |
+| `83c4ef781f` | feat(ui-chat): show each Turn's throughput beside its run time |
+| `7e964834b9` | feat(llm,ui-chat,session): price unlisted routes, bound the session handoff |
+| `530f4d6e98` | feat(session): retain only the requested window on a bounded read |
+| `8aff1634e9` | feat(session-controller): let opening a Session stay a read |
+| `e9ee5c1302` | feat(deploy): add dsh web auto-start bundle for secondary servers |
+| `c220ee998b` | feat(llm-pi-ai): fill a gateway catalog's gaps from models.dev |
+| `071cc8f20b` | feat(llm-pi-ai): exclude models from a route, and carry the session id |
+| `66141a12b7` | feat: let uploaded and delivered files be saved |
+| `6178175e2e` | feat: continue a large chat in a condensed new one |
+| `2128561ced` | fix: resolve a handoff source instead of requiring a live Agent |
+| `5fc68da79f` | fix: reach a preset's compaction backend through `/compact` |
+| `077769c5e1` | fix: carry the condensed conversation, not the summary declaration |
+| `8c9ff9d6fb` | feat: release what an archived Session costs |
+| `3bdfad037b` | docs: register the new API surface in the cordis catalog |
+
+Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
+
+Related Agent Notes: `.agents/notes/implemented/feature/2026-09-10-published-model-rates-and-estimated-spend.md` (and its `.zh.md`).
