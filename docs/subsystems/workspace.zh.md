@@ -631,6 +631,40 @@ Ask the composed providers what still runs for a session before it is archived. 
 
 Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
 
+<a id="workspacesession-archived--emit"></a>
+
+#### `workspace/session-archived` — emit
+
+One session was archived durably.
+
+Archiving is a registry flag, not a lifecycle: this registry never touches a session's log or its Agent, and the session stays readable. The announcement exists so whoever owns those resources can give them back, which is what makes archiving a way to stop paying for a session rather than only a way to hide it. A listener must therefore tolerate the session being read or resumed again immediately afterwards.
+
+It follows both the durable write and any `stopActivity` request, so a listener that releases an Agent never races a stop that is still settling that same session.
+
+```ts cordis-catalog
+/**
+ * One session was archived durably.
+ *
+ * Archiving is a registry flag, not a lifecycle: this registry never
+ * touches a session's log or its Agent, and the session stays readable.
+ * The announcement exists so whoever owns those resources can give them
+ * back, which is what makes archiving a way to stop paying for a session
+ * rather than only a way to hide it. A listener must therefore tolerate the
+ * session being read or resumed again immediately afterwards.
+ *
+ * It follows both the durable write and any `stopActivity` request, so a
+ * listener that releases an Agent never races a stop that is still
+ * settling that same session.
+ * @param sessionId - the archived session.
+ * @mode emit
+ */
+'workspace/session-archived'(sessionId: SessionId): void
+```
+
+Types: [SessionId](core.zh.md)
+
+Source: [`packages/workspace/workspace/src/index.ts`](../../packages/workspace/workspace/src/index.ts)
+
 <a id="workspacesession-stop--parallel"></a>
 
 #### `workspace/session-stop` — parallel
