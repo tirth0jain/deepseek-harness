@@ -35,8 +35,12 @@ import { catalogModels } from './catalog.ts'
  * requires an `api-version` query — and Codex authenticates through OAuth;
  * guessing at either would report an authentication failure as a provider
  * with no models. pi-ai's remaining protocols are absent for the same reason.
+ *
+ * Exported because automatic catalog refresh pre-checks a route against this
+ * set before scheduling a listing interrogation, so a route whose protocol
+ * has no listing can be declined without a network round trip.
  */
-const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
+export const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
   'anthropic-messages',
   'openai-completions',
   'openai-responses',

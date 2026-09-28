@@ -32,6 +32,10 @@
  *         apiKeyEnv: ACME_GATEWAY_API_KEY
  *         api: openai-completions
  *         baseURL: https://gateway.acme.example/v1
+ *         # Re-interrogate {baseURL}/models on every web page load and store
+ *         # the merged catalog; added models carry only what the listing
+ *         # discloses (reasoning efforts are set per model, never auto-added).
+ *         autoRefresh: true
  *         # Reasoning dialect for a URL pi-ai cannot recognize.
  *         compat:
  *           thinkingFormat: deepseek
@@ -54,30 +58,33 @@
  *
  * @module @deepseek-ai/dsh-llm-pi-ai
  */
-import type {} from '@deepseek-ai/dsh-settings'
-
-import type {} from '@deepseek-ai/cordis-plugin-loader'
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
+import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-fs'
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-settings'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
 import { catalogProviderIds } from './catalog.ts'
 import { assertServiceable, Config, resolveProfiles } from './config.ts'
-import type { ResolvedPiAiProviderProfile } from './config.ts'
-import { discoverModels } from './discovery.ts'
+import type { PiAiModelProfile, ResolvedPiAiProviderProfile } from './config.ts'
+import { discoverModels, LISTABLE_PROTOCOLS } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
 import { registerPiAiFlows } from './login.ts'
+import { loadModelsDevCatalog } from './modelsdev.ts'
+import type { ModelsDevCatalog, ModelsDevFacts } from './modelsdev.ts'
+import { AUTO_REFRESH_MIN_INTERVAL_MS, refreshProviderCatalog } from './refresh.ts'
 
 export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
 export { Config } from './config.ts'
 export type {
-  Options,
   PiAiCompatProfile,
   PiAiModality,
   PiAiModelOverride,
@@ -147,7 +154,15 @@ function directoryEntries(
 
 /** Register one generic pi-ai adapter for all configured provider routes. */
 export function apply(ctx: Context, config: Config): void {
-  ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
+  let settingsProvider: SettingsForms | undefined
+  ctx.inject(['settings'], (child) => {
+    child.effect(() => child.settings.configure({ auto: false }, ctx.fiber))
+    settingsProvider = child.settings
+  })
+  // The loader entry's own id is the settings namespace this instance owns:
+  // two `llm-pi-ai` rows in one composition must not read each other's
+  // document. A hand-built context without an entry falls back to the plugin
+  // name, which is what a single-row composition uses anyway.
   const settingsNs = ctx.fiber.entry?.options.id ?? NS
   let lastRaw: ReturnType<Config['providers']['get']> | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
@@ -169,6 +184,10 @@ export function apply(ctx: Context, config: Config): void {
     return next
   }
   profiles()
+  // A configuration write reaches this instance as a volatile update. Validate
+  // it before it is stored, so a profile claiming a route another adapter
+  // family owns is refused with a message naming the route rather than landing
+  // and failing at the swap.
   ctx.on('internal/config', function (this: import('@deepseek-ai/cordis').Fiber, _raw, next) {
     const raw: unknown = next()
     if (this !== ctx.fiber) return raw
@@ -276,6 +295,162 @@ export function apply(ctx: Context, config: Config): void {
     { ...request, ...signal === undefined ? {} : { signal } },
     () => storedDiscoveryProfile(request.provider),
   ))
+  // Automatic catalog refresh on web page loads. Only the browser
+  // composition mounts the trigger (the webserver index tap), and only a
+  // route that opted in with `autoRefresh` is ever interrogated — a headless
+  // composition or a route without the flag costs nothing. The tap never
+  // awaits the refresh, so a slow or failing gateway cannot hold up the page
+  // response it rides on; failures are logged per route and the previous
+  // catalog keeps serving.
+  const lastRefreshStarted = new Map<string, number>()
+  const refreshInFlight = new Map<string, Promise<void>>()
+  const refreshDeclined = new Set<string>()
+  // One external catalog per refresh pass. The load itself is cached
+  // process-wide under its own TTL, so this only keeps a single pass from
+  // re-entering it once per route.
+  let enrichmentCatalog: Promise<ModelsDevCatalog | undefined> | undefined
+  /**
+   * The external facts for one route, or `undefined` when the route did not
+   * opt in or the catalog could not be read.
+   *
+   * The document is always parsed with reasoning efforts taken, so one fetch
+   * serves routes that disagree about wanting them; a route that did not opt
+   * in has the field stripped here. That is what keeps `enrichReasoning` a
+   * per-route decision instead of a property of whichever route happened to
+   * fetch the document first.
+   */
+  const enrichmentFor = async (
+    provider: string,
+    profile: ResolvedPiAiProviderProfile,
+  ): Promise<ReadonlyMap<string, ModelsDevFacts> | undefined> => {
+    if (profile.enrichFrom !== 'models.dev') return undefined
+    enrichmentCatalog ??= loadModelsDevCatalog({ enrichReasoning: true })
+    const rows = (await enrichmentCatalog)?.get(profile.modelsDevProvider ?? provider)
+    if (rows === undefined || profile.enrichReasoning === true) return rows
+    return new Map([...rows].map(([id, facts]) => {
+      const { reasoningEfforts: _declined, ...rest } = facts
+      return [id, rest] as const
+    }))
+  }
+  const refreshAll = (): void => {
+    const settings = settingsProvider
+    if (settings === undefined) return
+    // The raw user section is the merge base: the resolved profiles carry
+    // schema defaults no document stores, and a refresh must never persist
+    // those. describe() detaches the stored document, so the merge below
+    // reads exactly what settings.yaml says.
+    let user: { providers?: Record<string, unknown> } = {}
+    try {
+      user = (settings.describe().find(descriptor => descriptor.ns === NS)?.user ?? {}) as
+        { providers?: Record<string, unknown> }
+    } catch {
+      return
+    }
+    const declared = user.providers as
+      | Record<string, { models?: readonly PiAiModelProfile[]; modelOverrides?: unknown }>
+      | undefined
+    for (const [provider, profile] of profiles()) {
+      if (profile.autoRefresh !== true) {
+        // Enrichment rides the automatic refresh, so a route that asked for it
+        // without autoRefresh would silently receive nothing; say so once.
+        if (profile.enrichFrom !== undefined && !refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          ctx.logger.warn(`llm-pi-ai: route "${provider}" sets enrichFrom but not autoRefresh, so its`
+            + ' models are never refreshed and the enrichment never applies; set autoRefresh too')
+        }
+        continue
+      }
+      const api = profile.api ?? 'openai-completions'
+      const baseURL = profile.baseURL
+      // A route whose listing this build cannot read is declined once per
+      // process, with the reason, instead of failing on every page load.
+      if (baseURL === undefined || baseURL.length === 0 || !LISTABLE_PROTOCOLS.has(api)) {
+        if (!refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          const reason = baseURL === undefined || baseURL.length === 0
+            ? 'has no baseURL to interrogate'
+            : `protocol "${api}" has no model listing this build can read`
+          ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" ${reason}; enter its models by hand`
+            + ' or adjust the route')
+        }
+        continue
+      }
+      // A route carrying modelOverrides beside models is a shape refresh
+      // would collide with (the catalog refuses both), so it is declined too.
+      const stored = declared?.[provider]
+      if (stored?.modelOverrides !== undefined) {
+        if (!refreshDeclined.has(provider)) {
+          refreshDeclined.add(provider)
+          ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" also sets modelOverrides, and automatic`
+            + ' refresh writes the models list; disable autoRefresh or drop the overrides')
+        }
+        continue
+      }
+      // Coalesce bursts: an in-flight refresh already covers this load, and a
+      // refresh that started moments ago is still answering this one — the
+      // listing is the same seconds apart.
+      if (refreshInFlight.has(provider)) continue
+      const now = Date.now()
+      const last = lastRefreshStarted.get(provider) ?? 0
+      if (now - last < AUTO_REFRESH_MIN_INTERVAL_MS) continue
+      const currentModels = stored?.models ?? []
+      const storedProfile = storedDiscoveryProfile(provider)
+      lastRefreshStarted.set(provider, now)
+      const run = (async () => {
+        const enrichment = await enrichmentFor(provider, profile)
+        const declared = profile.excludeModels ?? []
+        const outcome = await refreshProviderCatalog({
+          provider,
+          ...api === undefined ? {} : { api },
+          baseURL,
+          currentModels,
+          ...storedProfile === undefined ? {} : { storedProfile: () => storedProfile },
+          ...enrichment === undefined ? {} : { enrichment },
+          ...declared.length === 0 ? {} : { exclude: new Set(declared) },
+          persist: async (models) => {
+            await settings.update(settingsNs, { providers: { [provider]: { models: [...models] } } })
+          },
+        })
+        if (outcome.empty) {
+          ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" answered with an empty model`
+            + ' listing; keeping the stored catalog — check the gateway if this persists')
+        } else if (outcome.changed) {
+          ctx.logger.info(`llm-pi-ai: autoRefresh provider "${provider}" — now ${String(outcome.models.length)}`
+            + ` models (${String(outcome.added.length)} added, ${String(outcome.updated.length)} updated,`
+            + ` ${String(outcome.removed.length)} removed, ${String(outcome.excluded.length)} excluded)`)
+        }
+        // A declared exclusion that refused nothing is dead configuration, and
+        // a typo there is otherwise silent: the route simply keeps serving the
+        // model the deployment meant to move elsewhere. Reported only against a
+        // listing that was actually read, since an empty one evaluated nothing.
+        if (!outcome.empty && declared.length > 0) {
+          const refused = new Set(outcome.excluded)
+          const unused = declared.filter(id => !refused.has(id))
+          if (unused.length > 0 && !refreshDeclined.has(`exclude:${provider}`)) {
+            refreshDeclined.add(`exclude:${provider}`)
+            ctx.logger.warn(`llm-pi-ai: autoRefresh route "${provider}" excludes ${unused.join(', ')},`
+              + ' which its listing does not serve and its stored models do not carry; check the ids')
+          }
+        }
+      })().catch((error: unknown) => {
+        ctx.logger.warn(`llm-pi-ai: autoRefresh provider "${provider}" refresh failed:`
+          + ` ${error instanceof Error ? error.message : String(error)}`)
+      })
+      refreshInFlight.set(provider, run)
+      void run.finally(() => { refreshInFlight.delete(provider) })
+    }
+  }
+  // Every index render IS a web page load; the tap is a pure side channel
+  // that must never alter the page, so it starts the refresh and returns the
+  // body untouched. The webServer service only exists in the browser
+  // composition — headless has no page loads to hook — and this inject just
+  // stays pending where it never appears, exactly like the authorization one.
+  ctx.inject(['webServer'], (webCtx) => {
+    ctx.effect(() => webCtx.webServer.tapIndex((html: string) => {
+      refreshAll()
+      return html
+    }), 'llm-pi-ai: autoRefresh on web page load')
+  })
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below. A bare
   // mount (zero routes) is the dormant posture: nothing registers until a
@@ -308,9 +483,27 @@ export function apply(ctx: Context, config: Config): void {
   ensureRegistrationFacts()
 
   ctx.on('loader/volatile-update', () => {
-    try { ensureRegistrationFacts(); ensureDirectory() }
-    catch (error) {
-      ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
+    // Named here rather than left to the settings watcher: `assertServiceable`
+    // cannot see the llm registry, so a profile claiming a route another
+    // adapter family owns is stored successfully and only fails at this swap.
+    // Without its own diagnostic that refusal reaches the operator as a
+    // generic "settings: watcher failed", naming neither the route nor why it
+    // is not serving. The previous routes keep serving either way.
+    try {
+      ensureRegistrationFacts()
+    } catch (error) {
+      ctx.logger.error('llm-pi-ai: keeping the previously registered routes after a refused update')
+      ctx.logger.error(error)
+    }
+    // The directory follows the profiles the registry accepted, so a route
+    // that failed to register is not advertised as configurable. A refused
+    // directory swap is contained here for the same reason the registry's
+    // is: the previous entries keep serving, and `directoryFacts` stays put
+    // so returning to a working configuration re-applies.
+    try {
+      ensureDirectory()
+    } catch (error) {
+      ctx.logger.error('llm-pi-ai: keeping the previous configurable-provider directory after a refused update')
       ctx.logger.error(error)
     }
   })
