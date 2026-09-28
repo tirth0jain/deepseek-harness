@@ -7,13 +7,13 @@
  * own `single` directory-flow child hole for the composed picker package's
  * client half. WorkspaceBrowser additionally declares the two Session row
  * action lists, and this apply registers the shipped actions — pin, rename,
- * fork, archive — into them the way any client plugin would, each with its
- * own behavior, plus the rename dialog and the row-action notice into
- * `shell.overlay` (see the contract module doc). It also declares two
- * Session-row seats: the leading decoration a row renders only while its own
- * primary state is idle, and the section the row's hover card renders between
- * its relative time and its trailing status line. Export discipline:
- * packages/client/AGENTS.md.
+ * fork, handoff, archive — into them the way any client plugin would, each
+ * with its own behavior, plus the rename dialog, the row-action notice, and
+ * the refused-handoff notice into `shell.overlay` (see the contract module
+ * doc). It also declares two Session-row seats: the leading decoration a row
+ * renders only while its own primary state is idle, and the section the row's
+ * hover card renders between its relative time and its trailing status line.
+ * Export discipline: packages/client/AGENTS.md.
  */
 import type {} from '@deepseek-ai/dsh-client-product-analytics/client'
 import type { Context } from '@deepseek-ai/cordis'
@@ -36,7 +36,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the Session root standard-hook merge.
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import {
-  type ArchiveSessionInjected, type ForkSessionInjected, menuOpenStateFactory, type PinSessionInjected,
+  type ArchiveSessionInjected, type ForkSessionInjected, type HandoffSessionInjected, menuOpenStateFactory,
+  type PinSessionInjected,
   type SessionArchiveConfirmInjected, type SessionArchiveConfirmRequest,
   type RenameSessionInjected, type RowToast, type RowToastInjected, type RowToastState, type SessionRenameDialogInjected,
   type WorkspaceBrowserInjected, type WorkspacePickerInjected,
@@ -44,10 +45,13 @@ import {
 import { createWorkspaceShortcutControls, installWorkspaceShortcuts } from './shortcuts.ts'
 import { UiWorkspaceService } from './navigation.ts'
 import { createWorkspaceViewStore } from './stores.ts'
+import { createHandoffFailures } from './handoff-notice.ts'
+import { HandoffNotice, type HandoffNoticeInjected } from './HandoffNotice.tsx'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
 import { ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog } from './session-actions/ArchiveSession.tsx'
 import { derive } from './session-actions/derived.ts'
 import { ForkSessionMenuItem } from './session-actions/ForkSession.tsx'
+import { HandoffSessionMenuItem } from './session-actions/HandoffSession.tsx'
 import { PinSessionMenuItem, PinSessionRowButton } from './session-actions/PinSession.tsx'
 import { RenameSessionMenuItem, SessionRenameDialog } from './session-actions/RenameSession.tsx'
 import { RowActionToast } from './session-actions/RowActionToast.tsx'
@@ -115,6 +119,9 @@ export function apply(ctx: Context): void {
   const rowToast = createSnapshotStore<RowToastState | null>(null)
   let toastSeq = 0
   const notify = (toast: RowToast): void => { rowToast.set({ ...toast, seq: ++toastSeq }) }
+  // Handoff refusals outlive the row that raised them: the row re-renders
+  // underneath the click, so the notice is held here and shown frame-wide.
+  const handoffFailures = createHandoffFailures()
   const uiWorkspace = new UiWorkspaceService(
     ctx, ctx.remote.directoryPicker, workspaces, sessions, viewInstance.actions, notify,
   )
@@ -217,6 +224,19 @@ export function apply(ctx: Context): void {
     },
   })
   const renameInjected = (): RenameSessionInjected => ({ requestSessionRename })
+  const handoffInjected = (): HandoffSessionInjected => ({
+    handoffSession: (sessionId) => {
+      uiWorkspace.handoffSession(sessionId)
+        .catch((error: unknown) => {
+          // A refused handoff — no backend, a busy Agent, nothing to condense —
+          // keeps the current selection and leaves the source Session
+          // untouched. It is not silent, though: the reason is the whole of
+          // what the clicker needs, and a click that visibly does nothing is
+          // indistinguishable from a broken one.
+          handoffFailures.report(error)
+        })
+    },
+  })
   const renameDialogInjected = (): SessionRenameDialogInjected => ({
     hooks: { renameRequest },
     settleSessionRename: shortcutControls.closeRename,
@@ -286,6 +306,10 @@ export function apply(ctx: Context): void {
     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'pin', order: 100, locale: NS, inject: pinInjected }, PinSessionMenuItem)
     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'rename', order: 200, locale: NS, inject: renameInjected }, RenameSessionMenuItem)
     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'fork', order: 300, locale: NS, inject: forkInjected }, ForkSessionMenuItem)
+    // The one row that changes what the process holds rather than what the
+    // list shows; it sits between fork and archive, where a reader looks for
+    // "the conversation continues" rather than "the conversation goes away".
+    yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'handoff', order: 350, locale: NS, inject: handoffInjected }, HandoffSessionMenuItem)
     yield ctx.slots.register({ name: 'sidebar.workspaces.session.menu.item', id: 'archive', order: 400, locale: NS, inject: archiveInjected }, ArchiveSessionMenuItem)
   })
   ctx.slots.inject('sidebar.workspaces.session.row.action', function* () {
@@ -315,6 +339,20 @@ export function apply(ctx: Context): void {
       locale: NS,
     },
     WorkspacePicker,
+  ))
+  // A refused handoff reports where no row can take it away: the frame-wide
+  // overlay layer, additive beside whatever else occupies it.
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+    {
+      name: 'shell.overlay',
+      id: 'handoff-notice',
+      locale: NS,
+      inject: (): HandoffNoticeInjected => ({
+        hooks: { handoffFailures: handoffFailures.failures },
+        dismissHandoffFailure: (id) => { handoffFailures.dismiss(id) },
+      }),
+    },
+    HandoffNotice,
   ))
 }
 

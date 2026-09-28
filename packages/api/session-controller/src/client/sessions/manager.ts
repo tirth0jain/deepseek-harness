@@ -551,6 +551,33 @@ export class SessionManager {
   }
 
   /**
+   * Contract session.handoff; on success merge the continuation into summaries
+   * immediately, exactly as `fork` does. Unlike a fork child the continuation
+   * is never blank — its opening message is the condensation — so it is
+   * published as surfaced, and lineage rides parentSessionId so the list nests
+   * it under its source.
+   * @param opts - the source session to continue elsewhere.
+   * @returns the handoff result (the continuation's id and whether the source was archived).
+   */
+  async handoff(
+    opts: { sessionId: SessionId },
+  ): Promise<RemoteResult<{ sessionId: SessionId; archived: boolean }>> {
+    const source = this.summaries.find(s => s.sessionId === opts.sessionId)
+    const result = await this.remote.session.handoff({ sessionId: opts.sessionId })
+    const childId = result.ok
+      ? result.value.sessionId
+      : workspaceAttachSessionId(result.error)
+    if (childId !== undefined) {
+      this.recordMutation({ kind: 'placeholder', summary: { agentAvailable: true,
+        sessionId: childId, updatedAt: Date.now(), running: false, blank: false,
+        parentSessionId: opts.sessionId,
+        ...(source?.cwd !== undefined ? { cwd: source.cwd } : {}),
+      } })
+    }
+    return result
+  }
+
+  /**
    * Rename a Session and update its title projection without opening its history.
    * @param sessionId - Session to rename.
    * @param title - raw title text for Host normalization.

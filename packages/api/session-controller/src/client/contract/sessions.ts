@@ -11,7 +11,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentContext } from '../scope.ts'
 import type { SessionSearchResultItem } from '../sessions/manager.ts'
-import type { SessionBinding, SessionListState } from '../sessions/service.ts'
+import type { SessionBinding, SessionHandoffOutcome, SessionListState } from '../sessions/service.ts'
 import type { SessionFace } from './session.ts'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionReferenceSource } from '../index.ts'
@@ -135,6 +135,24 @@ export interface ISessions {
     increaseTitle?: boolean
     onCreated?: (childId: SessionId) => void
   }): Promise<SessionId>
+  /**
+   * Continue one Session in a new one holding only its condensed history, and
+   * archive the source.
+   *
+   * The continuation's whole history is the condensation, so it is small by
+   * construction — which is the only thing that actually shrinks the process's
+   * working set, since archiving a Session releases nothing and compacting one
+   * keeps its shadowed content by contract. The source is archived as part of
+   * the operation, and `archived` reports whether that step succeeded: the
+   * continuation exists either way, so a failed archive is never a reason to
+   * discard it.
+   * @param opts - the Session to continue elsewhere, and whether to title the
+   *   continuation after its source before resolving.
+   * @returns the continuation's session id and whether its source was archived.
+   * @throws {SessionHandoffError} with the source id and the precondition that failed.
+   * @throws {Error} when a requested continuation-title rename fails after creation.
+   */
+  handoff(opts: { sessionId: SessionId; inheritTitle?: boolean }): Promise<SessionHandoffOutcome>
   /**
    * Borrow an already-retained Agent-scoped Context without extending its lifetime.
    * @param id - session id.

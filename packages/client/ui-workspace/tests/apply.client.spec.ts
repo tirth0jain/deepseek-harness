@@ -13,13 +13,16 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import {
-  type ArchiveSessionInjected, type ForkSessionInjected, menuOpenStateFactory, type PinSessionInjected,
+  type ArchiveSessionInjected, type ForkSessionInjected, type HandoffSessionInjected, menuOpenStateFactory,
+  type PinSessionInjected,
   type RenameSessionInjected, type RowToastInjected, type SessionArchiveConfirmInjected, type SessionRenameDialogInjected,
   type WorkspaceViewStoreHandle,
 } from '../src/client/contract/slots.ts'
+import { HandoffNotice, type HandoffNoticeInjected } from '../src/client/HandoffNotice.tsx'
 import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
 import { ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog } from '../src/client/session-actions/ArchiveSession.tsx'
 import { ForkSessionMenuItem } from '../src/client/session-actions/ForkSession.tsx'
+import { HandoffSessionMenuItem } from '../src/client/session-actions/HandoffSession.tsx'
 import { PinSessionMenuItem, PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
 import { RenameSessionMenuItem, SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
 import { RowActionToast } from '../src/client/session-actions/RowActionToast.tsx'
@@ -86,6 +89,7 @@ async function bench() {
     operation: (reference: SessionReference) => unknown,
   ) => await operation(retain(target)))
   const fork = vi.fn(async () => 'forked' as never)
+  const handoff = vi.fn(async () => ({ sessionId: 'continued' as never, archived: true }))
   const pinSession = vi.fn(async () => undefined)
   const unpinSession = vi.fn(async () => undefined)
   // The Host snapshots the injected hooks derive from and a pin's order write
@@ -120,6 +124,7 @@ async function bench() {
     subagentAddress: vi.fn(() => undefined),
     refreshProjections: vi.fn(() => Promise.resolve()),
     fork,
+    handoff,
   } as never)
   const pickDirectory = vi.fn(() => Promise.resolve({ ok: true as const, value: '/projects/picked' }))
   const directoryPicker = { pick: pickDirectory }
@@ -133,7 +138,7 @@ async function bench() {
   ctx.provide('locale', locale)
   return {
     ctx, slots: ctx.get('slots') as SlotRegistry, locale, create, rename,
-    retain, using, selectPanel, search, renameSession, binding, fork, pickDirectory, pinSession, unpinSession,
+    retain, using, selectPanel, search, renameSession, binding, fork, handoff, pickDirectory, pinSession, unpinSession,
     workspacesSubscribe, initializeDefault,
     setWorkspaces: (snapshot: WorkspaceSnapshot): void => { workspaceSnapshot = snapshot },
     setSessions: (snapshot: SessionListState): void => { sessionSnapshot = snapshot },
@@ -218,9 +223,9 @@ describe('ui-workspace apply', () => {
     await Promise.resolve()
     expect(after.slots.entries('conversation.hero.workspace')[0]!.component).toBe(WorkspacePicker)
     // The row actions follow the browser's own declaration, whenever it lands.
-    expect(after.slots.entries(MENU_ITEM)).toHaveLength(4)
+    expect(after.slots.entries(MENU_ITEM)).toHaveLength(5)
     expect(after.slots.entries(ROW_ACTION)).toHaveLength(2)
-    expect(after.slots.entries('shell.overlay')).toHaveLength(3)
+    expect(after.slots.entries('shell.overlay')).toHaveLength(4)
   })
 
   it('declares the two Session row lists and registers the shipped actions and overlay surfaces into them', async () => {
@@ -240,6 +245,9 @@ describe('ui-workspace apply', () => {
       ['pin', 100, PinSessionMenuItem, 'workspace'],
       ['rename', 200, RenameSessionMenuItem, 'workspace'],
       ['fork', 300, ForkSessionMenuItem, 'workspace'],
+      // The handoff sits between fork and archive, where a plugin entry can
+      // land by `order` without renumbering the shipped rows.
+      ['handoff', 350, HandoffSessionMenuItem, 'workspace'],
       ['archive', 400, ArchiveSessionMenuItem, 'workspace'],
     ])
     expect(rows(ROW_ACTION)).toEqual([
@@ -250,6 +258,7 @@ describe('ui-workspace apply', () => {
       ['workspace.session-rename', undefined, SessionRenameDialog, 'workspace'],
       ['workspace.session-archive', undefined, SessionArchiveConfirmDialog, 'workspace'],
       ['workspace.row-toast', undefined, RowActionToast, 'workspace'],
+      ['handoff-notice', undefined, HandoffNotice, 'workspace'],
     ])
     // The browser and the row toast declare the same viewing-store handle,
     // which hands out one instance: the browser's injected callbacks write
@@ -521,6 +530,33 @@ describe('ui-workspace apply', () => {
     expect(unarchiveSession).toHaveBeenCalledWith('session')
   })
 
+  it('routes handoff through the navigation service and reports a refusal into the notice entry', async () => {
+    const b = await bench()
+    declare(b.slots, 'sidebar.workspaces', 'shell.overlay')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+
+    // The handoff row drives the navigation service, which condenses the
+    // source, opens the continuation, and leaves the source archived.
+    const handoffSession = vi.spyOn(b.ctx.uiWorkspace, 'handoffSession')
+    const handoff = faceOf(entry(b.slots, MENU_ITEM, 'handoff')) as HandoffSessionInjected
+    handoff.handoffSession('session' as never)
+    await handoffSession.mock.results[0]!.value
+    expect(b.handoff).toHaveBeenCalledWith({ sessionId: 'session', inheritTitle: true })
+    expect(b.retain).toHaveBeenCalledWith('continued', { source: 'mainView' })
+
+    // A refusal keeps the selection and is reported into the frame-wide
+    // notice, where dismissal is per failure.
+    const notice = faceOf(entry(b.slots, 'shell.overlay', 'handoff-notice')) as HandoffNoticeInjected
+    expect(notice.hooks.handoffFailures.getSnapshot()).toEqual([])
+    handoffSession.mockRejectedValueOnce(new Error('no compaction backend'))
+    handoff.handoffSession('session' as never)
+    await vi.waitFor(() => { expect(notice.hooks.handoffFailures.getSnapshot()).toHaveLength(1) })
+    const failure = notice.hooks.handoffFailures.getSnapshot()[0]!
+    expect(failure.message).toBe('no compaction backend')
+    notice.dismissHandoffFailure(failure.id)
+    expect(notice.hooks.handoffFailures.getSnapshot()).toEqual([])
+  })
+
   it('routes browser actions and picker creation to the services', async () => {
     const b = await bench()
     declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace')
@@ -596,9 +632,9 @@ describe('ui-workspace apply', () => {
     declare(b.slots, 'sidebar.workspaces', 'conversation.hero.workspace', 'conversation.empty.workspace', 'shell.overlay')
     const fiber = b.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
-    expect(b.slots.entries(MENU_ITEM)).toHaveLength(4)
+    expect(b.slots.entries(MENU_ITEM)).toHaveLength(5)
     expect(b.slots.entries(ROW_ACTION)).toHaveLength(2)
-    expect(b.slots.entries('shell.overlay')).toHaveLength(3)
+    expect(b.slots.entries('shell.overlay')).toHaveLength(4)
     await fiber.dispose()
     expect(b.slots.entries('sidebar.workspaces')).toHaveLength(0)
     expect(b.slots.entries('conversation.hero.workspace')).toHaveLength(0)

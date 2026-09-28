@@ -8,7 +8,7 @@ import type {
   AgentContext, ISessions, ProjectionsFace, SessionBinding, SessionFace, SessionListState,
   SessionEventLikeEntry, SessionLiveEventEntry, SessionSearchResultItem,
   SessionReference, SessionReferenceSource, SessionRetainInfo, SessionRetainOptions,
-  SessionSnapshot, SessionSummary, SessionTarget, SubmissionHandle,
+  SessionHandoffOutcome, SessionSnapshot, SessionSummary, SessionTarget, SubmissionHandle,
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import { scopeIdentityOf } from '@deepseek-ai/dsh-api-session-controller/src/client/scope.ts'
 import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -311,7 +311,7 @@ export class TestSessions implements ISessions {
 
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
-    method: 'create' | 'refreshProjections' | 'refresh' | 'search' | 'fork'
+    method: 'create' | 'refreshProjections' | 'refresh' | 'search' | 'fork' | 'handoff'
     args: unknown[]
   }[] = []
 
@@ -680,6 +680,19 @@ export class TestSessions implements ISessions {
   fork(opts: Parameters<ISessions['fork']>[0]): Promise<SessionId> {
     this.calls.push({ method: 'fork', args: [opts] })
     return Promise.resolve(opts.sessionId)
+  }
+
+  /**
+   * Recorded handoff stub: no continuation materializes (benches asserting the
+   * full handoff flow drive the production service; this face only proves the
+   * call). The source id stands in for the continuation, and the archive is
+   * reported as done so a caller that branches on it is exercised.
+   * @param opts - source session id and client title policy.
+   * @returns the continuation's id and whether its source was archived.
+   */
+  handoff(opts: { sessionId: SessionId; inheritTitle?: boolean }): Promise<SessionHandoffOutcome> {
+    this.calls.push({ method: 'handoff', args: [opts] })
+    return Promise.resolve({ sessionId: opts.sessionId, archived: true })
   }
 
   /**

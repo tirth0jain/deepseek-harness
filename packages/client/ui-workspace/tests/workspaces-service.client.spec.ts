@@ -136,6 +136,7 @@ class FakeSessions implements ISessions {
   readonly list: MutableSource<SessionListState>
   readonly create: ReturnType<typeof vi.fn<ISessions['create']>>
   readonly fork = vi.fn<ISessions['fork']>(async () => sid('forked'))
+  readonly handoff = vi.fn<ISessions['handoff']>(async () => ({ sessionId: sid('continued'), archived: true }))
   readonly retained: RetainedSession[] = []
   readonly refreshProjections = vi.fn<ISessions['refreshProjections']>(() => Promise.resolve())
   readonly retain = vi.fn<ISessions['retain']>((target) => {
@@ -534,6 +535,22 @@ describe('UiWorkspaceService', () => {
     expect(b.sessions.retain).not.toHaveBeenCalled()
     expect(b.selectPanel).not.toHaveBeenCalled()
     expect(b.sessions.retained[0]!.release).not.toHaveBeenCalled()
+  })
+
+  it('opens the continuation a handoff produced, and rejects a refused handoff', async () => {
+    const b = bench()
+    b.uiWorkspace.openSession(sid('source'))
+    b.sessions.retain.mockClear()
+    await b.uiWorkspace.handoffSession(sid('source'))
+    // The continuation inherits the title rather than incrementing it: it reads
+    // as the same conversation, not a parallel branch.
+    expect(b.sessions.handoff).toHaveBeenCalledWith({ sessionId: sid('source'), inheritTitle: true })
+    expect(b.sessions.retain).toHaveBeenCalledWith(sid('continued'), { source: 'mainView' })
+    // A refusal keeps the selection on the source and reaches the caller.
+    b.sessions.retain.mockClear()
+    b.sessions.handoff.mockRejectedValueOnce(new Error('handoff refused'))
+    await expect(b.uiWorkspace.handoffSession(sid('source'))).rejects.toThrow('handoff refused')
+    expect(b.sessions.retain).not.toHaveBeenCalled()
   })
 
   it('does not supersede a pending Workspace selection when a sidebar fork completes', async () => {

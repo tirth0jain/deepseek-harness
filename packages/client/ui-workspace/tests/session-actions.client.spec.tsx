@@ -27,6 +27,7 @@ import {
   ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog,
 } from '../src/client/session-actions/ArchiveSession.tsx'
 import { ForkSessionMenuItem } from '../src/client/session-actions/ForkSession.tsx'
+import { HandoffSessionMenuItem } from '../src/client/session-actions/HandoffSession.tsx'
 import { PinSessionMenuItem, PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
 import { RenameSessionMenuItem, SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
 import { RowActionToast } from '../src/client/session-actions/RowActionToast.tsx'
@@ -228,6 +229,62 @@ describe('fork and rename rows', () => {
     expect(requestSessionRename).toHaveBeenCalledWith(sid('one'), 'Session title')
     expect(setMenuOpen).toHaveBeenCalledWith(false)
     expect(callOrder(setMenuOpen)).toBeLessThan(callOrder(requestSessionRename))
+  })
+})
+
+describe('handoff row', () => {
+  /** One Session's UI status as the live snapshot carries it. */
+  const statusOf = (running: boolean): SessionStatusSnapshot =>
+    new Map([[one.id, { running, pendingInteraction: undefined, completionUnread: false }]])
+
+  it('closes the menu, then continues the Session in a condensed new one', () => {
+    const { state, setMenuOpen } = openMenu()
+    const handoffSession = vi.fn()
+    render(<HandoffSessionMenuItem {...menuRow(state)} handoffSession={handoffSession} />)
+    fireEvent.click(screen.getByRole('menuitem', { name: '在新会话中继续（压缩旧会话）' }))
+    expect(handoffSession).toHaveBeenCalledWith(sid('one'))
+    expect(setMenuOpen).toHaveBeenCalledWith(false)
+    expect(callOrder(setMenuOpen)).toBeLessThan(callOrder(handoffSession))
+  })
+
+  it('offers the row disabled while the Session runs, from either running fact', () => {
+    const { state } = openMenu()
+    const handoffSession = vi.fn()
+    const runningList: SessionListState = { ...sessions, byId: { [one.id]: { ...one, running: true } } }
+    const name = '在新会话中继续（压缩旧会话）'
+    const view = render(
+      <HandoffSessionMenuItem {...menuRow(state)} handoffSession={handoffSession} useSessions={hook(runningList)} />,
+    )
+    const row = screen.getByRole('menuitem', { name })
+    expect((row as HTMLButtonElement).disabled).toBe(true)
+    // Condensing needs an idle Agent: the click reaches no handler rather than
+    // starting a handoff that is known to be refused.
+    fireEvent.click(row)
+    expect(handoffSession).not.toHaveBeenCalled()
+
+    // The live UI status is the fact the row's own state dot reads first; an
+    // idle status over a stale list summary re-enables the row.
+    view.rerender(
+      <HandoffSessionMenuItem
+        {...menuRow(state)}
+        handoffSession={handoffSession}
+        useSessions={hook(runningList)}
+        useSessionStatus={hook(statusOf(false))}
+      />,
+    )
+    fireEvent.click(screen.getByRole('menuitem', { name }))
+    expect(handoffSession).toHaveBeenCalledWith(sid('one'))
+
+    // And the reverse: a live running status disables the row even when the
+    // list summary has not caught up.
+    view.rerender(
+      <HandoffSessionMenuItem
+        {...menuRow(state)}
+        handoffSession={handoffSession}
+        useSessionStatus={hook(statusOf(true))}
+      />,
+    )
+    expect((screen.getByRole('menuitem', { name }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
 
