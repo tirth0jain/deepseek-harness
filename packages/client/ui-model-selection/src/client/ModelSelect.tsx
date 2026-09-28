@@ -33,6 +33,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelSelectInjected } from './slots.ts'
+import { formatRate } from './rates.ts'
 import css from './ModelSelect.module.css'
 
 /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
@@ -456,6 +457,9 @@ export function ModelSelect(
                           >
                             <span className={css.optionCopy}>
                               <span className={css.modelName}>{model.name}</span>
+                              {model.cost !== undefined && (
+                                <span className={css.modelRate}>{formatRate(model.cost)}</span>
+                              )}
                             </span>
                             <span className={css.check}>
                               {pending?.provider === group.id && pending.model === model.id

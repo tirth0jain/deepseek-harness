@@ -21,6 +21,9 @@
       "path": "../ui-conversation/tsconfig.client.json"
     },
     {
+      "path": "../ui-model-selection"
+    },
+    {
       "path": "../ui-renderer"
     },
     {

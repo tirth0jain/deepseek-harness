@@ -20,6 +20,7 @@ import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { TurnNavigator } from './TurnNavigator.tsx'
 import { RunningStatus } from './RunningStatus.tsx'
 import { mergeTurnRailItems } from './turn-rail-items.ts'
+import type { TurnRateLookup } from './turn-cost.ts'
 import { useChatScroll } from './use-chat-scroll.ts'
 import { fileMediaUrl, resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import css from './ChatView.module.css'
@@ -101,7 +102,7 @@ const ChatNodeList = memo(function ChatNodeList({ entries, useChatGroup, pending
 export function ChatView({
   useSession, useChat, useChatNode, useChatNodeProcess, useChatGroup, useConversation, useSessions, useStore, actions, renderSlot,
   sessionId, openFile, openSkill, openExternalLink, loadOlder, loadThrough, loadImage, inspectCall, chatScroll, forkAt, fileMentions,
-  usePresentation, useProjection, t,
+  usePresentation, useModelCosts, useProjection, t,
 }: ChatViewSlotProps) {
   const order = useChat(s => s.order)
   const groupedEntries = useConversation(snapshot => snapshot.views.grouped('chat')?.entries)
@@ -141,6 +142,14 @@ export function ChatView({
   const openError = useSession(s => s.openError)
   const hasMore = useSession(s => s.hasMore)
   const loadingOlder = useSession(s => s.loadingOlder)
+  // Rates ride the model selector's own per-session catalog, so a price edited
+  // in Settings reaches the transcript without a reload. A route the catalog
+  // does not price resolves to undefined, and the tail then shows no amount.
+  const modelCosts = useModelCosts(snapshot => snapshot.groups)
+  const costOf = useCallback<TurnRateLookup>((provider, model) => {
+    const group = modelCosts.find(candidate => candidate.id === provider)
+    return group?.models.find(candidate => candidate.id === model)?.cost
+  }, [modelCosts])
   const [fileOpenError, setFileOpenError] = useState<{ path: string; message: string } | null>(null)
   const [fileOpenBusy, setFileOpenBusy] = useState(false)
   // Close/retry must ignore a settlement that started before the latest
@@ -273,6 +282,7 @@ export function ChatView({
                 loadImage={loadImage}
                 renderMessageImages={renderMessageImages}
                 fileMentions={fileMentions}
+                costOf={costOf}
                 renderSlot={renderSlot}
                 t={t}
               />

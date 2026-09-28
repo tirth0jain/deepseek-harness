@@ -11,11 +11,13 @@ import type {
   HostObservable, InjectFace, KeyedSnapshotSelectorHook, PropsLocale, PropsRenderSlots, PropsRuntime,
   PropsStore, SlotHookFactory, SnapshotSelectorHook,
 } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { UsageRate } from '@deepseek-ai/dsh-token-meter/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { createChatStore } from '../stores.ts'
 import type { ChatPresentationPolicy } from '../presentation-policy.ts'
+import type { TurnRateLookup } from '../chat/turn-cost.ts'
 import type { ToolCallId } from './store.ts'
 import type { ChatConversationViewNode, ChatNode, ChatNodeKind } from './chat-nodes.ts'
 import type {
@@ -183,6 +185,12 @@ export interface ChatNodeOwnerProps {
    */
   attachmentDownloadUrl?: ((attachment: FileAttachmentRef) => string | undefined) | undefined
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
+  /**
+   * Published rate for one exact route, down-threaded from the Chat view so a
+   * node renderer can price the usage it already holds. Undefined means the
+   * route is unpriced, which renders no amount at all.
+   */
+  costOf: TurnRateLookup
   /** Turn-process state when this Node belongs to a projected Turn. */
   turnProcess?: TurnProcessOwnerProps | undefined
 }
@@ -228,6 +236,25 @@ export interface ChatScrollPosition {
   readonly scrollTop: number
 }
 
+/**
+ * The part of the Host model catalog a spend estimate reads: one entry per
+ * provider group, each model carrying its published rate when it has one.
+ * Structural rather than the selector's own directory type so this contract
+ * stays independent of the plugin that owns that directory.
+ */
+export interface ChatModelCostState {
+  readonly groups: readonly ChatModelCostGroup[]
+}
+
+/** One provider group in {@link ChatModelCostState}. */
+export interface ChatModelCostGroup {
+  readonly id: string
+  readonly models: readonly {
+    readonly id: string
+    readonly cost?: UsageRate | undefined
+  }[]
+}
+
 /** Shared settings source for the performance row, composer, and turn tail. */
 export interface PerformanceUsageInjected {
   hooks: {
@@ -251,6 +278,12 @@ export interface ChatViewInjected {
   hooks: {
     /** Live presentation policy derived from the accepted work-details mode. */
     presentation: ObservableSnapshot<ChatPresentationPolicy>
+    /**
+     * The Host model catalog's provider groups, read for published rates. The
+     * same per-session directory the model selector owns, so a rate that
+     * changed in Settings prices the next turn without a reload.
+     */
+    modelCosts: SnapshotStore<ChatModelCostState>
   }
   keyedHooks: {
     /** Resolve the stable source for one Chat Node key. */
