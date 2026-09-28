@@ -46,6 +46,45 @@ interface HarnessOptions {
   archiveSession?: (sessionId: SessionId) => Promise<void>
 }
 
+/**
+ * Apply one condensation the way a backend does: declare the summary, then
+ * replace the shadowed surface nodes with a checkpoint user message carrying
+ * it. The last `keepTail` surface nodes stay unshadowed — that retained tail is
+ * what compaction keeps verbatim, so it is what a handoff has to carry beside
+ * the summary.
+ */
+function condenseSurface(session: Session, summary: readonly ContentBlock[], keepTail = 1): void {
+  const nodes = session.surface.nodes
+  const shadowed = nodes.slice(0, Math.max(0, nodes.length - keepTail))
+  session.append('compaction/summary', {
+    compactionId: 'c-1' as never,
+    summary: [...summary],
+    shadowedRange: {
+      start: (shadowed[0] ?? nodes[0] ?? 0) as never,
+      end: (shadowed[shadowed.length - 1] ?? nodes[0] ?? 0) as never,
+    },
+    shadowedSeqs: [...shadowed],
+    shadowedTokenCount: 10,
+    provider: 'fixture',
+    model: 'fixture-model',
+  })
+  if (shadowed.length === 0) return
+  session.append('user/message', createUserMessage({
+    content: [...summary],
+    // The backend-independent checkpoint marker, written structurally because
+    // this spec mounts no compaction package.
+    source: { kind: 'plugin', plugin: 'compact', compactionId: 'c-1' } as never,
+  }), {
+    surfaceOp: {
+      op: 'replace',
+      startSeq: shadowed[0]!,
+      endSeq: shadowed[shadowed.length - 1]!,
+    },
+    // The replacement has to name every node it deletes.
+    sourceEventSeqs: [...shadowed],
+  })
+}
+
 async function harness(options: HarnessOptions = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
@@ -67,19 +106,9 @@ async function harness(options: HarnessOptions = {}): Promise<Context> {
   preset.provide('compaction', {
     compactNow: vi.fn(async (agent: Agent, signal: AbortSignal) => {
       const result = await backend(agent, signal)
-      // A real backend records what it produced in the log, which is where the
-      // handoff reads it back from.
-      if (result !== null) {
-        agent.session.append('compaction/summary', {
-          compactionId: 'c-1' as never,
-          summary: [...result.summary],
-          shadowedRange: { start: 0 as never, end: 0 as never },
-          shadowedSeqs: [0 as never],
-          shadowedTokenCount: 10,
-          provider: 'fixture',
-          model: 'fixture-model',
-        })
-      }
+      // A real backend records what it produced, which is where the handoff
+      // reads the condensed conversation back from.
+      if (result !== null) condenseSurface(agent.session, result.summary)
       return result
     }),
   } as never)
@@ -172,7 +201,7 @@ function derivedText(session: Session): string[] {
 }
 
 describe('session handoff', () => {
-  it('continues the source in a Session whose whole history is the condensation', async () => {
+  it('carries the condensed conversation, summary and retained tail alike', async () => {
     const ctx = await harness({ backend: condensing('the condensed history') })
     const source = await liveAgent(ctx, 'source', 3)
     // The deployment shape this operation has to survive: the backend is not
@@ -186,15 +215,33 @@ describe('session handoff', () => {
     expect(continuation).toBeDefined()
     // The carried history is the only surface content: no prefix, no turns.
     expect(derivedText(continuation!)).toEqual([
-      'This conversation continues an earlier one in the same workspace. Everything before this point is '
-        + 'condensed into the summary below; the earlier conversation is archived and still readable.',
-      'the condensed history',
+      'This conversation continues an earlier one in the same workspace. The history below is that '
+        + 'conversation condensed: an earlier summary, then the most recent turns kept verbatim. The earlier '
+        + 'conversation is archived and still readable.',
+      'Condensed history: the condensed history',
+      // The tail the backend deliberately left unshadowed. Carrying the summary
+      // declaration alone would have dropped this — the most recent turn, which
+      // is the one a continuation is continued from.
+      'User: prompt 3',
     ])
     expect(continuation!.header.parentSession).toBe(source.id)
     expect(continuation!.header.cwd).toBe('/proj')
     expect(continuation!.inheritedEventCount).toBe(0)
-    // The source keeps its own history: a handoff reads it, it does not move it.
-    expect(source.deriveMessages().length).toBe(3)
+    // The source keeps its own history: a handoff reads it, it does not move
+    // it. Only the *derived* view is condensed, and that is what was carried.
+    expect(source.deriveMessages().length).toBe(2)
+    expect(source.snapshotEvents().filter(event =>
+      event.type === 'user/message' && event.data.source.kind === 'user').length).toBe(3)
+    await ctx.fiber.dispose()
+  })
+
+  it('labels the summary as the condensation, not as something the reader said', async () => {
+    const ctx = await harness({ backend: condensing('the condensed history') })
+    const source = await liveAgent(ctx, 'source', 2)
+    const result = await controller(ctx).handoff({ sessionId: source.id }, signal)
+    const carried = derivedText(ctx.sessions.get(result.sessionId)!)
+    expect(carried).toContain('Condensed history: the condensed history')
+    expect(carried.some(line => line.startsWith('User: the condensed history'))).toBe(false)
     await ctx.fiber.dispose()
   })
 
@@ -222,20 +269,16 @@ describe('session handoff', () => {
     await ctx.fiber.dispose()
   })
 
-  it('carries the newest recorded summary when the backend has nothing left to condense', async () => {
+  it('carries what an earlier condensation left when there is nothing new to condense', async () => {
     const ctx = await harness({ backend: () => Promise.resolve(null) })
     const source = await liveAgent(ctx, 'source', 2)
-    source.append('compaction/summary', {
-      compactionId: 'c-1' as never,
-      summary: [{ type: 'text', text: 'an earlier condensation' }],
-      shadowedRange: { start: 0 as never, end: 0 as never },
-      shadowedSeqs: [0 as never],
-      shadowedTokenCount: 10,
-      provider: 'fixture',
-      model: 'fixture-model',
-    })
+    // A Session condensed and untouched since: the backend has nothing left
+    // before the tail it retains, so the handoff carries the earlier
+    // condensation rather than refusing.
+    condenseSurface(source, [{ type: 'text', text: 'an earlier condensation' }])
     const result = await controller(ctx).handoff({ sessionId: source.id }, signal)
-    expect(derivedText(ctx.sessions.get(result.sessionId)!)).toContain('an earlier condensation')
+    const carried = derivedText(ctx.sessions.get(result.sessionId)!)
+    expect(carried).toContain('Condensed history: an earlier condensation')
     await ctx.fiber.dispose()
   })
 
@@ -259,7 +302,7 @@ describe('session handoff', () => {
     await ctx.fiber.dispose()
   })
 
-  it('carries the command own explanation of a refusal, and refuses an empty history', async () => {
+  it('carries the command own explanation of a refusal', async () => {
     const busy = await harness({
       backend: () => Promise.reject(Object.assign(new Error('agent is active'), { code: 'busy' })),
     })
@@ -270,14 +313,19 @@ describe('session handoff', () => {
       message: 'Compaction refused: agent is active',
     })
     await busy.fiber.dispose()
+  })
 
-    const empty = await harness({ backend: () => Promise.resolve({ summary: [] }) })
-    const emptySource = await liveAgent(empty, 'source', 1)
-    await expect(controller(empty).handoff({ sessionId: emptySource.id }, signal)).rejects.toMatchObject({
+  it('refuses a Session that has no history at all', async () => {
+    // Nothing to condense AND nothing retained: the only case where a handoff
+    // has nothing to carry. An empty summary is not it — the retained tail is
+    // still history, and carrying it is the point.
+    const ctx = await harness({ backend: () => Promise.resolve({ summary: [] }) })
+    const empty = await liveAgent(ctx, 'empty', 0)
+    await expect(controller(ctx).handoff({ sessionId: empty.id }, signal)).rejects.toMatchObject({
       code: 'session/handoff-unavailable',
       details: { reason: 'nothing-to-carry' },
     })
-    await empty.fiber.dispose()
+    await ctx.fiber.dispose()
   })
 
   it('lets a genuine backend fault surface instead of classifying it', async () => {

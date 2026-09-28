@@ -23,6 +23,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import * as CommandCompact from '@deepseek-ai/dsh-command-compact'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionHeader } from '@deepseek-ai/dsh-session'
 import { describe, expect, it, vi } from 'vitest'
@@ -67,41 +68,61 @@ async function mount(): Promise<Mounted> {
   // both mounted where the controller's own plane cannot see either.
   const preset = ctx.isolate('compaction')
   const compactNow = vi.fn((agent: Agent) => {
+    // What a real backend does: declare the summary, then replace the shadowed
+    // surface nodes with a checkpoint user message carrying it. Here the whole
+    // surface is shadowed, so the condensed conversation is the summary alone.
+    const shadowed = agent.session.surface.nodes
+    const summary = [{ type: 'text' as const, text: 'the condensed history' }]
     agent.session.append('compaction/summary', {
       compactionId: 'c-1' as never,
-      summary: [{ type: 'text' as const, text: 'the condensed history' }],
-      shadowedRange: { start: 0 as never, end: 0 as never },
-      shadowedSeqs: [0 as never],
+      summary: [...summary],
+      shadowedRange: { start: shadowed[0]!, end: shadowed[shadowed.length - 1]! },
+      shadowedSeqs: [...shadowed],
       shadowedTokenCount: 10,
       provider: 'fixture',
       model: 'fixture-model',
     })
+    agent.session.append('user/message', createUserMessage({
+      content: [...summary],
+      source: { kind: 'plugin', plugin: 'compact', compactionId: 'c-1' } as never,
+    }), {
+      surfaceOp: { op: 'replace', startSeq: shadowed[0]!, endSeq: shadowed[shadowed.length - 1]! },
+      sourceEventSeqs: [...shadowed],
+    })
     return Promise.resolve({
-      summary: [{ type: 'text' as const, text: 'the condensed history' }],
+      summary,
       summarySeq: 1 as never,
-      shadowedSeqs: [0 as never],
+      shadowedSeqs: [...shadowed],
       shadowedTokenCount: 10,
     })
   })
   preset.provide('compaction', { compactNow } as never)
   await preset.plugin(CommandCompact)
 
-  // Both factory halves materialize a Session the way the real loop does, so a
-  // resumed source is a Session this process can genuinely then compact.
+  // Both factory halves materialize a Session the way the real loop does. Only
+  // a resume replays history: a created Session is the continuation, which
+  // starts empty and gets its one opening message from the handoff.
   const materialize = async (
     ownerCtx: Context,
     id: SessionId,
     meta: unknown,
     setup: CreateAgentOptions['setup'],
+    history = false,
   ): Promise<AgentHandle> => {
     const session: Session = ctx.sessions.create(id, meta === undefined ? {} : { meta: meta as never })
+    if (history) {
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: 'the earlier prompt' }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+    }
     const agent = { id: session.id, session, status: 'idle', ctx: ownerCtx } as unknown as Agent
     await setup?.(ownerCtx, agent)
     await ctx.agents.register(agent)
     return { agent, dispose: () => Promise.resolve() }
   }
   const resume = vi.fn(async (ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle> =>
-    await materialize(ownerCtx, options.resumeSessionId, { cwd: '/proj' }, options.setup))
+    await materialize(ownerCtx, options.resumeSessionId, { cwd: '/proj' }, options.setup, true))
   ctx.agents.setFactory({
     createAgent: async (ownerCtx, options) =>
       await materialize(ownerCtx, options.sessionId, options.meta, options.setup),
@@ -140,13 +161,17 @@ describe('session handoff from a Session this process has only read', () => {
     const continuation = ctx.sessions.get(result.sessionId)
     expect(continuation).toBeDefined()
     expect(continuation!.deriveMessages().flatMap(message =>
-      message.content.flatMap(block => block.type === 'text' ? [block.text] : [])))
-      .toContain('the condensed history')
+      message.content.flatMap(block => block.type === 'text' ? [block.text] : [])).join('\n'))
+      .toContain('Condensed history: the condensed history')
   })
 
   it('leaves a source that is already live to whoever is using it', async () => {
     const { ctx, controller, resume } = await mount()
     const session = ctx.sessions.create(sid('cold'), { meta: { cwd: '/proj' } })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'a prompt in the live chat' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
     await ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
 
     const result = await controller.handoff({ sessionId: sid('cold') }, signal)

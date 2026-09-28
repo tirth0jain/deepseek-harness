@@ -14,7 +14,7 @@ import type { CommandExecution, CommandSubmitAttachment } from '@deepseek-ai/dsh
 import {
   ReasoningEffortId, assistantStreamChunks, boundContextSummary, createUserMessage, freezeMessage,
 } from '@deepseek-ai/dsh-llm'
-import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, Message, MessageSource } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -332,7 +332,7 @@ export class SessionCommandController {
     const found = await this.agents.resolveObservedAgent(source)
     if ('error' in found) throw found.error
     const agent = found.agent
-    const summary = await this.condense(agent, fail, signal)
+    const conversation = await this.condense(agent, fail, signal)
     let workspace: Workspace | undefined
     try {
       workspace = await this.forkWorkspace(source.header)
@@ -378,7 +378,7 @@ export class SessionCommandController {
       )
     }
     continuation.append('user/message', createUserMessage({
-      content: carriedHistory(summary),
+      content: carriedHistory(conversation),
       source: handoffSource(),
     }), { surfaceOp: 'append' })
     if (workspace !== undefined) {
@@ -422,7 +422,7 @@ export class SessionCommandController {
 
   /**
    * Condense one live Agent's history the way `/compact` would, and read back
-   * the summary that produced.
+   * the condensed conversation.
    *
    * The backend is reached through the human command rather than a service
    * lookup, because a preset may isolate it. This deployment disables the
@@ -433,24 +433,26 @@ export class SessionCommandController {
    * one the command runs in. Going through the command also means a handoff
    * condenses exactly as typing `/compact` does, refusals included.
    *
-   * The summary is read from the log afterwards rather than taken from the
-   * command's result: a command result carries text and a seq, not blocks, and
-   * the log is where the continuation's history has to come from anyway. When
-   * the command found nothing to condense, the newest recorded summary is
-   * whatever an earlier compaction left, which is the case a handoff of an
-   * already-condensed Session carries.
+   * What comes back is the source's own derived history, not the summary
+   * declaration. Compaction replaces the shadowed nodes with a checkpoint
+   * message and deliberately keeps a recent tail verbatim (`retainRatio`
+   * defaults to 0.16 of the context window), so the summary alone is a strictly
+   * smaller thing than the condensed conversation: carrying it would drop the
+   * most recent turns, which are the ones a continuation is continued from.
+   * `deriveMessages` is that condensed view by construction — a `replace`
+   * surface op deletes the shadowed nodes from the derivation.
    *
    * @param agent - live Agent whose history is condensed.
    * @param fail - refusal constructor for this operation's own error class.
    * @param signal - cancels the compaction, not the Session it reads.
-   * @returns the carried summary blocks.
+   * @returns the condensed conversation, oldest first.
    * @throws {RemoteError} `session/handoff-unavailable` naming the precondition.
    */
   private async condense(
     agent: Agent,
     fail: (reason: string, message: string) => RemoteError,
     signal: AbortSignal,
-  ): Promise<readonly ContentBlock[]> {
+  ): Promise<readonly Message[]> {
     // `ctx.get` is the inject-free read: a deployment may mount no command
     // registry at all, and this route must not wait on one to exist.
     const commands = this.ctx.get('commands') as HandoffCommands | undefined
@@ -469,12 +471,14 @@ export class SessionCommandController {
       // carried rather than reinterpreted.
       throw fail('compaction-refused', execution.result.text)
     }
-    using condensed = await this.observeForHandoff(agent.id)
-    const summary = newestSummary(condensed.events)
-    if (summary === undefined || summary.length === 0) {
+    const conversation = agent.session.deriveMessages()
+    // A Session with only a system prompt has nothing to continue from. A
+    // command that found nothing to compact is not this case: the retained
+    // history it left behind is what gets carried.
+    if (conversation.every(message => message.role === 'system')) {
       throw fail('nothing-to-carry', 'This Session has no history to condense yet.')
     }
-    return summary
+    return conversation
   }
 
   /**
@@ -938,42 +942,50 @@ const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
 type ReferencedAttachment = ImageAttachmentRef | FileAttachmentRef
 
 /**
- * The newest condensation a Session log already recorded.
+ * Who one carried message is attributed to in the opening recap.
  *
- * A Session condensed and untouched since has nothing left to condense, so a
- * handoff carries what the last compaction produced rather than refusing. The
- * summary is log-only — the surface replacement is the `user/message` after it
- * — so this reads the declaration, not a surface node.
- * @param events - the source Session's complete log.
- * @returns the newest summary's content blocks, or undefined when there is none.
+ * A compaction checkpoint IS the condensed history rather than something the
+ * reader said, so labelling it as the reader would misattribute the whole
+ * summary. The marker is the backend-independent one every compaction backend
+ * uses for its replacement user message; this controller deliberately takes no
+ * build-time edge on the compaction package, so it is read structurally, the
+ * same way `HandoffCommands` slices the command service.
+ * @param message - one message of the source's condensed conversation.
+ * @returns the label opening its carried text.
  */
-function newestSummary(events: readonly SessionEvent[]): readonly ContentBlock[] | undefined {
-  for (let index = events.length - 1; index >= 0; index--) {
-    // Read by name rather than by declared type: `compaction/summary` is
-    // declared by the compaction package, and this controller deliberately
-    // takes no build-time edge on a backend it may not have mounted.
-    const event = events[index] as { readonly type?: string; readonly data?: { readonly summary?: readonly ContentBlock[] } } | undefined
-    if (event?.type !== 'compaction/summary') continue
-    const summary = event.data?.summary
-    if (summary !== undefined && summary.length > 0) return summary
-  }
-  return undefined
+function speakerOf(message: Message): string {
+  if (message.source.kind === 'plugin' && message.source.plugin === 'compact') return 'Condensed history'
+  return message.role === 'user' ? 'User' : 'Assistant'
 }
 
 /**
  * The opening message of a continued Session: what it is, then the history.
- * @param summary - the condensation carried over from the source Session.
+ *
+ * Text blocks only. A carried recap is not a transcript: tool calls and their
+ * results are plumbing whose useful output the condensation already keeps, and
+ * replaying raw tool traffic into a single message would cost the continuation
+ * far more context than it restores.
+ * @param conversation - the source's condensed conversation, oldest first.
  * @returns model-visible blocks for the continuation's one opening message.
  */
-function carriedHistory(summary: readonly ContentBlock[]): ContentBlock[] {
-  return [
+function carriedHistory(conversation: readonly Message[]): ContentBlock[] {
+  const blocks: ContentBlock[] = [
     {
       type: 'text',
-      text: 'This conversation continues an earlier one in the same workspace. Everything before this point is '
-        + 'condensed into the summary below; the earlier conversation is archived and still readable.',
+      text: 'This conversation continues an earlier one in the same workspace. The history below is that '
+        + 'conversation condensed: an earlier summary, then the most recent turns kept verbatim. The earlier '
+        + 'conversation is archived and still readable.',
     },
-    ...summary,
   ]
+  for (const message of conversation) {
+    if (message.role === 'system') continue
+    const text = message.content
+      .flatMap(block => block.type === 'text' ? [block.text] : [])
+      .join('\n\n')
+    if (text.trim().length === 0) continue
+    blocks.push({ type: 'text', text: `${speakerOf(message)}: ${text}` })
+  }
+  return blocks
 }
 
 /**
