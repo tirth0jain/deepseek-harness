@@ -1,0 +1,115 @@
+{
+  "name": "dsh-native-sidebar",
+  "displayName": "DeepSeek Harness Web",
+  "version": "1.1.0",
+  "publisher": "custom",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:dsh-web-view",
+    "onCommand:dsh.openInBrowser",
+    "onCommand:dsh.copyUrl",
+    "onCommand:dsh.reload"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dsh-sidebar",
+          "title": "DeepSeek Harness",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dsh-sidebar": [
+        {
+          "type": "webview",
+          "id": "dsh-web-view",
+          "name": "DSH Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "dsh.reload",
+        "title": "DeepSeek Harness: Reload",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dsh.openInBrowser",
+        "title": "DeepSeek Harness: Open in Browser",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "dsh.copyUrl",
+        "title": "DeepSeek Harness: Copy URL",
+        "icon": "$(link)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dsh.reload",
+          "when": "view == dsh-web-view",
+          "group": "navigation"
+        },
+        {
+          "command": "dsh.openInBrowser",
+          "when": "view == dsh-web-view",
+          "group": "navigation"
+        },
+        {
+          "command": "dsh.copyUrl",
+          "when": "view == dsh-web-view",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DeepSeek Harness Sidebar",
+      "properties": {
+        "dsh.serverMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "public",
+            "loopback"
+          ],
+          "default": "auto",
+          "description": "Which origin the sidebar shows. auto = public (https://dsh.993051.xyz, same-site with code.993051.xyz so the auth cookie works) when running inside code.993051.xyz web; loopback (http://127.0.0.1:3080) otherwise. public always uses the public URL; loopback always uses 127.0.0.1:3080."
+        },
+        "dsh.publicUrl": {
+          "type": "string",
+          "default": "https://dsh.993051.xyz",
+          "description": "Public base URL of the dsh web GUI."
+        },
+        "dsh.loopbackPort": {
+          "type": "number",
+          "default": 3080,
+          "description": "Loopback port of the dsh web GUI (NEW harness default 3080; OLD harness on this box uses 3082)."
+        },
+        "dsh.bootLog": {
+          "type": "string",
+          "default": "/root/.dsh/web.log",
+          "description": "Boot log that contains the per-process 'dsh web: .../?token=' line for the harness the sidebar should connect to."
+        },
+        "dsh.oldBootLog": {
+          "type": "string",
+          "default": "/root/.dsh/old-3082.log",
+          "description": "Boot log for the alternate (OLD) harness; auto-detected when the primary log has no token."
+        },
+        "dsh.tokenFile": {
+          "type": "string",
+          "default": "/root/.dsh/current-token.txt",
+          "description": "Dedicated token file written by dsh-web-launch on each boot; read first, before boot-log scraping."
+        }
+      }
+    }
+  }
+}

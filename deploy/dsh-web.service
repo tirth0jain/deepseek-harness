@@ -1,0 +1,54 @@
+[Unit]
+Description=DeepSeek Harness web GUI (dsh)
+Documentation=https://github.com/tirth0jain/deepseek-harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+
+# DSH_* names are fine here: the refusal applies only to .env files, and the
+# harness needs these to find its home and agent store.
+Environment=HOME=/root
+Environment=DSH_HOME=/root/.dsh
+Environment=DSH_AGENTS_HOME=/root/.dsh/.agents
+Environment=DSH_TELEMETRY_DISABLED=1
+Environment=NODE_NO_WARNINGS=1
+
+# Cover both an apt/nodesource node and an nvm-managed one.
+Environment=PATH=/root/.nvm/versions/node/v24.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Adjust to match the checkout and the RAM you can spare. The ceiling bounds
+# the JS heap only -- RSS runs above it, so leave headroom under the container
+# limit rather than setting this to the whole box.
+Environment=DSH_WEB_PORT=3080
+Environment=DSH_WEB_HEAP_MB=6144
+Environment=DSH_WEB_BIN=/root/deepseek-harness/apps/cli/lib/bin.js
+
+# Start each boot with a fresh log: the extension scrapes it for the token, and
+# the token changes every process, so stale lines are only a source of
+# confusion.
+ExecStartPre=/bin/sh -c ': > /root/.dsh/web.log'
+
+ExecStart=/usr/local/bin/dsh-web-run
+
+# Record the token URL the sidebar reads. Runs after ExecStart, waits for the
+# harness's boot line, then exits; a failure here does not stop the service.
+ExecStartPost=/usr/local/bin/dsh-token-writer 3080 /root/.dsh/web.log /root/.dsh/current-token.txt
+
+Restart=always
+RestartSec=5
+
+# append: keeps the boot log the extension reads. Needs systemd >= 240; on
+# older systemd drop these two lines and the extension falls back to scraping
+# whatever the service writes to the journal.
+StandardOutput=append:/root/.dsh/web.log
+StandardError=append:/root/.dsh/web.log
+
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
