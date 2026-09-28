@@ -199,6 +199,24 @@ export abstract class SessionPersistence extends Service {
    * @returns one snapshot per stored session.
    */
   abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>
+
+  /**
+   * Drop any decoded log this instance retains for one session.
+   *
+   * A backend may memoize a decoded log — the largest per-session cost this
+   * layer has — so that a repeat read skips decoding it. Releasing gives that
+   * back for a session the caller has put away, at the price of decoding again
+   * on the next read. Open handles are untouched: they own their own state,
+   * and a session being written or read right now keeps it.
+   *
+   * The default retains nothing, so a backend that memoizes nothing has
+   * nothing to implement; one that memoizes must override this or it will hold
+   * a log the caller believes it gave back.
+   * @param id - the session whose retained decode should be dropped.
+   */
+  release(id: SessionId): void {
+    void id
+  }
 }
 
 export default SessionPersistence

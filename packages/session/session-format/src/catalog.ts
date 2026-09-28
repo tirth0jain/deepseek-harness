@@ -14,6 +14,7 @@ import type {
   SessionFormatCodec,
   SessionFormatEvent,
   SessionFormatEventRun,
+  SessionFormatEventWindow,
   SessionFormatHeaderReadResult,
   SessionFormatMigrationContext,
   SessionFormatMigrationStream,
@@ -134,6 +135,15 @@ export function createSessionFormatCatalog(options: SessionFormatCatalogOptions)
         sourceCut,
         restoreOptions.validation === 'current' ? options.restoreCurrent : identityArtifact,
         chain.currentVersion,
+        restoreOptions.window,
+      )
+    }
+    // A migration stage transforms source rows into target rows and may need
+    // rows this window excludes, so a windowed restore of a historical log is
+    // refused rather than silently handed a truncated transformation input.
+    if (restoreOptions.window !== undefined) {
+      throw new SessionFormatUnsupportedMigrationError(
+        `a windowed restore cannot migrate a v${storedVersion} Session log to v${chain.currentVersion}`,
       )
     }
     const collector = new SessionFormatEventCollector()
@@ -169,15 +179,17 @@ type SessionFormatArtifactRestorer = (artifact: SessionFormatArtifact) => Sessio
 
 class CurrentSessionFormatRestore implements SessionFormatRestore {
   readonly header: SessionFormatArtifact['header']
-  private readonly collector = new SessionFormatEventCollector()
+  private readonly collector: SessionFormatEventCollector
 
   constructor(
     private readonly decoder: SessionFormatArtifactDecoder,
     private readonly sourceInheritedEventCount: number | undefined,
     private readonly restoreArtifact: SessionFormatArtifactRestorer,
     private readonly currentVersion: number,
+    window?: SessionFormatEventWindow,
   ) {
     this.header = decoder.header
+    this.collector = new SessionFormatEventCollector(window)
   }
 
   decodeRow(rowValue: unknown): void {
