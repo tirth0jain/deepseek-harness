@@ -68,7 +68,7 @@ describe('developer tools settings', () => {
     onTestFinished(() => ctx.fiber.dispose())
     const describeCall = vi.fn()
     const remote = new TestRemote(ctx, { settings: { describe: describeCall } })
-    remote.$host = { home: undefined, isLoopback: false }
+    remote.$host = { home: undefined, isLoopback: false, canWriteSettings: false }
     const fiber = ctx.plugin({ inject, apply: clientApply })
     await fiber.await()
     const preference = ctx.configForms.developerTools

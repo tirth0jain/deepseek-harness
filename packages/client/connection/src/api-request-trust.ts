@@ -66,13 +66,21 @@ function canonicalAuthority(entry: string, entryUrl: URL): string {
 }
 
 /**
- * Whether the request authority matches a `trustedHosts` entry. An entry with
+ * Whether an authority matches a `trustedHosts` entry. An entry with
  * an explicit port matches that exact authority; a port-less entry matches the
  * hostname on any port (the shape the CLI derives for IP-literal LAN serving,
  * where the bound port may be OS-assigned). Both sides compare through WHATWG
  * normalization, so case and a redundant `:80` never decide trust.
+ *
+ * Exported because the browser half must reach the same verdict for its own
+ * page authority: `ctx.connection.canWriteSettings` admits a declared trusted
+ * authority to the settings document, and a second implementation there could
+ * drift from the fence that actually guards `/api`.
+ * @param hostUrl - parsed authority to judge (the request Host, or the page's own location).
+ * @param trustedHosts - non-loopback authorities this deployment serves.
+ * @returns true when the authority is one this deployment declared.
  */
-function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): boolean {
+export function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): boolean {
   return trustedHosts.some((entry) => {
     const entryUrl = parseAuthority(entry)
     if (entryUrl === undefined) return false
