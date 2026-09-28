@@ -47,6 +47,7 @@ import {
 import type {
   GenerateOptions,
   ImageAttachmentAccess,
+  LlmModelCostPeak,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -58,6 +59,7 @@ import type {
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
+import { pricedCost } from './catalog.ts'
 import { toPiContext } from './context.ts'
 import { createModels, getSupportedThinkingLevels } from './models.ts'
 import { toStreamChunks } from './stream.ts'
@@ -201,14 +203,61 @@ function reasoningInfo(
   }
 }
 
-/** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
+/**
+ * The published rate to report for one model, or nothing when neither the
+ * profile nor the installed catalog prices it. An all-zero rate is the
+ * catalog's "nobody published one" sentinel (see `NO_COST`), not a free model,
+ * so it is omitted rather than surfaced as a $0.00 price.
+ * @param model - the resolved model descriptor.
+ * @param peak - peak band the profile declared for this model, if any.
+ * @returns the `cost` field, or an empty object when no rate is known.
+ */
+function costInfo(
+  model: Model<Api>,
+  peak: LlmModelCostPeak | undefined,
+): Pick<LlmResolvedModelInfo, 'cost'> | Record<string, never> {
+  const { cost } = model
+  if (!pricedCost(cost)) return {}
+  return {
+    cost: {
+      input: cost.input,
+      output: cost.output,
+      cacheRead: cost.cacheRead,
+      cacheWrite: cost.cacheWrite,
+      // A band over an unpublished rate is not reported: the all-zero sentinel
+      // above already says "no price", and a window onto nothing is no tariff.
+      ...peak === undefined ? {} : { peak },
+    },
+  }
+}
+
+/**
+ * Merge deployment headers while removing case-insensitive attribution
+ * collisions.
+ *
+ * A route naming a `sessionHeader` gets the conversation's own session id
+ * under that name. It is added after the static entries so it wins a static
+ * entry of the same name — that is the point of naming it — and before the
+ * attribution spread, so a Harness-owned name still wins a collision.
+ * @param headers - the route's static deployment headers.
+ * @param sessionHeader - header name to carry the session id, when the route names one.
+ * @param sessionId - the conversation's session id, when this request has one.
+ * @returns the headers to send.
+ */
+function requestHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  sessionHeader: string | undefined,
+  sessionId: string | undefined,
+): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
-  return {
+  const merged: Record<string, string> = {
     ...Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))),
-    ...attribution,
   }
+  if (sessionHeader !== undefined && sessionHeader.length > 0 && sessionId !== undefined) {
+    merged[sessionHeader] = sessionId
+  }
+  return { ...merged, ...attribution }
 }
 
 /**
@@ -312,6 +361,7 @@ export class PiAiAdapter extends LlmAdapter {
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
+      ...costInfo(resolvedModel, profile.declaredPeaks.get(model)),
     }
   }
 
@@ -384,8 +434,13 @@ export class PiAiAdapter extends LlmAdapter {
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
-        // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        // Harness-owned and therefore win collisions. A route naming a
+        // `sessionHeader` carries this conversation's own id under it.
+        headers: requestHeaders(
+          profile.headers,
+          profile.sessionHeader,
+          options.sessionId === undefined ? undefined : String(options.sessionId),
+        ),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
       let exhausted = false
