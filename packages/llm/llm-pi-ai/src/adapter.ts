@@ -47,6 +47,7 @@ import {
 import type {
   GenerateOptions,
   ImageAttachmentAccess,
+  LlmModelCostPeak,
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
@@ -58,6 +59,7 @@ import type {
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
+import { pricedCost } from './catalog.ts'
 import { toPiContext } from './context.ts'
 import { createModels, getSupportedThinkingLevels } from './models.ts'
 import { toStreamChunks } from './stream.ts'
@@ -201,6 +203,34 @@ function reasoningInfo(
   }
 }
 
+/**
+ * The published rate to report for one model, or nothing when neither the
+ * profile nor the installed catalog prices it. An all-zero rate is the
+ * catalog's "nobody published one" sentinel (see `NO_COST`), not a free model,
+ * so it is omitted rather than surfaced as a $0.00 price.
+ * @param model - the resolved model descriptor.
+ * @param peak - peak band the profile declared for this model, if any.
+ * @returns the `cost` field, or an empty object when no rate is known.
+ */
+function costInfo(
+  model: Model<Api>,
+  peak: LlmModelCostPeak | undefined,
+): Pick<LlmResolvedModelInfo, 'cost'> | Record<string, never> {
+  const { cost } = model
+  if (!pricedCost(cost)) return {}
+  return {
+    cost: {
+      input: cost.input,
+      output: cost.output,
+      cacheRead: cost.cacheRead,
+      cacheWrite: cost.cacheWrite,
+      // A band over an unpublished rate is not reported: the all-zero sentinel
+      // above already says "no price", and a window onto nothing is no tariff.
+      ...peak === undefined ? {} : { peak },
+    },
+  }
+}
+
 /** Merge deployment headers while removing case-insensitive attribution collisions. */
 function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
   const attribution = attributionHeaders()
@@ -312,6 +342,7 @@ export class PiAiAdapter extends LlmAdapter {
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
       ...reasoningInfo(resolvedModel, defaultLevel),
+      ...costInfo(resolvedModel, profile.declaredPeaks.get(model)),
     }
   }
 

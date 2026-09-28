@@ -31,6 +31,8 @@ const TURN_SPACING_PX = 10
 const RAIL_INSET_PX = 6
 /** Fade band the mask reserves at a scrollable end. */
 const FADE_PX = 24
+/** How long the card survives the pointer leaving the rail on its way into it. */
+const CARD_HOLD_MS = 220
 
 function preferredScrollBehavior(): 'auto' | 'smooth' {
   return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -83,6 +85,8 @@ function TurnNavigatorRail(
   ref: ForwardedRef<TurnNavigatorHandle>,
 ) {
   const [previewTurn, setPreviewTurn] = useState<number | null>(null)
+  const [cardTurn, setCardTurn] = useState<number | null>(null)
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [focusedTurn, setFocusedTurn] = useState<number | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const initialization = useRef({
@@ -102,7 +106,11 @@ function TurnNavigatorRail(
   const activeIndex = activeTurn === null ? undefined : turnIndexes.get(activeTurn)
   useLayoutEffect(() => { initialization.current.index = activeIndex ?? 0 }, [activeIndex])
   const focusedIndex = focusedTurn === null ? undefined : turnIndexes.get(focusedTurn)
-  const previewIndex = previewTurn === null ? undefined : turnIndexes.get(previewTurn)
+  // The card is reachable, not just readable: it holds the per-Turn load
+  // button, so leaving the rail hands the card over to the pointer for a beat
+  // instead of unmounting it under the hand that is moving toward it.
+  const shownTurn = previewTurn ?? cardTurn
+  const previewIndex = shownTurn === null ? undefined : turnIndexes.get(shownTurn)
   const onFocusChange = useCallback((turn: number | null) => {
     setFocusedTurn(turn)
     setPreviewTurn(turn)
@@ -224,9 +232,26 @@ function TurnNavigatorRail(
     scrollToIndex(activeIndex, 'if-needed', behavior)
   }, [activeIndex, items.length, viewHeight, scrollToIndex])
 
+  useEffect(() => () => {
+    if (holdTimer.current !== null) clearTimeout(holdTimer.current)
+  }, [])
+
   if (items.length < 2) return null
   const preview = previewIndex === undefined ? undefined : items[previewIndex]
   const previewPosition = virtualItems.find(item => item.index === previewIndex)
+  const holdCard = (): void => {
+    if (holdTimer.current !== null) clearTimeout(holdTimer.current)
+    holdTimer.current = setTimeout(() => {
+      holdTimer.current = null
+      setCardTurn(null)
+    }, CARD_HOLD_MS)
+  }
+  const releaseCard = (): void => {
+    if (holdTimer.current !== null) {
+      clearTimeout(holdTimer.current)
+      holdTimer.current = null
+    }
+  }
   const fadeClasses = [css.scroller]
   if (scrollTop > 1) fadeClasses.push(css.fadeTop)
   if (scrollTop < virtualizer.getTotalSize() - viewHeight - 1) fadeClasses.push(css.fadeBottom)
@@ -238,7 +263,9 @@ function TurnNavigatorRail(
         onPointerEnter={() => { pointerInsideRef.current = true }}
         onPointerLeave={() => {
           pointerInsideRef.current = false
+          if (previewTurn !== null) setCardTurn(previewTurn)
           setPreviewTurn(null)
+          holdCard()
         }}
       >
         <div ref={scrollerRef} className={fadeClasses.join(' ')}>
@@ -268,15 +295,41 @@ function TurnNavigatorRail(
           <div
             id={previewId}
             role="tooltip"
-            className={css.preview}
+            className={preview.anchor.kind === 'unloaded'
+              ? `${css.preview} ${css.previewReachable}`
+              : css.preview}
             style={{
               '--turn-preview-center': `${String(previewPosition.start + previewPosition.size / 2 - scrollTop)}px`,
             } as CSSProperties}
+            onPointerEnter={() => {
+              releaseCard()
+              setCardTurn(preview.turn)
+            }}
+            onPointerLeave={holdCard}
+            onClick={(event) => { event.stopPropagation() }}
           >
             <div className={css.previewPrompt}>
               {preview.prompt || t('chat.turnNavigation.turn', { turn: preview.turn })}
             </div>
             {preview.response !== '' && <div className={css.previewResponse}>{preview.response}</div>}
+            {preview.anchor.kind === 'unloaded' && (
+              <button
+                type="button"
+                className={css.previewLoad}
+                disabled={preview.turn === busyTurn}
+                aria-busy={preview.turn === busyTurn ? 'true' : undefined}
+                onClick={() => {
+                  releaseCard()
+                  setCardTurn(null)
+                  setPreviewTurn(null)
+                  onNavigate(preview)
+                }}
+              >
+                {preview.turn === busyTurn
+                  ? t('chat.turnNavigation.loadingTurn')
+                  : t('chat.turnNavigation.loadTurn', { turn: preview.turn })}
+              </button>
+            )}
           </div>
         )}
       </nav>

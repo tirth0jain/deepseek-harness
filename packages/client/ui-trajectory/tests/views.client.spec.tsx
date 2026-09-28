@@ -148,7 +148,7 @@ function standaloneHistory(
   snapshot: TrajectorySnapshot,
 ): Pick<
   ComponentProps<typeof TrajectoryView>,
-  'useSession' | 'useTrajectory' | 'loadOlder'
+  'useSession' | 'useTrajectory' | 'loadOlder' | 'useModelCosts'
 > {
   const session = createSnapshotStore(sessionSnapshot(snapshot.eventNodes))
   const trajectory = createSnapshotStore(snapshot)
@@ -156,6 +156,7 @@ function standaloneHistory(
     useSession: bindSnapshotSelector(session),
     useTrajectory: bindSnapshotSelector(trajectory),
     loadOlder: () => Promise.resolve(false),
+    ...standaloneModelCosts(),
   }
 }
 
@@ -167,6 +168,15 @@ function standaloneDuration(): Pick<
     useDuration: bindSnapshotSelector(duration),
     setActualDuration: (value) => { duration.set(value) },
   }
+}
+
+/**
+ * Empty rate source for the standalone bench: the shipped model directory
+ * prices nothing in a test that never mounts the model selector, which is
+ * exactly the unpriced case the viewer has to render without an amount.
+ */
+function standaloneModelCosts(): Pick<ComponentProps<typeof TrajectoryView>, 'useModelCosts'> {
+  return { useModelCosts: bindSnapshotSelector(createSnapshotStore({ groups: [] })) }
 }
 
 /** Empty sessions-list hook; breadcrumbs therefore fall back to the raw id. */
@@ -202,7 +212,7 @@ const useProjection: UseProjection = emptyProjection
 
 type StandaloneBaseProps = Omit<
   ComponentProps<typeof TrajectoryView>,
-  'useSession' | 'useTrajectory' | 'useDuration' | 'loadOlder' | 'setActualDuration'
+  'useSession' | 'useTrajectory' | 'useDuration' | 'useModelCosts' | 'loadOlder' | 'setActualDuration'
 >
 
 /** Standalone view props: the session-scope standard kit the outlet would bake. */
@@ -385,6 +395,7 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
           loadOlder: trajectory.loadOlder,
           setActualDuration: trajectory.setActualDuration,
           useDuration: bindSnapshotSelector(trajectory.hooks.duration),
+          useModelCosts: bindSnapshotSelector(trajectory.hooks.modelCosts),
           t: tZh,
         }
       })()

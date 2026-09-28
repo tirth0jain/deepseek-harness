@@ -4,6 +4,7 @@ import type { ChatNodeViewProps, PerformanceUsageInjected, TurnTailOwnerProps } 
 import { MessageIconActions } from './MessageIconActions.tsx'
 import { TurnUsagePanel } from './TurnUsagePanel.tsx'
 import { assistantText } from './turn-assistant.ts'
+import { turnCostEstimate } from './turn-cost.ts'
 import { hasAssistantReplyContent } from '../contract/assistant-content.ts'
 import type { ChatNode } from '../contract/chat-nodes.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
@@ -26,7 +27,7 @@ function lastContent(snapshot: ChatSnapshot, turn: number, skipWarning: boolean)
 
 /** Turn-local actions and feature tail over the Location index, independent of Assistant placement. */
 export const TurnTailNodeView = memo(function TurnTailNodeView({
-  node, openFile, forkAt, renderSlot, t, useChat, usePerformanceUsage,
+  node, openFile, forkAt, costOf, renderSlot, t, useChat, usePerformanceUsage,
 }: TurnTailNodeViewProps) {
   const detailed = usePerformanceUsage(mode => mode) === 'detailed'
   const data = node.data
@@ -49,6 +50,9 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
   if (closing === null) return tail === null ? null : <div className={css.root} data-turn-tail={data.turn}>{tail}</div>
   // Interruption-frozen partials carry no messageId, so they address no
   // durable message and contribute no per-message actions.
+  const turnCost = data.tokenUsage === undefined
+    ? undefined
+    : turnCostEstimate(data.tokenUsage, costOf)
   const messageId = closing.finalNode.messageId
   const assistantActions = messageId === undefined
     ? null
@@ -71,7 +75,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
         className={css.actions}
         extraActions={assistantActions}
         usageAction={detailed && data.tokenUsage !== undefined
-          ? <TurnUsagePanel usage={data.tokenUsage} t={t} />
+          ? <TurnUsagePanel usage={data.tokenUsage} cost={turnCost} t={t} />
           : null}
         t={t}
       />

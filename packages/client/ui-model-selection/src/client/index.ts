@@ -27,6 +27,7 @@ import type { ModelDirectoryState } from './directory.ts'
 import { ModelDirectoryResolver } from './service.ts'
 import type { ModelSelectInjected } from './slots.ts'
 import { ModelSelect } from './ModelSelect.tsx'
+import { formatRate } from './rates.ts'
 import { en, zh, type ModelKey } from './locales.ts'
 
 export { ModelDirectory } from './directory.ts'
@@ -63,6 +64,17 @@ function descriptionOf(
   return key !== undefined && model.description === en[key] ? t(key) : model.description
 }
 
+/**
+ * One model's published rate as a compact cell, or undefined when the route
+ * publishes none.
+ * @param model - catalog entry inside a provider group.
+ * @returns `$in / $out` per million tokens, or undefined.
+ */
+function rateOf(model: ModelDirectoryState['groups'][number]['models'][number]): string | undefined {
+  const cost = model.cost
+  return cost === undefined ? undefined : formatRate(cost)
+}
+
 /** Flatten the directory into popup rows; failure rows are listed for visibility but never selectable. */
 function optionsOf(directory: ModelDirectoryState, t: TranslateNS<'model'>): SelectOption[] {
   const rows: SelectOption[] = []
@@ -70,10 +82,12 @@ function optionsOf(directory: ModelDirectoryState, t: TranslateNS<'model'>): Sel
     const name = group.id === 'deepseek-account' ? t('provider.account') : group.name
     for (const model of group.models) {
       const description = descriptionOf(group.id, model, t)
+      const rate = rateOf(model)
+      const detail = description !== undefined ? `${name} · ${description}` : name
       rows.push({
         id: rowId(group.id, model.id),
         label: model.name,
-        detail: description !== undefined ? `${name} · ${description}` : name,
+        detail: rate === undefined ? detail : `${detail} · ${rate}`,
         ...(directory.current !== null
           && directory.current.provider === group.id
           && directory.current.model === model.id
