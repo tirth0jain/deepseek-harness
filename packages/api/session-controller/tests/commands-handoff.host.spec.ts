@@ -12,12 +12,13 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
-import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiSessionAgentController } from '../src/agent.ts'
+import { ApiSessionAgentController, ApiSessionNotFound } from '../src/agent.ts'
 import { SessionCommandController } from '../src/commands.ts'
-import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
+import { installSessionReadTestServices } from './test-remote.ts'
 
 const sid = (id: string): SessionId => id as SessionId
 
@@ -31,22 +32,10 @@ function compactionStub(
 async function harness(options: {
   compaction?: unknown
   archiveSession?: (sessionId: SessionId) => Promise<void>
-  /** A Session the process can read but has never resumed. */
-  coldSession?: boolean
 } = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
-  if (options.coldSession === true) {
-    // Annotated, not inferred: a bare object literal widens the version literal.
-    const header: SessionHeader = {
-      version: SESSION_FORMAT_VERSION, id: sid('cold'), createdAt: 1, cwd: '/proj', isSeeded: false,
-    }
-    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
-      list: () => Promise.resolve([header]),
-      inspect: () => Promise.resolve({ meta: header, inheritedEventCount: 0, events: [] }),
-    }) as never)
-  }
   installSessionReadTestServices(ctx)
   ctx.provide('agentDefaultModel', {
     currentSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
@@ -91,6 +80,16 @@ function controller(ctx: Context): SessionCommandController {
   return new SessionCommandController(ctx, {
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForObservation: () => undefined,
+    // The real controller resumes a source that has no Agent yet. That
+    // resolution has its own spec against the production class
+    // (commands-handoff-promotion.host.spec.ts); here it only has to hand back
+    // the Agent every test in this file registers up front.
+    resolveObservedAgent: (observation: SessionObservation) => {
+      const live = ctx.agents.get(observation.header.id)
+      return Promise.resolve(live === undefined
+        ? { error: new ApiSessionNotFound(`session "${observation.header.id}" not found`) }
+        : { agent: live })
+    },
   } as unknown as ApiSessionAgentController, '/default')
 }
 
@@ -160,17 +159,11 @@ describe('session handoff', () => {
     await ctx.fiber.dispose()
   })
 
-  it.each([
-    ['no-compaction-backend', {}],
-    ['session-not-live', {
-      compaction: compactionStub(() => Promise.resolve({ summary: [{ type: 'text' as const, text: 'x' }] })),
-      coldSession: true,
-    }],
-  ] as const)('refuses with %s', async (reason, options) => {
-    const ctx = await harness(options)
+  it('refuses when the deployment has no compaction backend', async () => {
+    const ctx = await harness()
     await expect(controller(ctx).handoff({ sessionId: sid('cold') }, signal)).rejects.toMatchObject({
       code: 'session/handoff-unavailable',
-      details: { sessionId: 'cold', reason },
+      details: { sessionId: 'cold', reason: 'no-compaction-backend' },
     })
     await ctx.fiber.dispose()
   })

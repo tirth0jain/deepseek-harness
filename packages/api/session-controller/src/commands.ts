@@ -328,12 +328,17 @@ export class SessionCommandController {
     }
     const observed = await this.observeForHandoff(request.sessionId)
     using source = observed
-    const agent = this.ctx.agents.get(request.sessionId)
-    if (agent === undefined) {
-      // `compactNow` serializes against driver turns, which needs the live
-      // Agent; a Session this process has only read has none.
-      throw fail('session-not-live', `Session "${request.sessionId}" is not live in this process, so it cannot be condensed.`)
-    }
+    // Resolved, never required to be live already. A deployment may
+    // deliberately leave a Session with no Agent until an operation needs one
+    // (`promoteOnHistoryOpen: false`), so the act of looking at a Session
+    // cannot be what makes this operation possible — requiring a live Agent
+    // here refuses on exactly the deployments that need condensing most.
+    // The observation already in hand is what the resume is built from, so
+    // resolution costs no second read. `compactNow` serializes against driver
+    // turns, which is what it needs the Agent for.
+    const found = await this.agents.resolveObservedAgent(source)
+    if ('error' in found) throw found.error
+    const agent = found.agent
     let summary: readonly ContentBlock[] | undefined
     try {
       summary = (await compaction.compactNow(agent, signal))?.summary

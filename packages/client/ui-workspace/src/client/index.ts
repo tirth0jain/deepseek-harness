@@ -26,6 +26,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from './contract/slots.ts'
 import { UiWorkspaceService } from './navigation.ts'
 import { createWorkspaceViewStore } from './stores.ts'
+import { createHandoffFailures } from './handoff-notice.ts'
+import { HandoffNotice, type HandoffNoticeInjected } from './HandoffNotice.tsx'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from './WorkspacePicker.tsx'
 import { en, zh, type WorkspaceKey } from './locales.ts'
@@ -81,6 +83,7 @@ export function apply(ctx: Context): void {
   const workspaces = ctx.get('workspaces') as IWorkspaces
   const uiWorkspace = new UiWorkspaceService(
     ctx, ctx.remote.directoryPicker, workspaces, sessions)
+  const handoffFailures = createHandoffFailures()
   ctx.slots.provideRoot({ hooks: { workspaces: workspaces.list } })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
 
@@ -128,9 +131,13 @@ export function apply(ctx: Context): void {
     },
     handoffSession: (sessionId) => {
       uiWorkspace.handoffSession(sessionId)
-        .catch(() => {
-          // A refused handoff — no backend, a cold Session, a busy Agent — keeps
-          // the current selection; the source Session is untouched either way.
+        .catch((error: unknown) => {
+          // A refused handoff — no backend, a busy Agent, nothing to condense —
+          // keeps the current selection and leaves the source Session
+          // untouched. It is not silent, though: the reason is the whole of
+          // what the clicker needs, and a click that visibly does nothing is
+          // indistinguishable from a broken one.
+          handoffFailures.report(error)
         })
     },
     renameWorkspace: async (workspaceId, title) => { await workspaces.rename(workspaceId, title) },
@@ -166,5 +173,19 @@ export function apply(ctx: Context): void {
       locale: NS,
     },
     WorkspacePicker,
+  ))
+  // A refused handoff reports where no row can take it away: the frame-wide
+  // overlay layer, additive beside whatever else occupies it.
+  ctx.slots.inject('shell.overlay', () => ctx.slots.register(
+    {
+      name: 'shell.overlay',
+      id: 'handoff-notice',
+      locale: NS,
+      inject: (): HandoffNoticeInjected => ({
+        hooks: { handoffFailures: handoffFailures.failures },
+        dismissHandoffFailure: (id) => { handoffFailures.dismiss(id) },
+      }),
+    },
+    HandoffNotice,
   ))
 }
