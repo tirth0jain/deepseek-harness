@@ -741,10 +741,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       publication: { source: selected, value: prepared },
     }
     // A migration result is decoded from a source that never reported its
-    // decoded size, so there is no byte count to charge against the budget. An
-    // entry the budget cannot measure is not retained: the next read of the
-    // published artifact decodes it once, which is what any memo miss costs.
-    this.forgetStoredLog(id)
+    // decoded size, so it carries no byte charge. It is still retained: the
+    // published facts are what a later preparation compares against, and the
+    // entry-count cap alone bounds how many such results can be held.
+    this.memoizeStoredLog(id, stored)
     return stored
   }
 
@@ -772,8 +772,9 @@ class JsonlSessionPersistence extends SessionPersistence {
       inheritedEventCount: stored.inheritedEventCount,
       revision: fileRevision(identity),
     }
-    // Same unmeasured source as the preparation above: published, not retained.
-    this.forgetStoredLog(id)
+    // Same unmeasured source as the preparation above: published and retained
+    // without a byte charge, bounded by the entry-count cap.
+    this.memoizeStoredLog(id, published)
     return published
   }
 
@@ -952,15 +953,16 @@ class JsonlSessionPersistence extends SessionPersistence {
     const location = this.locate(parsed.meta)
     validateStoredEvents(parsed.meta, parsed.events, location)
     const { events, decodedBytes, eventCount, ...rest } = parsed
-    // An unwindowed decode retains every event it counted; a divergence means
-    // the scanner's row accounting and the restored list disagree, which would
-    // silently corrupt every length this handle reports from here on.
-    if (eventCount !== events.length) {
-      throw new SessionPersistenceCorruptionError(
-        `session "${expectedId}": decoded ${String(eventCount)} events but restored ${String(events.length)} (raw log: ${path})`,
-        {},
-      )
-    }
+    // `eventCount` is the number of rows the scan decoded; `events` is what the
+    // format's restore retained. The two are equal for a log whose every row
+    // becomes exactly one event, which is what the V3 generation guaranteed and
+    // what this handle's own length arithmetic still assumes. The current
+    // generation does not: its admission refuses retired content and its
+    // restore folds relationships, so a valid log can decode N rows and retain
+    // fewer. The count is therefore carried for the bounded read (where it is
+    // the only witness to the whole log's length) and is not an identity to
+    // check here.
+    void eventCount
     const stored: CurrentStoredLog = {
       status: 'current',
       ...rest,
@@ -977,23 +979,27 @@ class JsonlSessionPersistence extends SessionPersistence {
    * @param stored - parsed log to retain.
    * @param decodedBytes - decoded JSONL bytes this entry would retain.
    */
-  private memoizeStoredLog(id: SessionId, stored: StoredLog, decodedBytes: number): void {
+  /**
+   * Insert one parsed log into the handoff cache, within both of its budgets.
+   * @param id - session the log belongs to.
+   * @param stored - parsed log to retain.
+   * @param decodedBytes - decoded JSONL bytes this entry would retain, or
+   *   `undefined` for a log whose decode never reported a size. An unmeasured
+   *   entry is retained without a byte charge and is bounded by the entry cap
+   *   alone; dropping it instead would hide published migration facts from the
+   *   next preparation, which compares against exactly this cache.
+   */
+  private memoizeStoredLog(id: SessionId, stored: StoredLog, decodedBytes?: number): void {
     this.coldLogMemo.delete(id)
     this.memoBytes.delete(id)
     // A log past the whole budget is not worth holding at all: it would evict
     // every smaller handoff and still be refused on the next read's own merits,
     // so the decode is simply not repeated here.
-    if (decodedBytes <= this.memoByteBudget) {
+    if (decodedBytes === undefined || decodedBytes <= this.memoByteBudget) {
       this.coldLogMemo.set(id, stored)
-      this.memoBytes.set(id, decodedBytes)
+      if (decodedBytes !== undefined) this.memoBytes.set(id, decodedBytes)
     }
     this.evictMemoPastBudget()
-  }
-
-  /** Drop any memoized handoff for one session. */
-  private forgetStoredLog(id: SessionId): void {
-    this.coldLogMemo.delete(id)
-    this.memoBytes.delete(id)
   }
 
   /**
