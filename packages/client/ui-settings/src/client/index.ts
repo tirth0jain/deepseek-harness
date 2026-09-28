@@ -35,8 +35,13 @@ export const inject = ['remote', 'remote.settings']
  */
 export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
-  // Every form uses the persistence mode resolved from the connected Host.
-  const persistence = ctx.remote.$host.isLoopback ? 'host' : 'memory'
+  // Resolved once here, where `remote` is declared in this plugin's own
+  // `inject`; the binder hands the same answer to every scope it binds.
+  // `canWriteSettings`, not `isLoopback`: a headless deployment reached only
+  // over the network declares its authorities in `trustedHosts`, and those
+  // pages must be able to edit settings — otherwise the document would be
+  // permanently read-only for the only browser that ever sees it.
+  const persistence = ctx.remote.$host.canWriteSettings ? 'host' : 'memory'
   const mirror = new SettingsDescribeMirror(ctx, persistence)
   ctx.effect(() => {
     const disposers = [

@@ -195,16 +195,24 @@ describe('connection node half', () => {
   })
 
   it('injects validated browser recovery timing and withdraws it on disposal', async () => {
-    const { ctx, dispose } = await mounted({ recovery: { generationReadyTimeoutMs: 25_000 } })
+    const { ctx, dispose } = await mounted({
+      recovery: { generationReadyTimeoutMs: 25_000 },
+      trustedHosts: ['harness.lan'],
+    })
     try {
       const rows: IndexInjection[] = []
       ctx.emit('webserver/index-inject', rows)
-      expect(rows).toEqual([{
-        kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
-          backoffBaseMs: 500, backoffFactor: 2, backoffMaxMs: 10_000,
-          generationReadyWarnMs: 3_000, generationReadyTimeoutMs: 25_000,
+      expect(rows).toEqual([
+        {
+          kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
+            backoffBaseMs: 500, backoffFactor: 2, backoffMaxMs: 10_000,
+            generationReadyWarnMs: 3_000, generationReadyTimeoutMs: 25_000,
+          },
         },
-      }])
+        // The browser half re-judges its own authority against this list, so it
+        // must ride the page even when empty.
+        { kind: 'global', name: '__DSH_TRUSTED_HOSTS__', value: ['harness.lan'] },
+      ])
       await dispose()
       const after: IndexInjection[] = []
       ctx.emit('webserver/index-inject', after)
@@ -342,6 +350,25 @@ describe('connection node half', () => {
       host: 'harness.example',
       cookie: browserCookie(connection, 'harness.example'),
     }))).toBeUndefined()
+    await dispose()
+  })
+
+  it('admits every fenced request when browser authentication is off', async () => {
+    const { connection, dispose } = await mounted({
+      browserAuth: false,
+      trustedHosts: ['harness.example'],
+    })
+    // The fence is unchanged: an undeclared authority is still refused.
+    expect(connection.requestRejection(fakeRequest({ host: 'other.example' }))).toBe(403)
+    // A declared authority and loopback both need no browser session at all.
+    expect(connection.requestRejection(fakeRequest({ host: 'harness.example' }))).toBeUndefined()
+    expect(connection.requestRejection(fakeRequest({ host: '127.0.0.1:3080' }))).toBeUndefined()
+    // Nothing is advertised to exchange, and the index is served directly
+    // instead of redirecting through the token handshake.
+    expect(connection.authenticatedUrl('http://harness.example')).toBe('http://harness.example/')
+    const index = fakeResponse()
+    expect(connection.authorizeIndex(fakeRequest({ host: 'harness.example' }, '/'), index.response)).toBe(true)
+    expect(index.state.status).toBeUndefined()
     await dispose()
   })
 

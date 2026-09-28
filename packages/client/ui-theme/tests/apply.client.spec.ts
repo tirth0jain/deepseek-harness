@@ -51,7 +51,7 @@ async function bench(isLoopback = true) {
     return Promise.resolve({ ok: true as const, value: namespace() })
   })
   const events = new TestRemote(ctx, { settings: { describe, mutate } })
-  events.$host = { home: undefined, isLoopback }
+  events.$host = { home: undefined, isLoopback, canWriteSettings: isLoopback }
   await ctx.plugin({ inject: [...settingsInject], apply: settingsApply }).await()
   return {
     ctx, slots: ctx.get('slots') as SlotRegistry, locale, describe, mutate, events,
