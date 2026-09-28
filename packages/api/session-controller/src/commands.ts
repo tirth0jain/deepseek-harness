@@ -3,6 +3,7 @@
 import { modelAvailable } from './catalog.ts'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import type { CommandExecution, CommandSubmitAttachment } from '@deepseek-ai/dsh-commands'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
@@ -14,7 +15,9 @@ import type {} from '@deepseek-ai/dsh-client-file-upload'
 import {
   ReasoningEffortId, assistantStreamChunks, createUserMessage, freezeMessage,
 } from '@deepseek-ai/dsh-llm'
-import type { MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, Message, MessageSource } from '@deepseek-ai/dsh-llm'
+import { boundContextSummary } from '@deepseek-ai/dsh-llm'
+import { isCompactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
@@ -45,6 +48,9 @@ import type {
   SessionForkRequest,
   SessionForkValue,
   SessionPromptRequest,
+  HandoffMessageSource,
+  SessionHandoffRequest,
+  SessionHandoffValue,
   SessionPromptValue,
   SessionRenameRequest,
   SessionRenameValue,
@@ -302,6 +308,196 @@ export class SessionCommandController {
       }
     }
     return { sessionId: childId }
+  }
+
+  /**
+   * Continue one Session in a new one whose whole history is its condensed form.
+   *
+   * A long Session is retained in full for the life of the process, and neither
+   * archiving it nor compacting it changes that: the archive set is a durable
+   * flag, and compaction keeps the shadowed content in the log by contract. The
+   * only thing that actually shrinks the working set is a Session whose log is
+   * small, so this creates one and carries the condensation into it.
+   *
+   * The summary is the compaction backend's own output rather than a second
+   * summarizer, so a continued Session is condensed the same way an in-place
+   * `/compact` would condense it. A Session already condensed and untouched
+   * since has nothing new to condense, so its newest recorded summary is
+   * carried instead of refusing the handoff.
+   *
+   * The source is archived last, and a failure there does not discard the new
+   * Session: it is reported in the result, because a caller that cannot open
+   * the continuation has lost the work of producing it.
+   * @param request - the Session to continue elsewhere.
+   * @param signal - cancels the summarization, not the Session it produces.
+   * @returns the new Session identity and whether its source was archived.
+   */
+  async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    const fail = (reason: string, message: string): RemoteError =>
+      new RemoteError('session/handoff-unavailable', message, { sessionId: request.sessionId, reason })
+    const observed = await this.observeForHandoff(request.sessionId)
+    using source = observed
+    // Resolved, never required to be live already. A deployment may
+    // deliberately leave a Session with no Agent until an operation needs one
+    // (`promoteOnHistoryOpen: false`), so the act of looking at a Session
+    // cannot be what makes this operation possible — requiring a live Agent
+    // here refuses on exactly the deployments that need condensing most.
+    // The observation already in hand is what the resume is built from, so
+    // resolution costs no second read.
+    const found = await this.agents.resolveObservedAgent(source)
+    if ('error' in found) throw found.error
+    const agent = found.agent
+    const conversation = await this.condense(agent, fail, signal)
+    let workspace: Workspace | undefined
+    try {
+      workspace = await this.forkWorkspace(source.header)
+    } catch (error: unknown) {
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to resolve handoff workspace for session "${request.sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+    const childId = brandString<SessionId>(`session-${randomUUID()}`)
+    const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+    try {
+      const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
+      // Created through the controller rather than the registry directly, so
+      // the continuation is owned like any other Agent the API layer makes
+      // live: archiving it later gives it back instead of leaving it resident
+      // for the life of the process.
+      await this.agents.createOwned({
+        sessionId: childId,
+        // No seed: the continuation is a new conversation, and its one opening
+        // message is written below rather than inherited as a prefix.
+        meta: {
+          ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
+          parentSession: source.header.id,
+          isSeeded: false,
+          ...(composition.agentPreset === undefined
+            ? {}
+            : { agentPreset: composition.agentPreset }),
+        },
+        agentOptions: { provider, model },
+        setup: composition.setup,
+      })
+    } catch (error: unknown) {
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to start the continuation of session "${request.sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+    const continuation = this.ctx.sessions.get(childId)
+    if (continuation === undefined) {
+      throw new RemoteError(
+        'gateway/internal',
+        `continuation "${childId}" was created but is not in the Session store`,
+        {},
+      )
+    }
+    continuation.append('user/message', createUserMessage({
+      content: carriedHistory(conversation),
+      source: handoffSource(),
+    }), { surfaceOp: 'append' })
+    if (workspace !== undefined) {
+      try {
+        await workspace.attachSession(childId)
+      } catch (error: unknown) {
+        throw new RemoteError(
+          'session/workspace-attach-failed',
+          `session "${childId}" was continued but could not attach to workspace "${workspace.id}": ${String(error)}`,
+          { sessionId: childId, workspaceId: workspace.id },
+        )
+      }
+    }
+    let archived = false
+    try {
+      await this.ctx.workspaceRegistry.archiveSession(request.sessionId)
+      archived = true
+    } catch (error: unknown) {
+      this.ctx.logger.warn(
+        `handoff: continuation "${childId}" was created but archiving "${request.sessionId}" failed: ${String(error)}`,
+      )
+    }
+    return { sessionId: childId, archived }
+  }
+
+  /** Observe one handoff source, mapping its absence the way `fork` does. */
+  private async observeForHandoff(sessionId: SessionId): Promise<SessionObservation> {
+    try {
+      return await this.ctx.sessionQuery.observeSession(sessionId)
+    } catch (error: unknown) {
+      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+        throw new RemoteError('session/not-found', `session "${sessionId}" not found`, { sessionId })
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `handoff source unavailable for session "${sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+  }
+
+  /**
+   * Condense one live Agent's history the way `/compact` would, and read back
+   * the condensed conversation.
+   *
+   * The backend is reached through the human command rather than a service
+   * lookup, because a preset may isolate it. This deployment disables the
+   * host-plane compaction row and mounts a backend per preset inside
+   * `isolate: { compaction: true }`, so the group's instance is invisible from
+   * outside the group: `ctx.get('compaction')` is undefined at this
+   * controller's plane, and the only context that can see the backend is the
+   * one the command runs in. Going through the command also means a handoff
+   * condenses exactly as typing `/compact` does, refusals included.
+   *
+   * What comes back is the source's own derived history, not the summary
+   * declaration. Compaction replaces the shadowed nodes with a checkpoint
+   * message and deliberately keeps a recent tail verbatim (`retainRatio`
+   * defaults to 0.16 of the context window), so the summary alone is a strictly
+   * smaller thing than the condensed conversation: carrying it would drop the
+   * most recent turns, which are the ones a continuation is continued from.
+   * `deriveMessages` is that condensed view by construction — a `replace`
+   * surface op deletes the shadowed nodes from the derivation.
+   *
+   * @param agent - live Agent whose history is condensed.
+   * @param fail - refusal constructor for this operation's own error class.
+   * @param signal - cancels the compaction, not the Session it reads.
+   * @returns the condensed conversation, oldest first.
+   * @throws {RemoteError} `session/handoff-unavailable` naming the precondition.
+   */
+  private async condense(
+    agent: Agent,
+    fail: (reason: string, message: string) => RemoteError,
+    signal: AbortSignal,
+  ): Promise<readonly Message[]> {
+    // `ctx.get` is the inject-free read: a deployment may mount no command
+    // registry at all, and this route must not wait on one to exist.
+    const commands = this.ctx.get('commands') as HandoffCommands | undefined
+    if (commands === undefined) {
+      throw fail('no-command-registry', 'This deployment has no command registry, so its history cannot be condensed.')
+    }
+    const execution = await commands.execute(agent, '/compact', [], signal)
+    if (execution === undefined) {
+      throw fail(
+        'no-compaction-command',
+        'This deployment registers no "/compact" command for this Session, so its history cannot be condensed.',
+      )
+    }
+    if (execution.result.kind !== 'success') {
+      // The command owns this prose and already speaks to a human, so it is
+      // carried rather than reinterpreted.
+      throw fail('compaction-refused', execution.result.text)
+    }
+    const conversation = agent.session.deriveMessages()
+    // A Session with only a system prompt has nothing to continue from. A
+    // command that found nothing to compact is not this case: the retained
+    // history it left behind is what gets carried.
+    if (conversation.every(message => message.role === 'system')) {
+      throw fail('nothing-to-carry', 'This Session has no history to condense yet.')
+    }
+    return conversation
   }
 
   /**
@@ -817,3 +1013,91 @@ function attachmentReadFailure(error: unknown, fallback: string): Error {
   return new RemoteError('gateway/internal', fallback, {})
 }
 
+
+/**
+ * Who one carried message is attributed to in the opening recap.
+ *
+ * A compaction checkpoint IS the condensed history rather than something the
+ * reader said, so labelling it as the reader would misattribute the whole
+ * summary. The marker is the backend-independent one every compaction backend
+ * uses for its replacement user message; this controller deliberately takes no
+ * build-time edge on the compaction package, so it is read structurally, the
+ * same way `HandoffCommands` slices the command service.
+ * @param message - one message of the source's condensed conversation.
+ * @returns the label opening its carried text.
+ */
+function speakerOf(message: Message): string {
+  if (isCompactCheckpointSource(message.source)) return 'Condensed history'
+  return message.role === 'user' ? 'User' : 'Assistant'
+}
+
+/**
+ * The opening message of a continued Session: what it is, then the history.
+ *
+ * Text blocks only. A carried recap is not a transcript: tool calls and their
+ * results are plumbing whose useful output the condensation already keeps, and
+ * replaying raw tool traffic into a single message would cost the continuation
+ * far more context than it restores.
+ * @param conversation - the source's condensed conversation, oldest first.
+ * @returns model-visible blocks for the continuation's one opening message.
+ */
+function carriedHistory(conversation: readonly Message[]): ContentBlock[] {
+  const blocks: ContentBlock[] = [
+    {
+      type: 'text',
+      text: 'This conversation continues an earlier one in the same workspace. The history below is that '
+        + 'conversation condensed: an earlier summary, then the most recent turns kept verbatim. The earlier '
+        + 'conversation is archived and still readable.',
+    },
+  ]
+  for (const message of conversation) {
+    if (message.role === 'system') continue
+    const text = message.content
+      .flatMap(block => block.type === 'text' ? [block.text] : [])
+      .join('\n\n')
+    if (text.trim().length === 0) continue
+    blocks.push({ type: 'text', text: `${speakerOf(message)}: ${text}` })
+  }
+  return blocks
+}
+
+/**
+ * Durable attribution for a continued Session's opening message.
+ *
+ * `plugin` is the source kind this Session format already classifies, and the
+ * `notice` form is what makes the transcript show one collapsed line instead of
+ * a wall of carried-over prose. A new kind would be a versioned-format change
+ * for a display distinction, so the existing one carries it.
+ * @returns the immutable message source for the carried history.
+ */
+function handoffSource(): HandoffMessageSource {
+  return Object.freeze({
+    kind: 'handoff',
+    summary: boundContextSummary('Continued from an earlier conversation; its condensed history follows.'),
+  })
+}
+
+/**
+ * The slice of the command seam a handoff calls.
+ *
+ * A slice rather than the service, and read through `ctx.get` at call time, so
+ * a deployment that mounts no command registry is a runtime refusal instead of
+ * a build-time dependency or a route that waits on one to exist.
+ */
+interface HandoffCommands {
+  /**
+   * Parse and execute one known command for an Agent without sending it to the
+   * model, in the Agent's own scope.
+   * @param agent - exact receiving Agent.
+   * @param line - complete slash-command line.
+   * @param submittedAttachments - staged attachments; empty for `/compact`.
+   * @param signal - cancellation owned by the caller.
+   * @returns the settled execution, or undefined when the name does not resolve.
+   */
+  execute(
+    agent: Agent,
+    line: string,
+    submittedAttachments: readonly CommandSubmitAttachment[],
+    signal: AbortSignal,
+  ): Promise<CommandExecution | undefined>
+}

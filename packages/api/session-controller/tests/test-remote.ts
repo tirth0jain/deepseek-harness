@@ -97,6 +97,8 @@ export interface TestSessionRemoteDefaults {
   readonly defaultModelSelection: () => AgentModelSelection
   readonly cwd: string
   readonly nativeOpen?: boolean
+  /** Activate a stored Session's Agent when its history opens; `false` opens read-only. */
+  readonly promoteOnHistoryOpen?: boolean
   readonly saveDefaultModelSelection?: (selection: AgentModelSelection) => void | Promise<void>
   readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>
   readonly fileApplications?: SessionControllerInternals['fileApplications']
@@ -211,6 +213,10 @@ export function testSessionPersistence(
       return testReadHandle(sessionId, inspection)
     }
   }
+  // A double memoizes nothing, so releasing is a no-op — but it has to exist:
+  // the service contract always carries it, and a caller releasing what an
+  // archive no longer needs must not have to ask whether this backend is real.
+  adapted.release ??= () => {}
   return adapted
 }
 
@@ -296,6 +302,9 @@ function installControllers(
       ctx,
       {
         ...defaults.nativeOpen === undefined ? {} : { nativeOpen: defaults.nativeOpen },
+        ...defaults.promoteOnHistoryOpen === undefined
+          ? {}
+          : { promoteOnHistoryOpen: defaults.promoteOnHistoryOpen },
       },
       {
         ...defaults.openPath === undefined ? {} : { openPath: defaults.openPath },

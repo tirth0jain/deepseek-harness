@@ -43,6 +43,8 @@ import type {
   SessionFollowRequest,
   SessionForkRequest,
   SessionForkValue,
+  SessionHandoffRequest,
+  SessionHandoffValue,
   SessionListRequest,
   SessionListValue,
   SessionOpenWorkspacePathRequest,
@@ -80,6 +82,19 @@ declare module '@deepseek-ai/cordis' {
 export interface Config {
   /** Override platform desktop-opener detection. */
   readonly nativeOpen?: boolean
+  /**
+   * Activate a stored Session's Agent in the background when its history is
+   * opened for reading. Defaults to `true`, the shipped behaviour.
+   *
+   * Activating early costs the Session's whole event graph for the life of the
+   * process — a long conversation measures gigabytes — because nothing releases
+   * an Agent once it exists, and it appends the pickup `session/end-seed` that
+   * makes a merely-opened Session look freshly used. Set `false` to open a
+   * Session read-only: every operation that needs an Agent (prompt, queue,
+   * command, cancel) already resolves one on demand, so the Agent is then
+   * created by the first real use rather than by the first look.
+   */
+  readonly promoteOnHistoryOpen?: boolean
 }
 
 /** Host integrations replaceable by direct unit tests. */
@@ -94,6 +109,21 @@ export interface SessionControllerInternals {
   readonly revealPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native handoff availability probe. */
   readonly canOpenPath?: () => boolean
+}
+
+/**
+ * The slice of the persistence seam an archive release calls.
+ *
+ * Declared here rather than imported as the service so this controller keeps
+ * working in a deployment that mounts no persistence at all; `ctx.get` is what
+ * resolves it at call time.
+ */
+interface ArchivedLogRelease {
+  /**
+   * Drop any decoded log retained for one Session.
+   * @param sessionId - the Session whose retained decode should be dropped.
+   */
+  release(sessionId: SessionId): void
 }
 
 /** Host service backing the generated `ctx.remote.session` namespace. */
@@ -114,6 +144,7 @@ export class SessionController extends TypertRemoteService {
 
   static Config: z<Config> = z.object({
     nativeOpen: z.boolean(),
+    promoteOnHistoryOpen: z.boolean().default(true),
   })
 
   private readonly agents: ApiSessionAgentController
@@ -144,12 +175,30 @@ export class SessionController extends TypertRemoteService {
       return result.agent
     }), 'session-controller: file-upload Agent resolver')
     this.controlState = new SessionControlController(ctx)
+    // Archiving is the act of putting a Session away, so it is where this
+    // process gives back what that Session costs it: the Agent this controller
+    // made live for it, and the parsed cold graph a read retained. Nothing here
+    // is a refusal — an Agent someone else owns, one that is not idle, and an
+    // observation an active lease holds are all left alone, because the point
+    // is to stop paying for a Session nobody is using.
+    ctx.on('workspace/session-archived', (sessionId: SessionId) => {
+      void this.releaseArchived(sessionId).catch((error: unknown) => {
+        this.ctx.logger.warn(`archiving "${sessionId}" released nothing: ${String(error)}`)
+      })
+    })
     // Registered before history so reverse-order teardown closes every
     // follower before waiting for already-admitted promotions.
     ctx.effect(() => async () => {
       await Promise.allSettled([...this.promotions])
     }, 'session-controller.promotions')
-    this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
+    this.history = new SessionHistoryController(
+      ctx,
+      config.promoteOnHistoryOpen === false
+        // Read-only opening: the Agent is resolved by the first operation that
+        // needs one instead of by the act of looking at the Session.
+        ? undefined
+        : (observation) => { this.promote(observation) },
+    )
     this.listState = new ApiSessionList(ctx)
     this.fileApplications = internals.fileApplications ?? nativeFileApplications
     this.openFileApplication = internals.openFileApplication ?? openNativeFileApplication
@@ -197,6 +246,40 @@ export class SessionController extends TypertRemoteService {
       if (event.type !== 'user/message' || event.data.source.kind !== 'user') return
       ctx.emit('api-session/activity', session.id, event.time)
     })
+  }
+
+  /**
+   * Give back what one archived Session costs this process.
+   *
+   * Three layers can each be holding the same Session, and each is asked in
+   * turn: the Agent this controller made live, the parsed event graph the
+   * observation cache retained for a Session that was only read, and any
+   * decoded log the persistence backend memoized. Every step is best-effort
+   * and idempotent — a Session that was never read or never resumed simply has
+   * nothing at one or more of them, and reading or resuming it again
+   * reconstructs whatever was dropped.
+   * @param sessionId - the Session that was just archived.
+   */
+  private async releaseArchived(sessionId: SessionId): Promise<void> {
+    // Read state first, Agent last: the Agent's disposal is asynchronous, and
+    // dropping the retained graph before it means a caller that observes the
+    // Agent gone can rely on the read state being gone too. It also keeps the
+    // window where a concurrent read could re-cache the graph ahead of the
+    // disposal rather than behind it.
+    const releasedObservation = this.ctx.sessionQuery.releaseSession(sessionId)
+    // Read through `ctx.get`: persistence is optional for this controller, so
+    // it cannot be a declared injection without making every route wait on a
+    // service a deployment may not mount.
+    const persistence = this.ctx.get('sessionPersistence') as ArchivedLogRelease | undefined
+    persistence?.release(sessionId)
+    const releasedAgent = await this.agents.releaseAgent(sessionId)
+    const released = [
+      ...releasedAgent ? ['live Agent'] : [],
+      ...releasedObservation ? ['retained read state'] : [],
+    ]
+    if (released.length > 0) {
+      this.ctx.logger.info(`archiving "${sessionId}" released its ${released.join(' and ')}`)
+    }
   }
 
   private promote(observation: SessionObservation): void {
@@ -415,6 +498,18 @@ export class SessionController extends TypertRemoteService {
   @Remote('fork')
   fork(request: SessionForkRequest): Promise<SessionForkValue> {
     return this.commands.fork(request)
+  }
+
+  /**
+   * Continue one Session in a new one holding only its condensed history, and
+   * archive the source.
+   * @param request - the Session to continue elsewhere.
+   * @param signal - cancels the summarization, not the Session it produces.
+   * @returns the new Session identity and whether its source was archived.
+   */
+  @Remote('handoff')
+  handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    return this.commands.handoff(request, signal)
   }
 
   /**

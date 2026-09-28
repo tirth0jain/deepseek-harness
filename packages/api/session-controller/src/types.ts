@@ -230,6 +230,15 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/steer-unavailable': { readonly itemId: MessageId }
     'session/title-invalid': { readonly sessionId: SessionId }
     'session/fork-unavailable': { readonly sessionId: SessionId }
+    /**
+     * A handoff could not be completed. `reason` is a stable token naming which
+     * precondition failed — `no-command-registry`, `no-compaction-command`,
+     * `compaction-refused`, or `nothing-to-carry` — so a caller can say which
+     * one without parsing prose. A source Session that is not live is not a
+     * refusal: it is resolved (resumed) the way any other first operation
+     * resolves one.
+     */
+    'session/handoff-unavailable': { readonly sessionId: SessionId; readonly reason: string }
     'subagent/not-found': {
       readonly parentSessionId: SessionId
       readonly childSessionId: SessionId
@@ -335,6 +344,22 @@ export interface SessionForkValue {
   readonly sessionId: SessionId
 }
 
+/** Handoff request: the Session whose condensed history should open a new one. */
+export interface SessionHandoffRequest {
+  readonly sessionId: SessionId
+}
+
+/** Result of one handoff: the new Session, and whether its source was archived. */
+export interface SessionHandoffValue {
+  readonly sessionId: SessionId
+  /**
+   * Whether the source Session was archived. A new Session that exists while
+   * its source stayed in the list is reported rather than hidden, so a caller
+   * can still open the result and say what did not happen.
+   */
+  readonly archived: boolean
+}
+
 /** Session prompt request. */
 export interface SessionPromptRequest {
   /** Client-minted identity persisted on the exact accepted user message. */
@@ -415,10 +440,25 @@ export interface SessionOpenWorkspacePathValue {
 /** Client-minted prompt identity used to reconcile optimistic and durable messages. */
 export type SessionRequestId = Branded<'session-request-id'>
 
+/**
+ * Producer-owned source of the opening message a handoff writes into the
+ * continuation: harness text, not something either party said.
+ *
+ * The retired `plugin` wrapper no longer exists in this generation, so a
+ * producer names its own kind; the summary is the one-line account the
+ * transcript renders.
+ */
+export interface HandoffMessageSource {
+  readonly kind: 'handoff'
+  readonly summary: string
+}
+
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** Browser prompt correlation and optional Host-validated time zone. */
     'user-rpc': { kind: 'user'; rpcId: SessionRequestId; clientTimeZone?: string }
+    /** The opening message of a continued Session. */
+    'handoff': HandoffMessageSource
   }
 }
 

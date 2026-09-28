@@ -114,7 +114,6 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     workspaceRegistry: WorkspaceRegistry
   }
-
   interface Events {
     /**
      * Ask the composed providers what still runs for a session before it is
@@ -145,6 +144,23 @@ declare module '@deepseek-ai/cordis' {
      * @mode parallel
      */
     'workspace/session-stop'(request: SessionActivityRequest): Promise<void> | void
+    /**
+     * One session was archived durably.
+     *
+     * Archiving is a registry flag, not a lifecycle: this registry never
+     * touches a session's log or its Agent, and the session stays readable.
+     * The announcement exists so whoever owns those resources can give them
+     * back, which is what makes archiving a way to stop paying for a session
+     * rather than only a way to hide it. A listener must therefore tolerate the
+     * session being read or resumed again immediately afterwards.
+     *
+     * It follows both the durable write and any `stopActivity` request, so a
+     * listener that releases an Agent never races a stop that is still
+     * settling that same session.
+     * @param sessionId - the archived session.
+     * @mode emit
+     */
+    'workspace/session-archived'(sessionId: SessionId): void
   }
 }
 
@@ -381,6 +397,9 @@ export class WorkspaceRegistry extends Service {
         pinnedSessionIds: state.pinnedSessionIds.filter(id => id !== sessionId),
       })
       if (options.stopActivity === true) await this.stopSessionActivity(sessionId)
+      // Announced after durability, so a listener never gives back resources
+      // for an archive that a later write could still lose.
+      this.ctx.emit('workspace/session-archived', sessionId)
     })
   }
 
