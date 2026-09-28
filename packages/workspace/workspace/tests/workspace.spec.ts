@@ -926,6 +926,20 @@ describe('registry-global session archive', () => {
     expect(result.registry.archivedSessionIds).toEqual(['gone', 'kept'])
   })
 
+  it('announces a durable archive once, so owners can give back what the session costs', async () => {
+    const dir = await makeDir('archive-announce')
+    const result = await harness({ sessions: [header('kept', dir, 100)] })
+    const announced: SessionId[] = []
+    result.ctx.on('workspace/session-archived', (sessionId) => { announced.push(sessionId) })
+
+    await result.registry.archiveSession(SessionId('kept'))
+    expect(announced).toEqual(['kept'])
+    // An idempotent repeat writes nothing, so it announces nothing: a listener
+    // must not release resources twice for one archive.
+    await result.registry.archiveSession(SessionId('kept'))
+    expect(announced).toEqual(['kept'])
+  })
+
   it('accepts unaccounted and live sessions but rejects unknown ids without writing', async () => {
     const dir = await makeDir('archive-strays')
     const live = await makeDir('archive-live')

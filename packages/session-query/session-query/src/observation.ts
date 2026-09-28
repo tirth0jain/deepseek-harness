@@ -214,6 +214,28 @@ export class SessionObservationReader {
     return cached
   }
 
+  /**
+   * Drop the retained preparation for one id.
+   *
+   * This cache is what keeps a Session the process has only *read* resident:
+   * one fully materialized event graph per prepared id, which for a large log
+   * is the dominant cost of having looked at it. Releasing is how a caller
+   * that has put a Session away gives that back, at the price of re-reading
+   * persistence on the next observation.
+   *
+   * A pinned entry is left alone. An active lease is mid-read on it, so
+   * dropping the map's reference would free nothing while making the next read
+   * parse a second copy of the same log — the opposite of the point.
+   * @param sessionId - Session whose retained preparation should be dropped.
+   * @returns whether a retained preparation was dropped.
+   */
+  release(sessionId: SessionId): boolean {
+    const entry = this.cache.get(sessionId)
+    if (entry === undefined || entry.refs > 0) return false
+    this.cache.delete(sessionId)
+    return true
+  }
+
   /** Insert or replace the entry for one id, then evict past the capacity. */
   private store(sessionId: SessionId, entry: PreparedEntry): void {
     // Replacing a stale revision only drops the map's reference; live leases

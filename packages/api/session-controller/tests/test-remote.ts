@@ -203,6 +203,10 @@ export function testSessionPersistence(
       return testReadHandle(sessionId, inspection)
     }
   }
+  // A double memoizes nothing, so releasing is a no-op — but it has to exist:
+  // the service contract always carries it, and a caller releasing what an
+  // archive no longer needs must not have to ask whether this backend is real.
+  adapted.release ??= () => {}
   return adapted
 }
 

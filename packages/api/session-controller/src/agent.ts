@@ -4,7 +4,8 @@ import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {
-  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
+  Agent, AgentHandle, AgentOptions, AgentSetup, CreateAgentOptions, ModelSelection as AgentModelSelection,
+  ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
@@ -142,9 +143,23 @@ export class ApiSessionAgentController {
   private readonly creations = new Map<SessionId, Promise<Agent>>()
   private readonly selections = new WeakMap<Agent, InstalledSelection>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
+  /**
+   * The disposer for every Agent this controller made live, keyed by session.
+   *
+   * `AgentHandle.dispose` is a capability, and this map is the only place that
+   * keeps it: create and resume hand the handle to their caller, and every
+   * caller here wants the Agent rather than the ownership. Keeping it is what
+   * lets an operation that has finished with a session — archiving it, say —
+   * give the Agent back instead of leaving it resident for the life of the
+   * process.
+   */
+  private readonly disposers = new Map<SessionId, () => Promise<void>>()
 
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
   constructor(private readonly ctx: Context) {
+    // An Agent disposed by anyone else is no longer this controller's to
+    // release, and holding a stale disposer would double-dispose it.
+    ctx.on('agent/disposed', ({ agent }) => { this.disposers.delete(agent.id) })
     ctx.typert.lookups.configure('agent', async (sessionId: SessionId) => {
       const found = await this.resolveAgent(sessionId)
       if ('error' in found) throw found.error
@@ -160,6 +175,43 @@ export class ApiSessionAgentController {
       if ('error' in found) throw found.error
       return found.agent.ctx
     })
+  }
+
+  /**
+   * Create one Agent this controller owns.
+   *
+   * The create counterpart of {@link own}, for an operation that needs lineage
+   * meta this controller does not assemble — a continuation naming the Session
+   * it came from. Ownership is the point: an Agent created here is one
+   * {@link releaseAgent} can give back, exactly like a resumed one.
+   * @param options - the exact create options, including lineage meta.
+   * @returns the live Agent.
+   */
+  async createOwned(options: CreateAgentOptions): Promise<Agent> {
+    return this.own(options.sessionId, await this.ctx.agents.create(options))
+  }
+
+  /**
+   * Release one Session's Agent when this controller is what made it live.
+   *
+   * Ownership is the whole question: an Agent this controller resumed or
+   * created is one it can give back, while one that was already live belongs
+   * to whoever was using it and is left alone. So is an Agent that is not
+   * idle — releasing stops a loop, and stopping one mid-turn discards work
+   * instead of freeing idle memory.
+   * @param sessionId - the Session whose Agent should be released.
+   * @returns whether an Agent was released.
+   */
+  async releaseAgent(sessionId: SessionId): Promise<boolean> {
+    const dispose = this.disposers.get(sessionId)
+    if (dispose === undefined) return false
+    const live = this.ctx.agents.get(sessionId)
+    if (live !== undefined && live.status !== 'idle') return false
+    // Removed before the await: disposal emits `agent/disposed`, and a second
+    // release racing this one must find nothing left to do.
+    this.disposers.delete(sessionId)
+    await dispose()
+    return true
   }
 
   /**
@@ -434,11 +486,27 @@ export class ApiSessionAgentController {
     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
-    return (await this.ctx.agents.resume({
+    return this.own(sessionId, await this.ctx.agents.resume({
       resumeSessionId: sessionId,
       agentOptions: this.agentOptions(),
       setup: composition.setup,
-    })).agent
+    }))
+  }
+
+  /**
+   * Take ownership of one freshly created or resumed Agent.
+   *
+   * The handle is what carries disposal, so it is recorded here and the Agent
+   * returned; {@link releaseAgent} is the other half.
+   * @param sessionId - the Session the handle belongs to.
+   * @param handle - the created or resumed Agent and its disposer.
+   * @returns the live Agent.
+   */
+  private own(sessionId: SessionId, handle: AgentHandle): Agent {
+    // Wrapped rather than stored as a bare method reference: the handle's
+    // disposer is a capability that must keep its own receiver.
+    this.disposers.set(sessionId, async () => { await handle.dispose() })
+    return handle.agent
   }
 
   private async createOrAdopt(
@@ -466,11 +534,11 @@ export class ApiSessionAgentController {
         const storedPreset = this.presetForObservation(observation)
         this.assertPresetUnchanged(sessionId, presetId, storedPreset)
         const composition = await this.composeAgent(storedPreset)
-        return (await this.ctx.agents.resume({
+        return this.own(sessionId, await this.ctx.agents.resume({
           resumeSessionId: sessionId,
           agentOptions: this.agentOptions(),
           setup: composition.setup,
-        })).agent
+        }))
       } catch (error: unknown) {
         if (!(error instanceof SessionQueryError)
           || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
@@ -483,7 +551,7 @@ export class ApiSessionAgentController {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
     const composition = await this.composeAgent(presetId)
-    return (await this.ctx.agents.create({
+    return this.own(sessionId, await this.ctx.agents.create({
       sessionId,
       agentOptions: this.agentOptions(),
       meta: {
@@ -491,7 +559,7 @@ export class ApiSessionAgentController {
         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
       },
       setup: composition.setup,
-    })).agent
+    }))
   }
 
   private agentOptions(): AgentOptions {

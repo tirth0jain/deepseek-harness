@@ -61,8 +61,18 @@ async function mount(): Promise<Mounted> {
     list: () => Promise.resolve([COLD]),
     inspect: () => Promise.resolve({ meta: COLD, inheritedEventCount: 0, events: [] }),
   }) as never)
-  const archived = vi.fn(() => Promise.resolve())
-  ctx.provide('workspaceRegistry', { list: () => [], archiveSession: archived } as never)
+  const archived = vi.fn((_sessionId: SessionId) => Promise.resolve())
+  ctx.provide('workspaceRegistry', {
+    list: () => [],
+    // The real registry announces a durable archive so owners can give back
+    // what the Session costs; this double stands in for it, so it announces
+    // too. The announcement itself is covered against the real registry in
+    // `workspace.spec.ts`.
+    archiveSession: async (sessionId: SessionId) => {
+      await archived(sessionId)
+      ctx.emit('workspace/session-archived', sessionId)
+    },
+  } as never)
 
   // The preset scope: the real `/compact` command and the backend it reads,
   // both mounted where the controller's own plane cannot see either.
@@ -118,8 +128,14 @@ async function mount(): Promise<Mounted> {
     }
     const agent = { id: session.id, session, status: 'idle', ctx: ownerCtx } as unknown as Agent
     await setup?.(ownerCtx, agent)
-    await ctx.agents.register(agent)
-    return { agent, dispose: () => Promise.resolve() }
+    // The registry's own disposer, so a released Agent really unregisters: a
+    // handle that only resolves would let a release look successful while the
+    // Agent stayed live.
+    const unregister = ctx.agents.register(agent)
+    return {
+      agent,
+      dispose: async () => { await unregister() },
+    }
   }
   const resume = vi.fn(async (ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle> =>
     await materialize(ownerCtx, options.resumeSessionId, { cwd: '/proj' }, options.setup, true))
@@ -153,6 +169,31 @@ describe('session handoff from a Session this process has only read', () => {
     expect(result.sessionId).toMatch(/^session-/)
     expect(result.archived).toBe(true)
     expect(archived).toHaveBeenCalledWith(sid('cold'))
+  })
+
+  it('gives back the Agent it promoted once the source is archived', async () => {
+    const { ctx, controller } = await mount()
+    const result = await controller.handoff({ sessionId: sid('cold') }, signal)
+    expect(result.archived).toBe(true)
+    // The whole point of continuing elsewhere: the source stops costing this
+    // process anything. The handoff is what made its Agent live, so the
+    // archive's release is what takes it back.
+    await vi.waitFor(() => {
+      expect(ctx.agents.get(sid('cold')) === undefined).toBe(true)
+    })
+  })
+
+  it('owns the continuation it creates, so archiving that later gives it back too', async () => {
+    const { ctx, controller } = await mount()
+    const result = await controller.handoff({ sessionId: sid('cold') }, signal)
+    expect(ctx.agents.get(result.sessionId) !== undefined).toBe(true)
+
+    // The same act on a Session this operation created rather than resumed:
+    // ownership is what makes the release uniform.
+    ctx.emit('workspace/session-archived', result.sessionId)
+    await vi.waitFor(() => {
+      expect(ctx.agents.get(result.sessionId) === undefined).toBe(true)
+    })
   })
 
   it('carries the condensation into a Session whose whole history it is', async () => {

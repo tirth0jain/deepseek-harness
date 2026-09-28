@@ -284,6 +284,50 @@ describe('SessionObservationReader cold path', () => {
     await ctx.fiber.dispose()
   })
 
+  it('releases a retained preparation so the next read decodes the log again', async () => {
+    const ctx = await readerContext()
+    const meta = header('released')
+    const store = new Map([[meta.id, { header: meta, events: [messageEvent(0, 'kept')], revision: 'r1' }]])
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(store, counters))
+    const reader = new SessionObservationReader(ctx)
+
+    {
+      using observed = await reader.read(meta.id, { projectionMode: 'none' })
+      void observed
+    }
+    expect(counters.read).toBe(1)
+    // The retained graph is what a read costs for the life of the process, so
+    // releasing it is what makes "put this Session away" mean something.
+    expect(reader.release(meta.id)).toBe(true)
+    {
+      using observed = await reader.read(meta.id, { projectionMode: 'none' })
+      void observed
+    }
+    // Reconstructed on demand: released state is not lost state.
+    expect(counters.read).toBe(2)
+    // An id that was never prepared has nothing to release.
+    expect(reader.release(header('never-read').id)).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
+  it('leaves a preparation an active lease is still reading', async () => {
+    const ctx = await readerContext()
+    const meta = header('leased')
+    const store = new Map([[meta.id, { header: meta, events: [messageEvent(0, 'held')], revision: 'r1' }]])
+    const counters = { stat: 0, open: 0, read: 0 }
+    ctx.provide('sessionPersistence', stubPersistence(store, counters))
+    const reader = new SessionObservationReader(ctx)
+
+    const lease = await reader.read(meta.id, { projectionMode: 'none' })
+    // Dropping a pinned entry would free nothing and make the next read parse
+    // a second copy of the same log, so the lease keeps it.
+    expect(reader.release(meta.id)).toBe(false)
+    lease[Symbol.dispose]()
+    expect(reader.release(meta.id)).toBe(true)
+    await ctx.fiber.dispose()
+  })
+
   it('reloads when the durable revision changes', async () => {
     const ctx = await readerContext()
     const meta = header('cache-stale')

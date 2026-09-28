@@ -530,6 +530,21 @@ class JsonlSessionPersistence extends SessionPersistence {
     return snapshots
   }
 
+  /**
+   * Drop the decoded log this instance memoizes for one session.
+   *
+   * The memo is byte-bounded and holds nothing past its budget, so this is
+   * about the mid-sized logs it does hold: releasing one makes the next read
+   * decode it again. Preparation already in flight for the id is left alone —
+   * its waiters own it, and dropping the reference would only make them decode
+   * a second copy.
+   * @param id - the session whose memoized decode should be dropped.
+   */
+  override release(id: SessionId): void {
+    if (this.migrationPreparations.has(id)) return
+    this.coldLogMemo.delete(id)
+  }
+
   // --- handle-facing storage internals (package-private via the handle class below) ---
 
   /** Resolve and read one stored log, refusing loudly when the artifact is absent. */

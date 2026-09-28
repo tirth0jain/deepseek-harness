@@ -1539,6 +1539,32 @@ describe('JsonlSessionPersistence: durability and crash semantics', () => {
     await budgetCtx.fiber.dispose()
   })
 
+  it('drops one memoized log on release and decodes it again on the next read', async () => {
+    const releaseRoot = await freshRoot()
+    const releaseCtx = new Context()
+    await releaseCtx.plugin(JsonlSessionPersistence, { root: releaseRoot, compression: 'none' })
+    const m = meta('memo-release', '/work')
+    await writeLog(releaseCtx.sessionPersistence, m, oneTurnLog())
+    readTally.enabled = true
+
+    await readAll(releaseCtx.sessionPersistence, m.id)
+    const afterFirst = readTally.bySuffix.get(rawLogPath(releaseRoot, '/work', m.id)) ?? 0
+    await readAll(releaseCtx.sessionPersistence, m.id)
+    // Retained, so the repeat read goes to the memo rather than the artifact.
+    expect(readTally.bySuffix.get(rawLogPath(releaseRoot, '/work', m.id))).toBe(afterFirst)
+
+    // Releasing is how a caller that put the session away stops paying for its
+    // decoded graph; the price is decoding it again, not losing it.
+    releaseCtx.sessionPersistence.release(m.id)
+    await readAll(releaseCtx.sessionPersistence, m.id)
+    expect(readTally.bySuffix.get(rawLogPath(releaseRoot, '/work', m.id))).toBeGreaterThan(afterFirst)
+
+    // Releasing an id this instance never memoized is a no-op, not a fault.
+    releaseCtx.sessionPersistence.release(meta('memo-release-absent', '/work').id)
+
+    await releaseCtx.fiber.dispose()
+  })
+
   it('a handle read retries once when the file revision changes during the read', async () => {
     const m = meta('read-revision-race', '/work')
     await writeLog(ctx.sessionPersistence, m, oneTurnLog())

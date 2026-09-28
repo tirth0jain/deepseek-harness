@@ -347,7 +347,11 @@ export class SessionCommandController {
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
-      await this.ctx.agents.create({
+      // Created through the controller rather than the registry directly, so
+      // the continuation is owned like any other Agent the API layer makes
+      // live: archiving it later gives it back instead of leaving it resident
+      // for the life of the process.
+      await this.agents.createOwned({
         sessionId: childId,
         // No seed: the continuation is a new conversation, and its one opening
         // message is written below rather than inherited as a prefix.

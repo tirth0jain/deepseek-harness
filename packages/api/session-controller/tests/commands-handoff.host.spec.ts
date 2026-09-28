@@ -175,6 +175,9 @@ function controller(ctx: Context): SessionCommandController {
   return new SessionCommandController(ctx, {
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForObservation: () => undefined,
+    // The real controller owns what it creates so a later archive can release
+    // it; this stub only has to create it, which the registry already does.
+    createOwned: async (options: CreateAgentOptions) => (await ctx.agents.create(options)).agent,
     // The real controller resumes a source that has no Agent yet. That
     // resolution has its own spec against the production class
     // (commands-handoff-promotion.host.spec.ts); here it only has to hand back

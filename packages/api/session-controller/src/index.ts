@@ -99,6 +99,21 @@ export interface SessionControllerInternals {
   readonly canOpenPath?: () => boolean
 }
 
+/**
+ * The slice of the persistence seam an archive release calls.
+ *
+ * Declared here rather than imported as the service so this controller keeps
+ * working in a deployment that mounts no persistence at all; `ctx.get` is what
+ * resolves it at call time.
+ */
+interface ArchivedLogRelease {
+  /**
+   * Drop any decoded log retained for one Session.
+   * @param sessionId - the Session whose retained decode should be dropped.
+   */
+  release(sessionId: SessionId): void
+}
+
 /** Host service backing the generated `ctx.remote.session` namespace. */
 export class SessionController extends TypertRemoteService {
   static inject = [
@@ -145,6 +160,17 @@ export class SessionController extends TypertRemoteService {
       return result.agent
     }), 'session-controller: file-upload Agent resolver')
     this.controlState = new SessionControlController(ctx)
+    // Archiving is the act of putting a Session away, so it is where this
+    // process gives back what that Session costs it: the Agent this controller
+    // made live for it, and the parsed cold graph a read retained. Nothing here
+    // is a refusal — an Agent someone else owns, one that is not idle, and an
+    // observation an active lease holds are all left alone, because the point
+    // is to stop paying for a Session nobody is using.
+    ctx.on('workspace/session-archived', (sessionId: SessionId) => {
+      void this.releaseArchived(sessionId).catch((error: unknown) => {
+        this.ctx.logger.warn(`archiving "${sessionId}" released nothing: ${String(error)}`)
+      })
+    })
     // Registered before history so reverse-order teardown closes every
     // follower before waiting for already-admitted promotions.
     ctx.effect(() => async () => {
@@ -192,6 +218,40 @@ export class SessionController extends TypertRemoteService {
       if (event.type !== 'user/message' || event.data.source.kind !== 'user') return
       ctx.emit('api-session/activity', session.id, event.time)
     })
+  }
+
+  /**
+   * Give back what one archived Session costs this process.
+   *
+   * Three layers can each be holding the same Session, and each is asked in
+   * turn: the Agent this controller made live, the parsed event graph the
+   * observation cache retained for a Session that was only read, and any
+   * decoded log the persistence backend memoized. Every step is best-effort
+   * and idempotent — a Session that was never read or never resumed simply has
+   * nothing at one or more of them, and reading or resuming it again
+   * reconstructs whatever was dropped.
+   * @param sessionId - the Session that was just archived.
+   */
+  private async releaseArchived(sessionId: SessionId): Promise<void> {
+    // Read state first, Agent last: the Agent's disposal is asynchronous, and
+    // dropping the retained graph before it means a caller that observes the
+    // Agent gone can rely on the read state being gone too. It also keeps the
+    // window where a concurrent read could re-cache the graph ahead of the
+    // disposal rather than behind it.
+    const releasedObservation = this.ctx.sessionQuery.releaseSession(sessionId)
+    // Read through `ctx.get`: persistence is optional for this controller, so
+    // it cannot be a declared injection without making every route wait on a
+    // service a deployment may not mount.
+    const persistence = this.ctx.get('sessionPersistence') as ArchivedLogRelease | undefined
+    persistence?.release(sessionId)
+    const releasedAgent = await this.agents.releaseAgent(sessionId)
+    const released = [
+      ...releasedAgent ? ['live Agent'] : [],
+      ...releasedObservation ? ['retained read state'] : [],
+    ]
+    if (released.length > 0) {
+      this.ctx.logger.info(`archiving "${sessionId}" released its ${released.join(' and ')}`)
+    }
   }
 
   private promote(observation: SessionObservation): void {
