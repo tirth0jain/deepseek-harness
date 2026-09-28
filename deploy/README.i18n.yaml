@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write deploy/README.md
+/dsh-web-auto-start-vs-code-sidebar:
+  en: 8f9a6eb6a4d492e1
+  zh: 9a2bbed27fe0170c
+/dsh-web-auto-start-vs-code-sidebar/what-was-and-wasn-t-there:
+  en: e3e929fd89e13906
+  zh: d65f96074a7e6ebc
+/dsh-web-auto-start-vs-code-sidebar/contents:
+  en: 14025afa155cf740
+  zh: 7a6766f0b2e431eb
+/dsh-web-auto-start-vs-code-sidebar/install:
+  en: 97c51d56902f6d17
+  zh: 38a55674af22edcb
+/dsh-web-auto-start-vs-code-sidebar/the-one-thing-to-get-right-the-sidebar-origin:
+  en: e018c6bc664dd454
+  zh: 958a95d74639828b
+/dsh-web-auto-start-vs-code-sidebar/sizing:
+  en: 2e3cebaaa9a5d690
+  zh: 24ef8f35ab08500b
+/dsh-web-auto-start-vs-code-sidebar/verify-the-auto-start-actually-survives:
+  en: aee27a3296050c72
+  zh: 62aa7854ee92b610

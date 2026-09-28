@@ -1,5 +1,7 @@
 # dsh web auto-start + VS Code sidebar
 
+English | [中文](README.zh.md)
+
 Replicates this deployment's harness web setup on another server (your work
 office LXC), with the one thing that box is missing: **auto-start**.
 
