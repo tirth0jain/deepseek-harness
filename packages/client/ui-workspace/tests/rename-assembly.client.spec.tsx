@@ -111,7 +111,7 @@ describe('session rename through the assembled browser', () => {
         },
       )
     }
-    // `order` places plugin rows after the shipped rows (100/200/300/400)
+    // `order` places plugin rows after the shipped rows (100/200/300/350/400)
     // even when the later registration has the lower shadowing priority
     // assigned to dynamic browser packages; the first plugin row opens the
     // plugin group with a hairline.
@@ -123,7 +123,7 @@ describe('session rename through the assembled browser', () => {
     const trigger = within(row as HTMLElement).getByLabelText('会话“Persisted title”的操作')
     fireEvent.click(trigger)
     expect(view.getAllByRole('menuitem').map(item => item.textContent)).toEqual([
-      '置顶会话', '重命名', '分叉会话', '归档会话', 'Export action', 'Last action',
+      '置顶会话', '重命名', '分叉会话', '在新会话中继续（压缩旧会话）', '归档会话', 'Export action', 'Last action',
     ])
     expect(view.getAllByRole('separator')).toHaveLength(1)
     const last = view.getByRole('menuitem', { name: 'Last action' })

@@ -26,8 +26,8 @@ export type {
 } from './transport.ts'
 export { createScope, scopeOf } from './scope.ts'
 export type { AgentContext, AgentScopeHandle } from './scope.ts'
-export { SessionCreateError, SessionForkError } from './sessions/service.ts'
-export type { SessionBinding, SessionListState, SessionSummary } from './sessions/service.ts'
+export { SessionCreateError, SessionForkError, SessionHandoffError } from './sessions/service.ts'
+export type { SessionHandoffOutcome, SessionBinding, SessionListState, SessionSummary } from './sessions/service.ts'
 export type {
   SessionListPhase,
   SessionListSnapshot,

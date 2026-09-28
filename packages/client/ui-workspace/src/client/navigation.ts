@@ -50,6 +50,13 @@ export interface UiWorkspace {
    */
   forkSession(sessionId: SessionId, onCreated?: (childId: SessionId) => void): Promise<SessionId>
   /**
+   * Continue a Session in a condensed new one, open it, and archive the source,
+   * unless a later navigation supersedes it.
+   * @param sessionId - source Session.
+   * @returns completion; a superseded request leaves its continuation available without selecting it.
+   */
+  handoffSession(sessionId: SessionId): Promise<void>
+  /**
    * Resolve the reusable or newly created blank Session for a Workspace.
    * @param workspaceId - target Workspace.
    * @returns a Session already addressable through the Session Controller.
@@ -218,6 +225,20 @@ class UiWorkspaceService extends Service implements UiWorkspace {
 
   async forkSession(sessionId: SessionId, onCreated?: (childId: SessionId) => void): Promise<SessionId> {
     return this.sessions.fork({ sessionId, increaseTitle: true, ...onCreated === undefined ? {} : { onCreated } })
+  }
+
+  /**
+   * Continue a Session in a condensed new one and open it, unless a later
+   * navigation supersedes the request. The continuation is created and titled
+   * before the selection moves, so the surface never shows a Session that does
+   * not exist yet.
+   * @param sessionId - source Session.
+   * @returns completion; a superseded request leaves its continuation available without selecting it.
+   */
+  async handoffSession(sessionId: SessionId): Promise<void> {
+    const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
+    const continuation = await this.sessions.handoff({ sessionId, inheritTitle: true })
+    if (!navigation.aborted) this.replaceMain(continuation.sessionId, navigation, 'reveal')
   }
 
   startSession(workspaceId?: WorkspaceId): void {

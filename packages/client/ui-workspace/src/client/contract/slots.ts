@@ -26,11 +26,11 @@
  * row of a Session's "..." menu is an entry of
  * `sidebar.workspaces.session.menu.item`, and every hover button at the row's
  * end is an entry of `sidebar.workspaces.session.row.action`. The shipped
- * actions — pin, rename, fork, archive — are ordinary entries this package
- * registers from `apply`, each carrying its own behavior in its own inject
- * face and reading its own Host state through hooks that face injects, so a
- * client plugin's action lands beside them by `order` and needs nothing from
- * the browser beyond the row identity.
+ * actions — pin, rename, fork, handoff, archive — are ordinary entries this
+ * package registers from `apply`, each carrying its own behavior in its own
+ * inject face and reading its own Host state through hooks that face injects,
+ * so a client plugin's action lands beside them by `order` and needs nothing
+ * from the browser beyond the row identity.
  *
  * The browser entry additionally declares two `list` seats per Session row
  * (`sidebar.session.row.leading` / `sidebar.session.row.hover`) for ambient
@@ -135,9 +135,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     /**
      * The rows of one Session's "..." menu, in ascending `order`. ui-workspace
      * registers the shipped rows here — `pin` (100), `rename` (200), `fork`
-     * (300), `archive` (400) — so a plugin row is placed by its own `order`
-     * among them. Use a package-namespaced `id`; reusing a shipped id at
-     * another `priority` shadows that row. Each entry renders one
+     * (300), `handoff` (350), `archive` (400) — so a plugin row is placed by
+     * its own `order` among them. Use a package-namespaced `id`; reusing a
+     * shipped id at another `priority` shadows that row. Each entry renders one
      * `role="menuitem"` `<button>` (the shipped rows use ui-primitives'
      * `MenuItemButton`, which adds the host styling and `separatorBefore`),
      * decides its own visibility from its own state, and dismisses the menu
@@ -382,6 +382,18 @@ export interface SessionArchiveConfirmInjected {
 export interface ForkSessionInjected {
   /** Fork a Session at its last completed turn; the child arrives through the Host list. */
   forkSession: (sessionId: SessionId) => void
+}
+
+/**
+ * Handoff action share. The callback carries the whole behavior: condense the
+ * source Session, open the continuation it becomes, archive the source, and
+ * report a refusal into the frame-wide notice. The row stays where it is until
+ * the operation resolves — the continuation is what the reader should end up
+ * looking at, so navigation follows the result rather than preceding it.
+ */
+export interface HandoffSessionInjected {
+  /** Continue a Session in a new condensed one; the continuation is opened as it resolves. */
+  handoffSession: (sessionId: SessionId) => void
 }
 
 /** Rename action share: the row only raises the request; the dialog entry answers it. */
