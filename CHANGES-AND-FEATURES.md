@@ -383,6 +383,7 @@ Live confirmation used a real 97-Turn session: the control rendered `Load turn 1
 | `071cc8f20b` | feat(llm-pi-ai): exclude models from a route, and carry the session id |
 | `66141a12b7` | feat: let uploaded and delivered files be saved |
 | `6178175e2e` | feat: continue a large chat in a condensed new one |
+| `2128561ced` | fix: resolve a handoff source instead of requiring a live Agent |
 
 Note that the Bright Data provider itself (`bbec969caa`, `71a4364138`, `9712944bae`) predates this index's first entry; the commits above are the ones a reader is most likely to want to find.
 
