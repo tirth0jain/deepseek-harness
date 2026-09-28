@@ -230,6 +230,7 @@ export const EVENT_SCOPE_PAGE: Record<string, string> = {
   'user-questions': 'user-questions.md',
   'webserver': 'web-server.md',
   'workflow': 'workflow.md',
+  'workspace': 'workspace.md',
 }
 
 /**
@@ -354,6 +355,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionReferenceCandidate: 'session-reference.md',
   SessionReferenceMentionCandidate: 'session-reference.md',
   SessionReferenceInput: 'session-reference.md',
+  SessionAttachmentDownload: 'session.md',
   SessionAttachmentRequest: 'session.md',
   SessionAttachmentValue: 'session.md',
   SessionCancelRequest: 'session.md',
@@ -366,6 +368,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionFollowRequest: 'session.md',
   SessionForkRequest: 'session.md',
   SessionForkValue: 'session.md',
+  SessionHandoffRequest: 'session.md',
+  SessionHandoffValue: 'session.md',
   SessionId: 'core.md',
   SessionLogOffset: 'session.md',
   SessionSeq: 'session.md',

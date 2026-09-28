@@ -845,6 +845,15 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('fork') fork(request: SessionForkRequest): Promise<SessionForkValue>
 
 /**
+ * Continue one Session in a new one holding only its condensed history, and
+ * archive the source.
+ * @param request - the Session to continue elsewhere.
+ * @param signal - cancels the summarization, not the Session it produces.
+ * @returns the new Session identity and whether its source was archived.
+ */
+@Remote('handoff') handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue>
+
+/**
  * Admit one prompt after explicitly resuming its Session.
  * @param request - Session identity, prompt content, source metadata, and delivery mode.
  * @param signal - caller cancellation before prompt admission begins.
@@ -858,6 +867,16 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
  * @returns the durable attachment reference and base64-encoded bytes.
  */
 @Remote('attachment') attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue>
+
+/**
+ * Open one attachment proven reachable from the addressed Session log, for
+ * the authenticated byte route to stream back to the browser. Not a Remote:
+ * its value carries live bytes, which only the in-process route can consume.
+ * @param request - Session and attachment identities used for authorization.
+ * @param signal - cancels the read while the response body is still streaming.
+ * @returns the display name, media type, and exact byte stream.
+ */
+downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): Promise<SessionAttachmentDownload>
 
 /**
  * Mutate one still-pending queue occurrence, resuming a cold Agent first.

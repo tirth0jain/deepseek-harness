@@ -388,6 +388,20 @@ Exact reads, filters, and traces are backend-independent concrete behavior. A ba
 observeSession( sessionId: SessionId, options: SessionObservationOptions = {}, ): Promise<SessionObservation>
 
 /**
+ * Drop one Session's retained cold preparation, if it has one.
+ *
+ * The observation cache is what keeps a Session this process has only read
+ * resident — one fully materialized event graph per prepared id — so this is
+ * how a caller that has put a Session away stops paying for it. The next
+ * observation re-reads persistence, which is a latency cost and not a
+ * correctness one. An entry an active lease still holds is left to that
+ * lease, so a Session being read right now is never dropped mid-read.
+ * @param sessionId - Session whose retained preparation should be dropped.
+ * @returns whether a retained preparation was dropped.
+ */
+releaseSession(sessionId: SessionId): boolean
+
+/**
  * Search the live-preferred logical corpus and group by session.
  * @param request - query text, metadata filters, page size, and cursor.
  * @param exec - optional cancellation control.

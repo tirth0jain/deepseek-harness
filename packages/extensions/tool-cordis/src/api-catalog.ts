@@ -1738,6 +1738,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the new Session identity.',
       },
       {
+        signature: '@Remote(\'handoff\') handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue>',
+        description: 'Continue one Session in a new one holding only its condensed history, and archive the source.',
+        parameters: [{ name: 'request', description: 'the Session to continue elsewhere.' }, { name: 'signal', description: 'cancels the summarization, not the Session it produces.' }],
+        returns: 'the new Session identity and whether its source was archived.',
+      },
+      {
         signature: '@Remote(\'prompt\') prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue>',
         description: 'Admit one prompt after explicitly resuming its Session.',
         parameters: [{ name: 'request', description: 'Session identity, prompt content, source metadata, and delivery mode.' }, { name: 'signal', description: 'caller cancellation before prompt admission begins.' }],
@@ -1748,6 +1754,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read one image proven reachable from the addressed Session log.',
         parameters: [{ name: 'request', description: 'Session and attachment identities used for authorization.' }],
         returns: 'the durable attachment reference and base64-encoded bytes.',
+      },
+      {
+        signature: 'downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): Promise<SessionAttachmentDownload>',
+        description: 'Open one attachment proven reachable from the addressed Session log, for the authenticated byte route to stream back to the browser. Not a Remote: its value carries live bytes, which only the in-process route can consume.',
+        parameters: [{ name: 'request', description: 'Session and attachment identities used for authorization.' }, { name: 'signal', description: 'cancels the read while the response body is still streaming.' }],
+        returns: 'the display name, media type, and exact byte stream.',
       },
       {
         signature: '@Remote(\'updateQueue\') updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>',
@@ -1844,6 +1856,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
+      },
+      {
+        signature: 'release(id: SessionId): void',
+        description: 'Drop any decoded log this instance retains for one session.\n\nA backend may memoize a decoded log — the largest per-session cost this layer has — so that a repeat read skips decoding it. Releasing gives that back for a session the caller has put away, at the price of decoding again on the next read. Open handles are untouched: they own their own state, and a session being written or read right now keeps it.\n\nThe default retains nothing, so a backend that memoizes nothing has nothing to implement; one that memoizes must override this or it will hold a log the caller believes it gave back.',
+        parameters: [{ name: 'id', description: 'the session whose retained decode should be dropped.' }],
       },
     ],
   },
@@ -1967,6 +1984,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Observe one exact live or prepared Session without a persistence listing preflight.',
         parameters: [{ name: 'sessionId', description: 'logical Session identity.' }, { name: 'options', description: 'cancellation and projection selection for this read.' }],
         returns: 'a caller-owned observation lease.',
+      },
+      {
+        signature: 'releaseSession(sessionId: SessionId): boolean',
+        description: 'Drop one Session\'s retained cold preparation, if it has one.\n\nThe observation cache is what keeps a Session this process has only read resident — one fully materialized event graph per prepared id — so this is how a caller that has put a Session away stops paying for it. The next observation re-reads persistence, which is a latency cost and not a correctness one. An entry an active lease still holds is left to that lease, so a Session being read right now is never dropped mid-read.',
+        parameters: [{ name: 'sessionId', description: 'Session whose retained preparation should be dropped.' }],
+        returns: 'whether a retained preparation was dropped.',
       },
       {
         signature: 'abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionSearchPage<SessionSearchHit>>',
@@ -3984,6 +4007,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     description: 'A workflow run started — the script\'s meta block validated, the body about to execute. Paired with Events[\'workflow/end\'].',
     parameters: [{ name: 'info', description: 'the run\'s identity snapshot (id + meta).' }],
   },
+  {
+    name: 'workspace/session-archived',
+    mode: 'emit',
+    signature: '\'workspace/session-archived\'(sessionId: SessionId): void',
+    summary: 'One session was archived durably.',
+    description: 'One session was archived durably.\n\nArchiving is a registry flag, not a lifecycle: this registry never touches a session\'s log or its Agent, and the session stays readable. The announcement exists so whoever owns those resources can give them back, which is what makes archiving a way to stop paying for a session rather than only a way to hide it. A listener must therefore tolerate the session being read or resumed again immediately afterwards.',
+    parameters: [{ name: 'sessionId', description: 'the archived session.' }],
+  },
 ]
 
 /** Shapes of every exported type the Service and Event signatures reference (transitively), sorted by name. */
@@ -5709,6 +5740,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAssistantStreamFrame = {\n    readonly type: \'start\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly startedAfterSeq: SessionSeqCursor;\n    readonly turn: number;\n    readonly step: number;\n} | {\n    readonly type: \'chunk\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly index: number;\n    readonly time: number;\n    readonly chunk: JsonValue;\n} | {\n    readonly type: \'end\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly index: number;\n    readonly outcome: {\n        readonly kind: \'committed\';\n        readonly eventType: \'assistant/message\' | \'assistant/attempt\';\n        readonly seq: number;\n    } | {\n        readonly kind: \'abandoned\';\n    };\n};',
   },
   {
+    name: 'SessionAttachmentDownload',
+    declaration: 'export interface SessionAttachmentDownload {\n    readonly name: string;\n    readonly mediaType: string | undefined;\n    readonly length: number;\n    readonly bytes: AsyncIterable<Uint8Array>;\n}',
+  },
+  {
     name: 'SessionAttachmentRequest',
     declaration: 'export interface SessionAttachmentRequest {\n    readonly sessionId: SessionId;\n    readonly attachmentId: AttachmentIdType;\n}',
   },
@@ -5867,6 +5902,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHandleReadResult',
     declaration: 'export interface SessionHandleReadResult {\n    readonly eventState: SessionSeedEventState;\n    readonly events: readonly SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionHandoffRequest',
+    declaration: 'export interface SessionHandoffRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionHandoffValue',
+    declaration: 'export interface SessionHandoffValue {\n    readonly sessionId: SessionId;\n    readonly archived: boolean;\n}',
   },
   {
     name: 'SessionHeader',
