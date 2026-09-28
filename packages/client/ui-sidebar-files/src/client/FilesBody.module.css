@@ -203,7 +203,7 @@
   line-height: 1;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-xs);
   cursor: pointer;
   opacity: 0;
 }
