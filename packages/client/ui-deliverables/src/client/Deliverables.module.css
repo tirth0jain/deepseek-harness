@@ -25,7 +25,31 @@
 .toggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .toggle svg { flex: none; width: 14px; height: 14px; }
 @container (max-width: 620px) { .presented { grid-template-columns: minmax(0, 1fr); } }
-.actions { display: inline-flex; flex: none; pointer-events: auto; }
+.actions { display: inline-flex; flex: none; align-items: center; gap: 4px; pointer-events: auto; }
+
+/* The save control sits with the contributed native actions and borrows their
+   compact pill shape, so the two read as one action cluster. Saving needs no
+   desktop, which is why it is not part of the contributed control: that one
+   renders nothing at all without a Host that can open files. */
+.save {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  color: var(--dsw-alias-label-primary);
+  text-decoration: none;
+  background: none;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-sm);
+}
+
+.save:hover,
+.save:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
 
 .secondaryText[data-success] { animation-name: success-fade; animation-timing-function: ease-out; animation-fill-mode: forwards; }
 @keyframes success-fade { to { opacity: 0; } }

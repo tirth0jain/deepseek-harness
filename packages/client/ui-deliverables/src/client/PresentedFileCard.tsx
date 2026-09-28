@@ -1,11 +1,12 @@
-/** File identity, Sidebar preview, and contributed native actions for one delivery. */
+/** File identity, Sidebar preview, a save link, and contributed native actions for one delivery. */
 import type { ReactNode } from 'react'
 import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
-import { FileTypeIcon, fileExtension } from '@deepseek-ai/dsh-client-ui-primitives'
+import { FileTypeIcon, fileExtension, IconDownloadOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PresentedHost } from '../presented.ts'
 import { PRESENTED_SUCCESS_HOLD_MS, PRESENTED_SUCCESS_FADE_MS, type PresentedOpenPhase } from './present-open.ts'
 import { basename, type PresentedPath } from './turn-deliverables.ts'
+import { fileDownloadUrl } from './download.ts'
 import type { NS } from './locales.ts'
 import css from './Deliverables.module.css'
 
@@ -16,8 +17,14 @@ function cardDescription(description: string | undefined, fallback: string): str
 
 /**
  * Render independent file actions without nesting buttons inside a clickable card.
- * @param props - durable file metadata, Sidebar preview, Host capabilities, gesture status, and localized copy.
- * @returns the file card and its anchored action menu.
+ *
+ * Saving sits beside the contributed native actions rather than inside them: the
+ * bytes come from the Host's own byte route, which needs no desktop, so a Host
+ * with no desktop still offers the save while the open/reveal controls that need
+ * one disable themselves. A declaration whose Session root is unknown and whose
+ * path is relative has no addressable URL, and offers no save at all.
+ * @param props - durable file metadata, Sidebar preview, Host capabilities, contributed actions, and localized copy.
+ * @returns the file card and its action row.
  */
 export function PresentedFileCard({ file, cwd, phase, host, onPreview, actions, t }: {
   file: PresentedPath
@@ -30,6 +37,7 @@ export function PresentedFileCard({ file, cwd, phase, host, onPreview, actions, 
   const succeeded = phase === 'opened' || phase === 'revealed'
   const reveal = host?.fileManager ?? 'directory'
   const name = basename(file.path)
+  const downloadUrl = fileDownloadUrl(window.location, cwd, file.path)
   const metadata = fileExtension(name).toUpperCase() || t('presented.file')
   const status = phase === undefined
     ? cardDescription(file.description, metadata)
@@ -52,7 +60,13 @@ export function PresentedFileCard({ file, cwd, phase, host, onPreview, actions, 
           <span className={css.previewHint}>{t('presented.preview')}</span>
         </span>
       </div>
-      <div className={css.actions}>{actions}</div>
+      <div className={css.actions}>
+        {downloadUrl !== undefined && <a className={css.save} href={downloadUrl} download={name}
+          aria-label={t('presented.download')} title={t('presented.download')} data-presented-download>
+          <IconDownloadOutlineRegular size={14} />
+        </a>}
+        {actions}
+      </div>
     </div>
   </div>
 }
