@@ -352,6 +352,13 @@
   border-radius: 16px;
   background: var(--dsw-specific-input-major, transparent);
   box-sizing: border-box;
+  /* An admitted file is an anchor; the card keeps its own ink and needs no underline. */
+  color: inherit;
+  text-decoration: none;
+}
+
+a.fileCard:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .fileIcon {

@@ -1,4 +1,5 @@
 /** Chat-owned Slot declarations and composed component props. */
+import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { SessionId, SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type {
@@ -94,6 +95,13 @@ export interface ChatNodeOwnerProps {
    */
   loadImage: MessageImageLoader
   renderMessageImages: RenderMessageImages
+  /**
+   * Same-origin URL that saves one uploaded file of this Session, or undefined
+   * when the page cannot address the API origin. Down-threaded like `loadImage`
+   * so a node renderer offers the save without knowing the route or the
+   * Session identity.
+   */
+  attachmentDownloadUrl: (attachment: FileAttachmentRef) => string | undefined
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
   /**
    * Published rate for one exact route, down-threaded from the Chat view so a

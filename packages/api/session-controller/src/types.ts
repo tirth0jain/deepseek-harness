@@ -343,6 +343,18 @@ export interface SessionAttachmentValue {
   readonly data: string
 }
 
+/** One authorized attachment download: the name to save it under and its exact bytes. */
+export interface SessionAttachmentDownload {
+  /** Display filename, already stripped of path information at admission. */
+  readonly name: string
+  /** Verified media type when the store knows one; absent lets the caller derive one from the name. */
+  readonly mediaType: string | undefined
+  /** Exact stored byte length, so a response can promise it before streaming. */
+  readonly length: number
+  /** Exact bytes in order; integrity failures reject the iteration. */
+  readonly bytes: AsyncIterable<Uint8Array>
+}
+
 /** Pending queue mutation request. */
 export interface SessionUpdateQueueRequest {
   readonly sessionId: SessionId

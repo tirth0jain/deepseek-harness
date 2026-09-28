@@ -38,6 +38,36 @@ function contentParts(content: readonly unknown[]): {
   return { text: texts.join(''), attachments, rest }
 }
 
+/**
+ * One uploaded file in a user message: its identity, and a save gesture when
+ * the page can address the Host's attachment route.
+ *
+ * The card was inert, which left an uploaded file unreachable once its composer
+ * card was gone. It stays a plain span whenever no URL can be built: a
+ * submission echo holds bytes the Host has not admitted yet, so that receipt
+ * has nothing to save under this Session.
+ * @param props - the durable attachment reference, its download URL when one exists, and the locale seat.
+ * @returns the file card, as a download link when the bytes are addressable.
+ */
+function FileAttachmentCard({ file, url, t }: {
+  file: UserFile['attachment']
+  url: string | undefined
+  t: ChatViewSlotProps['t']
+}): ReactNode {
+  const meta = [fileExtension(file.name).toUpperCase().slice(0, 8), fileSizeText(file.bytes)]
+    .filter(Boolean).join(' ')
+  const body = <>
+    <FileTypeIcon path={file.name} className={css.fileIcon} />
+    <span className={css.fileContent}>
+      <span className={css.fileName}>{file.name}</span>
+      <span className={css.fileMeta}>{meta}</span>
+    </span>
+  </>
+  if (url === undefined) return <span className={css.fileCard} title={file.name}>{body}</span>
+  return <a className={css.fileCard} href={url} download={file.name} title={file.name}
+    aria-label={t('message.downloadFile', { name: file.name })}>{body}</a>
+}
+
 function retrySeconds(milliseconds: number): number {
   return Math.max(1, Math.ceil(milliseconds / 1_000))
 }
@@ -155,11 +185,13 @@ function TurnMaxTokensItem({ t }: {
 
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, renderMessageImages, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
+  content, renderMessageImages, attachmentDownloadUrl, actions, pending = false, echo = false, referenceLabels = [], skillNames = [],
   previewAttachments, references, t,
 }: {
   content: readonly unknown[]
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
+  /** Same-origin URL saving one uploaded attachment, or undefined when the page cannot address the API. */
+  attachmentDownloadUrl?: ChatNodeOwnerProps['attachmentDownloadUrl'] | undefined
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: (text: string) => ReactNode
   /** Whether this is the Host-authoritative pre-admission steering projection. */
@@ -200,16 +232,8 @@ function UserStyleBubble({
                 </Fragment>
               )
               : (
-                <span key={`file:${index}`} className={css.fileCard} title={attachment.file.name}>
-                  <FileTypeIcon path={attachment.file.name} className={css.fileIcon} />
-                  <span className={css.fileContent}>
-                    <span className={css.fileName}>{attachment.file.name}</span>
-                    <span className={css.fileMeta}>
-                      {[fileExtension(attachment.file.name).toUpperCase().slice(0, 8), fileSizeText(attachment.file.bytes)]
-                        .filter(Boolean).join(' ')}
-                    </span>
-                  </span>
-                </span>
+                <FileAttachmentCard key={`file:${index}`} file={attachment.file}
+                  url={attachmentDownloadUrl?.(attachment.file)} t={t} />
               ))}
           </div>
         )}
@@ -313,7 +337,7 @@ export function PendingSubmissionBubble({ submission, renderMessageImages, t }: 
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, renderMessageImages, openFile, openSkill, t,
+  node, renderMessageImages, attachmentDownloadUrl, openFile, openSkill, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   return (
@@ -321,6 +345,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
       content={data.content}
       references={{ openFile, openSkill }}
       renderMessageImages={renderMessageImages}
+      attachmentDownloadUrl={attachmentDownloadUrl}
       {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       {...data.skillNames === undefined ? {} : { skillNames: data.skillNames }}
       t={t}

@@ -6,7 +6,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
-  AttachmentAdmissionPart, FileAttachmentRef, ImageAttachmentRef,
+  AttachmentAdmissionPart, FileAttachmentRef, ImageAttachmentRef, ImageMediaType,
 } from '@deepseek-ai/dsh-attachment'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
@@ -33,6 +33,7 @@ import {
   inspectApiSession,
 } from './agent.ts'
 import type {
+  SessionAttachmentDownload,
   SessionAttachmentRequest,
   SessionAttachmentValue,
   SessionCancelRequest,
@@ -378,20 +379,8 @@ export class SessionCommandController {
    * @returns the durable attachment reference and base64-encoded bytes.
    */
   async attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
-    let source: SessionReadState
-    try {
-      source = await this.readSessionState(request.sessionId)
-    } catch (error) {
-      if (error instanceof ApiSessionNotFound) {
-        throw new RemoteError('session/not-found', error.message, { sessionId: request.sessionId })
-      }
-      throw new RemoteError(
-        'gateway/internal',
-        `attachment authorization unavailable for session "${request.sessionId}": ${String(error)}`,
-        {},
-      )
-    }
-    const ref = referencedImage(source.events, String(request.attachmentId))
+    const events = await this.authorizedAttachmentEvents(request.sessionId)
+    const ref = referencedImage(events, String(request.attachmentId))
     if (ref === undefined) {
       throw new RemoteError(
         'session/attachment-invalid',
@@ -410,6 +399,71 @@ export class SessionCommandController {
         throw new RemoteError('session/attachment-invalid', error.message, { reason: error.code })
       }
       throw new RemoteError('gateway/internal', 'Unable to read image attachment.', {})
+    }
+  }
+
+  /**
+   * Authorize one attachment for download and open its exact bytes.
+   *
+   * A Session log reaches an attachment either as an uploaded verbatim file or
+   * as an admitted image, and the two stores read differently, so the name and
+   * media type travel back with the bytes instead of the caller assuming them.
+   * The first chunk is pulled here rather than left to the response body: an
+   * unreadable store then fails the request, instead of truncating a response
+   * that already promised 200.
+   * @param request - Session and attachment identities used for authorization.
+   * @param signal - cancels the read while the response body is still streaming.
+   * @returns the display name, declared media type, and exact byte stream.
+   */
+  async downloadAttachment(
+    request: SessionAttachmentRequest,
+    signal: AbortSignal,
+  ): Promise<SessionAttachmentDownload> {
+    const events = await this.authorizedAttachmentEvents(request.sessionId)
+    const file = referencedFile(events, String(request.attachmentId))
+    if (file !== undefined) {
+      try {
+        const iterator = this.ctx.attachments.readFileStream(file, signal)[Symbol.asyncIterator]()
+        const first = await iterator.next()
+        return { name: file.name, mediaType: undefined, length: file.bytes, bytes: reopened(first, iterator) }
+      } catch (error) {
+        throw attachmentReadFailure(error, 'Unable to read file attachment.')
+      }
+    }
+    const image = referencedImage(events, String(request.attachmentId))
+    if (image === undefined) {
+      throw new RemoteError(
+        'session/attachment-invalid',
+        'Attachment is not referenced by this session.',
+        { reason: 'ATTACHMENT_NOT_REFERENCED' },
+      )
+    }
+    try {
+      const stored = await this.ctx.attachments.readImage(image, signal)
+      return {
+        name: stored.ref.name ?? `image.${IMAGE_EXTENSIONS[stored.ref.mediaType]}`,
+        mediaType: stored.ref.mediaType,
+        length: stored.ref.bytes,
+        bytes: oneChunk(stored.data),
+      }
+    } catch (error) {
+      throw attachmentReadFailure(error, 'Unable to read image attachment.')
+    }
+  }
+
+  /** Read the Session log an attachment download authorizes against. */
+  private async authorizedAttachmentEvents(sessionId: SessionId): Promise<readonly SessionEvent[]> {
+    try {
+      return (await this.readSessionState(sessionId)).events
+    } catch (error) {
+      if (error instanceof ApiSessionNotFound) {
+        throw new RemoteError('session/not-found', error.message, { sessionId })
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `attachment authorization unavailable for session "${sessionId}": ${String(error)}`,
+        {},
+      )
     }
   }
 
@@ -597,48 +651,78 @@ function hasPromptRequest(agent: Agent, requestId: SessionRequestId): boolean {
     return source.kind === 'user' && 'rpcId' in source && source.rpcId === requestId
   })
 }
-function imageBlockIn(
+function attachmentBlockIn(
   content: unknown,
-  match: (ref: ImageAttachmentRef) => boolean,
-): ImageAttachmentRef | undefined {
+  type: 'image' | 'file',
+  match: (id: string) => boolean,
+): ReferencedAttachment | undefined {
   if (!Array.isArray(content)) return undefined
   for (const value of content) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
     const block = value as { readonly type?: unknown; readonly attachment?: unknown; readonly content?: unknown }
-    if (block.type === 'image' && typeof block.attachment === 'object' && block.attachment !== null) {
-      const ref = block.attachment as ImageAttachmentRef
-      if (match(ref)) return ref
+    if (block.type === type && typeof block.attachment === 'object' && block.attachment !== null) {
+      const ref = block.attachment as ReferencedAttachment
+      if (match(String(ref.attachmentId))) return ref
     }
     if (block.type === 'tool-result') {
-      const nested = imageBlockIn(block.content, match)
+      const nested = attachmentBlockIn(block.content, type, match)
       if (nested !== undefined) return nested
     }
   }
   return undefined
 }
 
-function imageInEvent(
+function attachmentInEvent(
   event: SessionEvent,
-  match: (ref: ImageAttachmentRef) => boolean,
-): ImageAttachmentRef | undefined {
+  type: 'image' | 'file',
+  match: (id: string) => boolean,
+): ReferencedAttachment | undefined {
   const data = event.data as {
     readonly content?: unknown
     readonly message?: { readonly content?: unknown }
     readonly inserted?: readonly { readonly content?: unknown }[]
   }
-  const direct = imageBlockIn(data.content, match)
+  const direct = attachmentBlockIn(data.content, type, match)
   if (direct !== undefined) return direct
-  const message = imageBlockIn(data.message?.content, match)
+  const message = attachmentBlockIn(data.message?.content, type, match)
   if (message !== undefined) return message
   for (const inserted of data.inserted ?? []) {
-    const found = imageBlockIn(inserted.content, match)
+    const found = attachmentBlockIn(inserted.content, type, match)
     if (found !== undefined) return found
   }
   if (event.type === 'assistant/message' || event.type === 'assistant/attempt') {
     for (const chunk of assistantStreamChunks(event.data.stream, 'block-end')) {
-      const found = imageBlockIn([chunk.block], match)
+      const found = attachmentBlockIn([chunk.block], type, match)
       if (found !== undefined) return found
     }
+  }
+  return undefined
+}
+
+/**
+ * The reference a Session log reaches for one id, as the named block type.
+ *
+ * The two overloads are the narrowing: the walk is keyed by block type, which
+ * a single signature over both kinds cannot turn into one narrowed return.
+ */
+function referencedAttachment(
+  events: readonly SessionEvent[],
+  type: 'image',
+  attachmentId: string,
+): ImageAttachmentRef | undefined
+function referencedAttachment(
+  events: readonly SessionEvent[],
+  type: 'file',
+  attachmentId: string,
+): FileAttachmentRef | undefined
+function referencedAttachment(
+  events: readonly SessionEvent[],
+  type: 'image' | 'file',
+  attachmentId: string,
+): ReferencedAttachment | undefined {
+  for (const event of events) {
+    const found = attachmentInEvent(event, type, id => id === attachmentId)
+    if (found !== undefined) return found
   }
   return undefined
 }
@@ -647,11 +731,54 @@ function referencedImage(
   events: readonly SessionEvent[],
   attachmentId: string,
 ): ImageAttachmentRef | undefined {
-  for (const event of events) {
-    const found = imageInEvent(event, ref => String(ref.attachmentId) === attachmentId)
-    if (found !== undefined) return found
+  return referencedAttachment(events, 'image', attachmentId)
+}
+
+function referencedFile(
+  events: readonly SessionEvent[],
+  attachmentId: string,
+): FileAttachmentRef | undefined {
+  return referencedAttachment(events, 'file', attachmentId)
+}
+
+/** Display extension per admitted image type; `jpeg` is the outlier. */
+const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+/** The durable reference an attachment-bearing block carries, whichever store holds it. */
+type ReferencedAttachment = ImageAttachmentRef | FileAttachmentRef
+
+/** The chunk already pulled, then the rest of the same iteration. */
+async function* reopened(
+  first: IteratorResult<Uint8Array>,
+  rest: AsyncIterator<Uint8Array>,
+): AsyncIterable<Uint8Array> {
+  if (first.done !== true) yield first.value
+  for (;;) {
+    const next = await rest.next()
+    if (next.done === true) return
+    yield next.value
   }
-  return undefined
+}
+
+/** One in-memory buffer as the single chunk of a byte stream. */
+// oxlint-disable-next-line typescript/require-await -- the async protocol is what the store's read path shares
+async function* oneChunk(bytes: Uint8Array): AsyncIterable<Uint8Array> {
+  yield bytes
+}
+
+/** Classify a store read failure without leaking a backend message into a business code. */
+function attachmentReadFailure(error: unknown, fallback: string): Error {
+  if (error instanceof AttachmentError) {
+    return new RemoteError('session/attachment-invalid', error.message, { reason: error.code })
+  }
+  // An already-classified failure keeps its own code; only the unknown ones need the fallback.
+  if (error instanceof RemoteError) return error
+  return new RemoteError('gateway/internal', fallback, {})
 }
 
 function routeServed(ctx: Context, provider: string): boolean {

@@ -337,6 +337,8 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
     forkAt: () => {},
     loadImage: () => Promise.reject(new Error('not used')),
     renderMessageImages: () => null,
+    // The panel renders no uploaded files, so no attachment is addressable here.
+    attachmentDownloadUrl: () => undefined,
     fileMentions: () => undefined,
     // The panel renders no usage, so no route needs a published rate here.
     costOf: () => undefined,

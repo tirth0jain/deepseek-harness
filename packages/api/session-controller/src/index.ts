@@ -26,6 +26,7 @@ import { SessionSkillCatalog } from './skill-catalog.ts'
 import { SessionMediaReferences } from './media-references.ts'
 import type {
   ModelCatalog,
+  SessionAttachmentDownload,
   SessionAttachmentRequest,
   SessionAttachmentValue,
   SessionCancelRequest,
@@ -378,6 +379,21 @@ export class SessionController extends TypertRemoteService {
   @Remote('attachment')
   attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
     return this.commands.attachment(request)
+  }
+
+  /**
+   * Open one attachment proven reachable from the addressed Session log, for
+   * the authenticated byte route to stream back to the browser. Not a Remote:
+   * its value carries live bytes, which only the in-process route can consume.
+   * @param request - Session and attachment identities used for authorization.
+   * @param signal - cancels the read while the response body is still streaming.
+   * @returns the display name, media type, and exact byte stream.
+   */
+  downloadAttachment(
+    request: SessionAttachmentRequest,
+    signal: AbortSignal,
+  ): Promise<SessionAttachmentDownload> {
+    return this.commands.downloadAttachment(request, signal)
   }
 
   /**

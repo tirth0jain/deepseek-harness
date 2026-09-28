@@ -1,14 +1,15 @@
-/** File identity and explicit default-app or file-manager actions for one delivery. */
+/** File identity and explicit save, default-app, or file-manager actions for one delivery. */
 import { useRef, useState } from 'react'
 import { resolveWorkspacePath } from '@deepseek-ai/dsh-util-workspace-path'
 import {
   Menu, FileTypeIcon, fileExtension, IconRightUpOutline16,
-  IconChevronDownOutline14, IconFolderOpenOutline16,
+  IconChevronDownOutline14, IconDownloadOutline16, IconFolderOpenOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PresentedAction, PresentedHost } from '../presented.ts'
 import type { PresentedOpenPhase } from './present-open.ts'
 import { basename, type PresentedPath } from './turn-deliverables.ts'
+import { fileDownloadUrl, saveFileFromUrl } from './download.ts'
 import type { NS } from './locales.ts'
 import css from './Deliverables.module.css'
 
@@ -33,15 +34,23 @@ export function PresentedFileCard({ file, cwd, phase, host, onPreview, onAction,
   const [menuOpen, setMenuOpen] = useState(false)
   const previewRef = useRef<HTMLButtonElement>(null)
   const pending = phase === 'opening' || phase === 'revealing'
-  const menuDisabled = pending || host === null || !host.available
-  if (menuDisabled && menuOpen) setMenuOpen(false)
+  // Saving needs the Host only for the bytes it already serves, so the menu
+  // stays available on a Host with no desktop; opening is what that costs.
+  const desktop = host !== null && host.available
+  if (pending && menuOpen) setMenuOpen(false)
   const reveal = host?.fileManager ?? 'directory'
+  const name = basename(file.path)
+  const downloadUrl = fileDownloadUrl(window.location, cwd, file.path)
   const act = (action: PresentedAction) => {
     setMenuOpen(false)
     previewRef.current?.focus()
     onAction(action)
   }
-  const name = basename(file.path)
+  const download = (url: string) => {
+    setMenuOpen(false)
+    previewRef.current?.focus()
+    saveFileFromUrl(url, name)
+  }
   const metadata = fileExtension(name).toUpperCase() || t('presented.file')
   const status = phase === undefined
     ? cardDescription(file.description, metadata)
@@ -65,20 +74,25 @@ export function PresentedFileCard({ file, cwd, phase, host, onPreview, onAction,
         <button ref={previewRef} type="button" className={css.open}
           aria-label={t('presented.previewButton', { name: file.path })}
           onClick={onPreview}>{t('presented.action')}</button>
-        <Menu className={css.menuAnchor} open={menuOpen && !menuDisabled} autoFocus portal align="end" onClose={() => { setMenuOpen(false) }}
-          anchor={<button type="button" className={css.chevron} disabled={menuDisabled}
-            aria-haspopup="menu" aria-expanded={menuOpen && !menuDisabled}
+        <Menu className={css.menuAnchor} open={menuOpen && !pending} autoFocus portal align="end" onClose={() => { setMenuOpen(false) }}
+          anchor={<button type="button" className={css.chevron} disabled={pending}
+            aria-haspopup="menu" aria-expanded={menuOpen && !pending}
             aria-label={t('presented.more', { name: file.path })}
             onClick={() => { setMenuOpen(value => !value) }}>
             <IconChevronDownOutline14 size={11} />
           </button>}
           items={[
+            { id: 'download', icon: <IconDownloadOutline16 size={16} className={css.menuActionIcon} />,
+              label: t('presented.download'), disabled: downloadUrl === undefined },
             { id: 'open', icon: <IconRightUpOutline16 size={16} className={css.menuActionIcon} />,
-              label: t('presented.defaultApp') },
+              label: t('presented.defaultApp'), disabled: !desktop },
             { id: 'reveal', icon: <IconFolderOpenOutline16 />,
-              label: t(`presented.${reveal}`) },
+              label: t(`presented.${reveal}`), disabled: !desktop },
           ]}
-          onSelect={(id) => { act(id === 'reveal' ? 'reveal' : 'open') }} />
+          onSelect={(id) => {
+            if (id === 'download' && downloadUrl !== undefined) download(downloadUrl)
+            else act(id === 'reveal' ? 'reveal' : 'open')
+          }} />
       </div>
     </div>
   </div>

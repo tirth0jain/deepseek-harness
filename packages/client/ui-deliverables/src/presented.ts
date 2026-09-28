@@ -9,6 +9,15 @@ export const PRESENT_OPEN_PATH = '/api/present.open'
 /** Authenticated desktop availability and destination metadata. */
 export const PRESENT_HOST_PATH = '/api/present.host'
 
+/**
+ * Authenticated GET/HEAD byte route owned by the Session Controller.
+ *
+ * Displaying a workspace file and saving it are one route: a download is the
+ * same bytes with an attachment disposition, so saving costs no new
+ * authorization path and no bytes of this page's heap.
+ */
+export const FILE_BYTES_PATH = '/api/file'
+
 /** Native file action selected by an explicit user gesture. */
 export type PresentedAction = 'open' | 'reveal'
 

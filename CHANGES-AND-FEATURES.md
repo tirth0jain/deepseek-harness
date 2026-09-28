@@ -209,6 +209,22 @@ The fold now divides the Turn's summed output tokens by the summed **LLM span** 
 
 A step that generated no tokens (a pure tool call) contributes no rate at all: a `0 tok/s` reading would be noise, not information.
 
+## File downloads
+
+A file that reached the harness — one you uploaded, or one the Agent wrote — could be looked at and nothing else. Uploaded attachments were the worse half: an upload lives in content-addressed storage under an opaque `attachmentId` with **no filesystem path at all**, so once its composer card was gone the bytes were unreachable from the browser by any route. The conversation card for a sent file was an inert `<span>`, and the only byte route in the harness, `GET /api/file?path=…`, serves absolute paths and answers with an inline disposition.
+
+Three surfaces now offer a save, and two host routes back them.
+
+**`/api/file` gained a download spelling.** A `download` parameter — present at all, so a hand-written `?download` works, with `0` and `false` as the explicit opt-outs — adds `Content-Disposition: attachment` and an optional `name` override for the saved filename. The path read is unchanged, so the same route serves a preview and a save; nothing else about the request or the authorization differs. Download responses also carry `allow-downloads` on the existing `sandbox` policy. That flag is probably unnecessary — a browser hands an attachment to its download manager without creating a document to sandbox — but "probably" is not a thing to leave in a save path, and naming it costs nothing.
+
+**`GET /api/attachment.download` is new.** It takes `sessionId` and `attachmentId`, proves the attachment is reachable from that Session's log (the same authorization the image route already performed, generalized over file and image blocks), and streams the stored bytes straight to the socket — an upload never lands in the harness process's heap on the way out. Bytes stream from the store with the store's own backpressure; the first chunk is pulled before the response is committed, so an unreadable store fails the request instead of truncating a response that already promised `200`.
+
+**Where the saves are.** The delivered-file card's menu gained `Download`, and it is deliberately the one item that survives a Host with no desktop: opening a file in a native app needs a desktop, saving one only needs the bytes the Host already serves, so the menu now opens with only the desktop rows disabled. The workspace file tree gives every file row a save control that appears on hover, built from the row's own absolute path. A sent file in the conversation is now an anchor rather than an inert card.
+
+**One honest limit.** A declared file is addressed through its workspace root, so a card whose Session root is unknown *and* whose path is relative offers no save at all — the item is disabled rather than pointing at a URL that cannot resolve. In practice the root comes from the session list and is always present, and the pure helper is tested for the degraded case rather than assuming it away.
+
+**What is not covered.** The sidebar document preview has no save control of its own; the same files are reachable from the file tree and the delivered-file card. Uploaded *images* download through the attachment route (they are the second branch of its authorization), but the lightbox offers no save gesture yet.
+
 ## Upstream sync
 
 The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. Two syncs have happened, both onto an identical pair of checkouts:

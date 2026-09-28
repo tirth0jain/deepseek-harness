@@ -8,10 +8,11 @@ import type {
 import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import { Button, IconChevronDownOutline14, MarkdownDelegateProvider, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
+import type { ChatNodeOwnerProps, ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { PendingSteeringBubble, PendingSubmissionBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
+import { attachmentDownloadUrl as admittedAttachmentUrl } from './attachment-url.ts'
 import { TurnNavigator } from './TurnNavigator.tsx'
 import { mergeTurnRailItems, type TurnRailItem } from './turn-rail-items.ts'
 import type { TurnRateLookup } from './turn-cost.ts'
@@ -308,6 +309,12 @@ export function ChatView({
   const renderMessageImages = useCallback<RenderMessageImages>(
     owner => renderSlot('conversation.message.images', { ...owner, loadImage }),
     [loadImage, renderSlot],
+  )
+  // Built here rather than injected: the URL needs the viewed Session's identity
+  // and this page's own origin, both of which the view already holds.
+  const attachmentDownloadUrl = useCallback<ChatNodeOwnerProps['attachmentDownloadUrl']>(
+    attachment => admittedAttachmentUrl(window.location, sessionId, attachment.attachmentId),
+    [sessionId],
   )
   const runningTurnStart = useMemo(() => runningTurnStartTime(timeline), [timeline])
 
@@ -807,6 +814,7 @@ export function ChatView({
               forkAt={forkAt}
               loadImage={loadImage}
               renderMessageImages={renderMessageImages}
+              attachmentDownloadUrl={attachmentDownloadUrl}
               fileMentions={fileMentions}
               costOf={costOf}
               renderSlot={renderSlot}

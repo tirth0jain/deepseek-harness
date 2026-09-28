@@ -55,13 +55,56 @@ it.each(['opening', 'revealing'] as const)('keeps sidebar previews available whi
   expect(p.onAction).not.toHaveBeenCalled()
 })
 
-it('keeps the native menu disabled until a desktop is available', () => {
-  const p = props()
+it('keeps the menu available without a desktop, disabling only the native actions', () => {
+  const p = { ...props(), cwd: '/work' }
   const view = render(<PresentedFileCard {...p} host={null} />)
-  expect((view.getByRole('button', { name: 'More file actions for out/report.pdf' }) as HTMLButtonElement).disabled).toBe(true)
-  expect((view.getByRole('button', { name: 'Open out/report.pdf in sidebar' }) as HTMLButtonElement).disabled).toBe(false)
+  const trigger = view.getByRole('button', { name: 'More file actions for out/report.pdf' }) as HTMLButtonElement
+  expect(trigger.disabled).toBe(false)
+  fireEvent.click(trigger)
+  expect((view.getByRole('menuitem', { name: 'Download' }) as HTMLButtonElement).disabled).toBe(false)
+  expect((view.getByRole('menuitem', { name: /Open containing folder/ }) as HTMLButtonElement).disabled).toBe(true)
+  expect((view.getByRole('menuitem', { name: /Open in default app/ }) as HTMLButtonElement).disabled).toBe(true)
   view.rerender(<PresentedFileCard {...p} host={{ ...p.host, available: false, fileManager: null }} />)
-  expect((view.getByRole('button', { name: 'More file actions for out/report.pdf' }) as HTMLButtonElement).disabled).toBe(true)
+  // The open menu survives the host change; only the desktop rows change state.
+  expect((view.getByRole('menuitem', { name: /Open containing folder/ }) as HTMLButtonElement).disabled).toBe(true)
+  expect((view.getByRole('menuitem', { name: 'Download' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+it('offers no save when the workspace root cannot make the declaration absolute', () => {
+  const p = props()
+  const view = render(<PresentedFileCard {...p} />)
+  fireEvent.click(view.getByRole('button', { name: 'More file actions for out/report.pdf' }))
+  expect((view.getByRole('menuitem', { name: 'Download' }) as HTMLButtonElement).disabled).toBe(true)
+  // A disabled menu row is not a tab stop, so the keyboard starts at the desktop action.
+  const enabled = view.getAllByRole('menuitem').filter(item => !(item as HTMLButtonElement).disabled)
+  expect(enabled).toHaveLength(2)
+  expect(document.activeElement).toBe(enabled[0])
+})
+
+it('saves a declared file through the byte route and closes the menu', () => {
+  const p = { ...props(), cwd: '/work' }
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  try {
+    const view = render(<PresentedFileCard {...p} />)
+    fireEvent.click(view.getByRole('button', { name: 'More file actions for out/report.pdf' }))
+    fireEvent.click(view.getByRole('menuitem', { name: 'Download' }))
+    expect(click).toHaveBeenCalledTimes(1)
+    const anchor = click.mock.instances[0] as HTMLAnchorElement
+    const url = new URL(anchor.href)
+    expect(url.origin).toBe(window.location.origin)
+    expect(url.pathname).toBe('/api/file')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      path: '/work/out/report.pdf', download: '1', name: 'report.pdf',
+    })
+    expect(anchor.getAttribute('download')).toBe('report.pdf')
+    // Saving is the browser's own gesture, not a Host desktop request.
+    expect(p.onAction).not.toHaveBeenCalled()
+    expect(view.queryByRole('menu')).toBeNull()
+    // The anchor exists only for the click it starts.
+    expect(document.querySelector('a[download="report.pdf"]')).toBeNull()
+  } finally {
+    click.mockRestore()
+  }
 })
 
 it('opens the right sidebar from either the card or its primary button', () => {
@@ -85,19 +128,23 @@ it('localizes reveal failures and accurately reports a directory-only action', (
 
 
 it('supports keyboard selection and returns focus to the trigger on Escape', () => {
-  const view = render(<PresentedFileCard {...props()} />)
+  const view = render(<PresentedFileCard {...props()} cwd="/work" />)
   const trigger = view.getByRole('button', { name: 'More file actions for out/report.pdf' })
   fireEvent.click(trigger)
   const items = view.getAllByRole('menuitem')
+  expect(items).toHaveLength(3)
   expect(document.activeElement).toBe(items[0])
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
   expect(document.activeElement).toBe(items[1])
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+  expect(document.activeElement).toBe(items[2])
+  // Wrap-around: past the last row returns to the first.
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
   expect(document.activeElement).toBe(items[0])
   fireEvent.keyDown(document.activeElement!, { key: 'End' })
-  expect(document.activeElement).toBe(items[1])
+  expect(document.activeElement).toBe(items[2])
   fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp' })
-  expect(document.activeElement).toBe(items[0])
+  expect(document.activeElement).toBe(items[1])
   fireEvent.keyDown(document.activeElement!, { key: 'Home' })
   expect(document.activeElement).toBe(items[0])
   fireEvent.keyDown(document.activeElement!, { key: 'Escape' })

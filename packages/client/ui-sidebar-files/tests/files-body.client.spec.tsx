@@ -7,7 +7,9 @@
  * level, a file click opens exactly that session-scoped `file:` address through
  * the owner, an `other` entry is shown but not clickable, the tree says when it
  * was cut or could not be read, and reload asks again for the expanded levels
- * only. The two pure helpers the rows are built from are checked on their own.
+ * only. A file row also carries a save link built from its own absolute path,
+ * which the pure helper is checked on directly. The two pure helpers the rows
+ * are built from are checked on their own.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent } from '@testing-library/react'
@@ -142,6 +144,23 @@ describe('FilesBody', () => {
     const other = view.container.querySelector(`[data-files-path="${ROOT}/pipe"]`)!
     expect(other.querySelector('button')).toBeNull()
     expect(other.querySelector('[aria-disabled="true"]')?.getAttribute('title')).toBe(zh['entry.other'])
+  })
+
+  it('saves each file row from its own absolute path, and offers nothing to save for anything else', async () => {
+    const { view, script } = mountBody()
+    await act(() => script.settle({ ok: true, value: ROOT_LEVEL }))
+    const save = view.container.querySelector(`[data-files-path="${ROOT}/README.md"] [data-files-download]`)!
+    expect(save.tagName).toBe('A')
+    expect(save.getAttribute('download')).toBe('README.md')
+    expect(save.getAttribute('aria-label')).toBe(zh['entry.download'].replace('{name}', 'README.md'))
+    const url = new URL(save.getAttribute('href')!, window.location.origin)
+    expect(url.origin).toBe(window.location.origin)
+    expect(url.pathname).toBe('/api/file')
+    expect(Object.fromEntries(url.searchParams))
+      .toEqual({ path: `${ROOT}/README.md`, download: '1', name: 'README.md' })
+    // A directory is not a file to save, and an `other` entry is not either.
+    expect(view.container.querySelector(`[data-files-path="${ROOT}/src"] [data-files-download]`)).toBeNull()
+    expect(view.container.querySelector(`[data-files-path="${ROOT}/pipe"] [data-files-download]`)).toBeNull()
   })
 
   it('marks a cut listing and an empty one', async () => {
