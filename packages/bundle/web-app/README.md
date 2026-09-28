@@ -155,7 +155,7 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 - **Only the handoff start is observable** — the GUI reports that the browser was asked to open, not that it actually opened; a later browser exit is never reported, and the printed URL is your manual fallback.
 - **SSH sessions keep the URL but skip the browser handoff** — the printed URL names the remote host's loopback endpoint; the SSH client or editor must expose and open the local forwarded address.
 - **`BROWSER` overrides only come from the environment** — a discovered `.env` cannot set `BROWSER`; only an inherited value can choose the executable for the automatic handoff.
-- **Binding all network interfaces is not supported** — `--host 0.0.0.0` is rejected at startup for safety; use the default loopback host.
+- **Binding all interfaces exposes the LAN** — `--host 0.0.0.0` is accepted for LAN and reverse-proxy deployments; the LAN URL is sampled and printed, and the /api browser-trust fence still requires a loopback, derived LAN, or declared `--trusted-host` authority, so pair it with `--trusted-host` when browsers reach the server through a different host name.
 
 <a id="dev-note"></a>
 ### Dev Note
