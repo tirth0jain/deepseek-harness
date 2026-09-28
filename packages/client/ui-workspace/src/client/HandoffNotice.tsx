@@ -22,9 +22,8 @@ export interface HandoffNoticeInjected {
  * @returns the dictionary key explaining it.
  */
 function messageKey(reason: string | undefined): WorkspaceKey {
-  if (reason === 'no-compaction-backend') return 'handoff.failed.noBackend'
   if (reason === 'nothing-to-carry') return 'handoff.failed.empty'
-  if (reason === 'compaction-busy') return 'handoff.failed.busy'
+  if (reason === 'no-command-registry' || reason === 'no-compaction-command') return 'handoff.failed.unavailable'
   return 'handoff.failed.generic'
 }
 

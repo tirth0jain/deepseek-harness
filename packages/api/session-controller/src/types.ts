@@ -213,8 +213,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/fork-unavailable': { readonly sessionId: SessionId }
     /**
      * A handoff could not be completed. `reason` is a stable token naming which
-     * precondition failed — `no-compaction-backend`, `compaction-busy`,
-     * `compaction-<code>`, or `nothing-to-carry` — so a caller can say which
+     * precondition failed — `no-command-registry`, `no-compaction-command`,
+     * `compaction-refused`, or `nothing-to-carry` — so a caller can say which
      * one without parsing prose. A source Session that is not live is not a
      * refusal: it is resolved (resumed) the way any other first operation
      * resolves one.

@@ -10,12 +10,13 @@ import type {
 } from '@deepseek-ai/dsh-attachment'
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
+import type { CommandExecution, CommandSubmitAttachment } from '@deepseek-ai/dsh-commands'
 import {
   ReasoningEffortId, assistantStreamChunks, boundContextSummary, createUserMessage, freezeMessage,
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { Session, SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -319,13 +320,6 @@ export class SessionCommandController {
   async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
     const fail = (reason: string, message: string): RemoteError =>
       new RemoteError('session/handoff-unavailable', message, { sessionId: request.sessionId, reason })
-    // `ctx.get` is the inject-free read: this controller may be mounted in a
-    // deployment that has no compaction backend, so the seam cannot be a
-    // declared injection without making every route wait on it.
-    const compaction = this.ctx.get('compaction') as HandoffSummarizer | undefined
-    if (compaction === undefined) {
-      throw fail('no-compaction-backend', 'This deployment has no compaction backend, so no summary can be produced.')
-    }
     const observed = await this.observeForHandoff(request.sessionId)
     using source = observed
     // Resolved, never required to be live already. A deployment may
@@ -334,26 +328,11 @@ export class SessionCommandController {
     // cannot be what makes this operation possible — requiring a live Agent
     // here refuses on exactly the deployments that need condensing most.
     // The observation already in hand is what the resume is built from, so
-    // resolution costs no second read. `compactNow` serializes against driver
-    // turns, which is what it needs the Agent for.
+    // resolution costs no second read.
     const found = await this.agents.resolveObservedAgent(source)
     if ('error' in found) throw found.error
     const agent = found.agent
-    let summary: readonly ContentBlock[] | undefined
-    try {
-      summary = (await compaction.compactNow(agent, signal))?.summary
-    } catch (error: unknown) {
-      if (signal.aborted) throw error
-      // A backend refusal names its own class; anything else is a real fault
-      // and is not this operation's to reinterpret.
-      const code = errorCodeOf(error)
-      if (code === undefined) throw error
-      throw fail(`compaction-${code}`, `The history could not be condensed: ${errorMessageOf(error)}`)
-    }
-    summary = summary === undefined || summary.length === 0 ? newestSummary(source.events) : summary
-    if (summary === undefined || summary.length === 0) {
-      throw fail('nothing-to-carry', 'This Session has no history to condense yet.')
-    }
+    const summary = await this.condense(agent, fail, signal)
     let workspace: Workspace | undefined
     try {
       workspace = await this.forkWorkspace(source.header)
@@ -439,6 +418,63 @@ export class SessionCommandController {
         {},
       )
     }
+  }
+
+  /**
+   * Condense one live Agent's history the way `/compact` would, and read back
+   * the summary that produced.
+   *
+   * The backend is reached through the human command rather than a service
+   * lookup, because a preset may isolate it. This deployment disables the
+   * host-plane compaction row and mounts a backend per preset inside
+   * `isolate: { compaction: true }`, so the group's instance is invisible from
+   * outside the group: `ctx.get('compaction')` is undefined at this
+   * controller's plane, and the only context that can see the backend is the
+   * one the command runs in. Going through the command also means a handoff
+   * condenses exactly as typing `/compact` does, refusals included.
+   *
+   * The summary is read from the log afterwards rather than taken from the
+   * command's result: a command result carries text and a seq, not blocks, and
+   * the log is where the continuation's history has to come from anyway. When
+   * the command found nothing to condense, the newest recorded summary is
+   * whatever an earlier compaction left, which is the case a handoff of an
+   * already-condensed Session carries.
+   *
+   * @param agent - live Agent whose history is condensed.
+   * @param fail - refusal constructor for this operation's own error class.
+   * @param signal - cancels the compaction, not the Session it reads.
+   * @returns the carried summary blocks.
+   * @throws {RemoteError} `session/handoff-unavailable` naming the precondition.
+   */
+  private async condense(
+    agent: Agent,
+    fail: (reason: string, message: string) => RemoteError,
+    signal: AbortSignal,
+  ): Promise<readonly ContentBlock[]> {
+    // `ctx.get` is the inject-free read: a deployment may mount no command
+    // registry at all, and this route must not wait on one to exist.
+    const commands = this.ctx.get('commands') as HandoffCommands | undefined
+    if (commands === undefined) {
+      throw fail('no-command-registry', 'This deployment has no command registry, so its history cannot be condensed.')
+    }
+    const execution = await commands.execute(agent, '/compact', [], signal)
+    if (execution === undefined) {
+      throw fail(
+        'no-compaction-command',
+        'This deployment registers no "/compact" command for this Session, so its history cannot be condensed.',
+      )
+    }
+    if (execution.result.kind !== 'success') {
+      // The command owns this prose and already speaks to a human, so it is
+      // carried rather than reinterpreted.
+      throw fail('compaction-refused', execution.result.text)
+    }
+    using condensed = await this.observeForHandoff(agent.id)
+    const summary = newestSummary(condensed.events)
+    if (summary === undefined || summary.length === 0) {
+      throw fail('nothing-to-carry', 'This Session has no history to condense yet.')
+    }
+    return summary
   }
 
   /**
@@ -958,40 +994,29 @@ function handoffSource(): MessageSource {
   }
 }
 
-/** One classified failure's own code, when it carries one. */
-function errorCodeOf(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
-  return typeof error.code === 'string' && error.code.length > 0 ? error.code : undefined
-}
-
-/** One failure's diagnostic text, whatever shape it arrived in. */
-function errorMessageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 /**
- * The slice of the compaction seam a handoff calls.
+ * The slice of the command seam a handoff calls.
  *
- * Declared here rather than imported so the Session Controller keeps working in
- * a deployment that mounts no compaction backend, and so a backend is not a
- * build-time dependency of the controller. The shape is the seam's own
- * `compactNow` signature; `ctx.get` is what resolves it at call time.
+ * A slice rather than the service, and read through `ctx.get` at call time, so
+ * a deployment that mounts no command registry is a runtime refusal instead of
+ * a build-time dependency or a route that waits on one to exist.
  */
-interface HandoffSummarizer {
+interface HandoffCommands {
   /**
-   * Condense useful history in place on an idle Agent.
-   * @param agent - the idle Agent whose Session is condensed.
-   * @param signal - cancels the summarization.
-   * @returns the condensation, or null when no safe useful range exists.
+   * Parse and execute one known command for an Agent without sending it to the
+   * model, in the Agent's own scope.
+   * @param agent - exact receiving Agent.
+   * @param line - complete slash-command line.
+   * @param submittedAttachments - staged attachments; empty for `/compact`.
+   * @param signal - cancellation owned by the caller.
+   * @returns the settled execution, or undefined when the name does not resolve.
    */
-  compactNow(
-    agent: {
-      readonly session: Session
-      readonly options: { readonly provider?: string; readonly model?: string }
-      runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T>
-    },
+  execute(
+    agent: Agent,
+    line: string,
+    submittedAttachments: readonly CommandSubmitAttachment[],
     signal: AbortSignal,
-  ): Promise<{ readonly summary: readonly ContentBlock[] } | null>
+  ): Promise<CommandExecution | undefined>
 }
 
 /** The chunk already pulled, then the rest of the same iteration. */

@@ -19,8 +19,8 @@ export interface HandoffFailure {
   /** Stable identity for dismissal. */
   readonly id: number
   /**
-   * The Host-named precondition token (`no-compaction-backend`, `compaction-
-   * busy`, …), absent when the failure carried no class at all.
+   * The Host-named precondition token (`no-compaction-command`,
+   * `compaction-refused`, …), absent when the failure carried no class at all.
    */
   readonly reason?: string
   /** The Host's own message; wire prose passes through untranslated by policy. */

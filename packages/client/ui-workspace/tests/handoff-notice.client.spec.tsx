@@ -59,7 +59,7 @@ it('says nothing until a handoff has refused', () => {
 
 it('names the precondition the Host refused on, and dismisses only that one', () => {
   const { store, view, show } = mount()
-  store.report(refused('no-compaction-backend', 'This deployment has no compaction backend, so no summary can be produced.'))
+  store.report(refused('no-compaction-command', 'This deployment registers no "/compact" command for this Session.'))
   store.report(new Error('backend bug'))
   show()
 
@@ -67,8 +67,8 @@ it('names the precondition the Host refused on, and dismisses only that one', ()
   expect(alerts).toHaveLength(2)
   // The refusal explains itself in the reader's language, and still carries the
   // Host's own message: the wire prose is the detail, not the explanation.
-  expect(alerts[0]!.textContent).toContain(en['handoff.failed.noBackend'])
-  expect(alerts[0]!.textContent).toContain('This deployment has no compaction backend')
+  expect(alerts[0]!.textContent).toContain(en['handoff.failed.unavailable'])
+  expect(alerts[0]!.textContent).toContain('registers no "/compact" command')
   // A fault that named no class is not dressed up as one of the named ones.
   expect(alerts[1]!.textContent).toContain(en['handoff.failed.generic'])
   expect(alerts[1]!.textContent).toContain('backend bug')
@@ -79,9 +79,17 @@ it('names the precondition the Host refused on, and dismisses only that one', ()
   expect(remaining[0]!.message).toBe('backend bug')
 })
 
-it('keeps the busy refusal distinct from the unclassified one', () => {
+it('keeps an empty chat distinct from a backend that refused', () => {
   const { store, view, show } = mount()
-  store.report(refused('compaction-busy', 'The history could not be condensed: agent is active'))
+  store.report(refused('nothing-to-carry', 'This Session has no history to condense yet.'))
   show()
-  expect(view.getByRole('alert').textContent).toContain(en['handoff.failed.busy'])
+  expect(view.getByRole('alert').textContent).toContain(en['handoff.failed.empty'])
+
+  // A refusal the command explained in its own words is the generic line plus
+  // that explanation, never a class the Host did not name.
+  store.report(refused('compaction-refused', 'Compaction is unavailable because the agent is not idle.'))
+  show()
+  const explained = view.getAllByRole('alert')[1]!
+  expect(explained.textContent).toContain(en['handoff.failed.generic'])
+  expect(explained.textContent).toContain('the agent is not idle')
 })
