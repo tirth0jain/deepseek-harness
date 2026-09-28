@@ -196,6 +196,21 @@ export interface SessionFormatCatalogOptions extends SessionFormatChainOptions {
   readonly restoreTransformedCurrent: (artifact: SessionFormatArtifact) => SessionFormatArtifact
 }
 
+/**
+ * Half-open range of expanded events one restore retains out of a complete decode.
+ *
+ * Every row is still decoded and validated; only retention is bounded. A
+ * windowed read exists so that serving one page of a long Session log costs the
+ * page rather than the whole graph, which for a large Session is the difference
+ * between megabytes and gigabytes of heap.
+ */
+export interface SessionFormatEventWindow {
+  /** First expanded event index to retain, counted from the start of the log. */
+  readonly from: number
+  /** Number of expanded events to retain from `from`. */
+  readonly length: number
+}
+
 /** Policies applied by one physical-row restore. */
 export interface SessionFormatRestoreOptions {
   readonly recovery: SessionFormatRecovery
@@ -204,6 +219,13 @@ export interface SessionFormatRestoreOptions {
    * released current-format validation only after migration; current input receives only codec validation.
    */
   readonly validation: 'transformed' | 'current'
+  /**
+   * Retain only this range of the decoded events. Absent retains the complete
+   * event list. Only a current-format restore honours it: a migration stage may
+   * need source rows outside the range, so windowing a historical log is
+   * refused rather than silently truncating a transformation's input.
+   */
+  readonly window?: SessionFormatEventWindow
 }
 
 /** Build-static physical dispatch and adjacent migration catalog. */

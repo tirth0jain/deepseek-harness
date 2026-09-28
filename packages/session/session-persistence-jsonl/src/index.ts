@@ -31,10 +31,16 @@ import {
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
-import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
+import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState, type StoredLogWindow } from './storage.ts'
 import { SessionWriteLease } from './lease.ts'
 import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+import type {
+  SessionEvent,
+  SessionId,
+  SessionHeader,
+  SessionLogOffset as SessionLogOffsetType,
+} from '@deepseek-ai/dsh-session'
+import type { SessionFormatEventWindow } from '@deepseek-ai/dsh-session-format'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath, logPath, logSuffix,
   parseGenerationLogFilename, projectDir, scanLog, sessionDir, SessionLogScanner, toHeaderLine,
@@ -64,6 +70,18 @@ export type { JsonlCompression } from './format.ts'
  * log, so the memo only needs the sessions in flight between those steps.
  */
 const COLD_LOG_MEMO_MAX_ENTRIES = 2
+/**
+ * Cap on the decoded JSONL one memoized handoff may retain, across all entries.
+ *
+ * The entry cap alone cannot bound memory: a single Session log decodes to
+ * hundreds of megabytes on a long conversation, and the parsed graph it becomes
+ * is several times that again, so two entries of that size is gigabytes held to
+ * save one re-parse. This is the bound that actually holds. A log past the
+ * budget is simply not memoized — its handoff pays a second decode, which is
+ * the price of not keeping it resident — so the budget is set to cover the
+ * ordinary conversation many times over rather than to cover the largest one.
+ */
+const COLD_LOG_MEMO_MAX_BYTES = 64 * 1024 * 1024
 
 const DEFAULT_COMPRESSION: JsonlCompression = 'zstd'
 /**
@@ -98,6 +116,18 @@ export interface Config {
   root: string
   /** Physical encoding; defaults to checksummed Zstandard frames. */
   compression?: JsonlCompression
+  /**
+   * Ceiling on the decoded JSONL one cold-read handoff may keep resident,
+   * across every memoized Session.
+   *
+   * A Session log on a long conversation decodes to hundreds of megabytes and
+   * the parsed graph it becomes is several times that, so this bound — not the
+   * entry cap beside it — is what decides how much a handoff may hold. Raise it
+   * to trade memory for a repeated decode when reopening a large Session;
+   * lower it on a memory-constrained host. A log past the budget is not
+   * memoized at all.
+   */
+  coldLogMemoMaxBytes?: number
 }
 
 /** One stored event graph whose producer has established immutable sharing. */
@@ -246,6 +276,7 @@ class JsonlSessionPersistence extends SessionPersistence {
   static Config: z<Config> = z.object({
     root: z.string().required(),
     compression: JsonlCompressionSchema,
+    coldLogMemoMaxBytes: z.number().step(1).min(0),
   })
 
   /** Backend label for diagnostics and effects; shadows `Service.name` without changing the service key. */
@@ -253,6 +284,8 @@ class JsonlSessionPersistence extends SessionPersistence {
 
   private root: string
   private compression: JsonlCompression
+  /** Decoded-JSONL ceiling for the handoff memo; see {@link Config.coldLogMemoMaxBytes}. */
+  private readonly memoByteBudget: number
   private rootEncodingCheck: Promise<void> | undefined
   private readonly tracker = new JsonlBackendTracker(this.name)
   private readonly generationFormat: Omit<JsonlGenerationFormatAdapter, 'createRestore'>
@@ -264,6 +297,13 @@ class JsonlSessionPersistence extends SessionPersistence {
    * revision guard.
    */
   private readonly coldLogMemo = new Map<SessionId, StoredLog>()
+  /**
+   * Decoded JSONL bytes each memoized entry retains, so the byte budget can be
+   * enforced beside the entry budget. Kept beside the memo rather than inside
+   * it because a `StoredLog` is what readers receive and its shape is owned by
+   * the format, not by this cache.
+   */
+  private readonly memoBytes = new Map<SessionId, number>()
   /** One joinable decode/migration operation per selected historical Session file revision. */
   private readonly migrationPreparations = new Map<SessionId, MigrationPreparation>()
 
@@ -279,6 +319,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     // Resolve once so later process.cwd() changes cannot split one backend across roots.
     this.root = resolve(config.root)
     this.compression = config.compression ?? DEFAULT_COMPRESSION
+    this.memoByteBudget = config.coldLogMemoMaxBytes ?? COLD_LOG_MEMO_MAX_BYTES
     this.generationFormat = {
       currentVersion: sessionFormatCatalog.currentVersion,
       encodeHeader: (header, inheritedEventCount) =>
@@ -508,6 +549,21 @@ class JsonlSessionPersistence extends SessionPersistence {
     return snapshots
   }
 
+  /**
+   * Drop the decoded log this instance memoizes for one session.
+   *
+   * The memo is byte-bounded and holds nothing past its budget, so this is
+   * about the mid-sized logs it does hold: releasing one makes the next read
+   * decode it again. Preparation already in flight for the id is left alone —
+   * its waiters own it, and dropping the reference would only make them decode
+   * a second copy.
+   * @param id - the session whose memoized decode should be dropped.
+   */
+  override release(id: SessionId): void {
+    if (this.migrationPreparations.has(id)) return
+    this.coldLogMemo.delete(id)
+  }
+
   // --- handle-facing storage internals (package-private via the handle class below) ---
 
   /** Resolve and read one stored log, refusing loudly when the artifact is absent. */
@@ -684,6 +740,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       revision: fileRevision(prepared.sourceIdentity),
       publication: { source: selected, value: prepared },
     }
+    // A migration result is decoded from a source that never reported its
+    // decoded size, so it carries no byte charge. It is still retained: the
+    // published facts are what a later preparation compares against, and the
+    // entry-count cap alone bounds how many such results can be held.
     this.memoizeStoredLog(id, stored)
     return stored
   }
@@ -696,7 +756,10 @@ class JsonlSessionPersistence extends SessionPersistence {
       identity = await migration.value.publish()
     } catch (error: unknown) {
       /* v8 ignore else -- a newer preparation may have replaced this stale cache entry. */
-      if (this.coldLogMemo.get(id) === stored) this.coldLogMemo.delete(id)
+      if (this.coldLogMemo.get(id) === stored) {
+        this.coldLogMemo.delete(id)
+        this.memoBytes.delete(id)
+      }
       throw this.generationFailure(id, migration.source, error)
     }
     const published: CurrentStoredLog = {
@@ -709,6 +772,8 @@ class JsonlSessionPersistence extends SessionPersistence {
       inheritedEventCount: stored.inheritedEventCount,
       revision: fileRevision(identity),
     }
+    // Same unmeasured source as the preparation above: published and retained
+    // without a byte charge, bounded by the entry-count cap.
     this.memoizeStoredLog(id, published)
     return published
   }
@@ -756,6 +821,84 @@ class JsonlSessionPersistence extends SessionPersistence {
     return this.decodeStoredLog(path, expectedId, bytes, fileRevision(identity), signal)
   }
 
+  /**
+   * Decode one complete current generation and retain only a bounded window of it.
+   *
+   * The scan still decodes and validates every row, so this is an integrity-
+   * equivalent alternative to {@link readStoredLog} that trades the full event
+   * list for the window — the difference between a few megabytes and gigabytes
+   * of heap when one page of a long Session is all the caller needs.
+   *
+   * The result is deliberately never memoized: `coldLogMemo` is keyed by
+   * session id alone, so caching a partial list there would hand it to a later
+   * full read as if it were the whole log.
+   *
+   * @param path - the selected current generation's physical path.
+   * @param expectedId - logical identity the log must declare.
+   * @param offset - first expanded event index to retain.
+   * @param length - number of expanded events to retain from `offset`.
+   * @param signal - optional cancellation for the read.
+   * @returns the retained window plus the complete log's event count.
+   */
+  async readStoredLogWindow(
+    path: string,
+    expectedId: SessionId,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ): Promise<StoredLogWindow> {
+    signal?.throwIfAborted()
+    const { bytes, identity } = await readStableJsonlFile(path, signal)
+    const window: SessionFormatEventWindow = { from: offset, length }
+    let parsed: {
+      meta: SessionHeader
+      inheritedEventCount: SessionLogOffsetType
+      events: SessionEvent[]
+      eventCount: number
+      recoveredTail: SessionEvent[]
+    }
+    try {
+      if (this.compression === 'zstd') {
+        parsed = await this.readZstdPrefix(bytes, signal, window)
+      } else {
+        signal?.throwIfAborted()
+        const { meta, inheritedEventCount, events, eventCount } = scanLog(bytes, window)
+        signal?.throwIfAborted()
+        parsed = { meta, inheritedEventCount, events, eventCount, recoveredTail: [] }
+      }
+    } catch (error: unknown) {
+      signal?.throwIfAborted()
+      if (error instanceof SessionFormatUnsupportedError) {
+        throw new SessionFormatUnsupportedError(`${error.message} (raw log: ${path})`, { kind: 'jsonl', path })
+      }
+      throw new SessionPersistenceCorruptionError(`session "${expectedId}": stored log is corrupt: ${String(error)} (raw log: ${path})`, { cause: error })
+    }
+    signal?.throwIfAborted()
+    await this.assertStoredIdentity(path, SESSION_FORMAT_VERSION, parsed.meta, expectedId, signal)
+    signal?.throwIfAborted()
+    assertStoredId(expectedId, parsed.meta)
+    const location = this.locate(parsed.meta)
+    validateStoredEvents(parsed.meta, parsed.events, location)
+    // The decode walked every row, so a retained window must begin exactly at
+    // the requested offset. A different seq means the log is not the dense
+    // zero-based sequence this window arithmetic assumes, and silently serving
+    // the events at the wrong positions would be worse than refusing.
+    const first = parsed.events[0]
+    if (first !== undefined && Number(first.seq) !== offset) {
+      throw new SessionPersistenceCorruptionError(
+        `session "${expectedId}": stored log window begins at seq ${String(first.seq)} but offset ${String(offset)} was requested (raw log: ${path})`,
+        {},
+      )
+    }
+    return {
+      meta: parsed.meta,
+      inheritedEventCount: parsed.inheritedEventCount,
+      ...freezeStoredEvents(parsed.events),
+      eventCount: parsed.eventCount,
+      revision: fileRevision(identity),
+    }
+  }
+
   /** Decode and memoize one already-stable current physical snapshot. */
   private async decodeStoredLog(
     path: string,
@@ -768,24 +911,28 @@ class JsonlSessionPersistence extends SessionPersistence {
       meta: SessionHeader
       inheritedEventCount: SessionLogOffsetType
       events: SessionEvent[]
+      eventCount: number
       tornTruncateTo: number | undefined
       recoveredTail: SessionEvent[]
+      decodedBytes: number
     }
     try {
       if (this.compression === 'zstd') {
         parsed = await this.readZstdPrefix(buffer, signal)
       } else {
         signal?.throwIfAborted()
-        const { meta, inheritedEventCount, events, committedBytes } = scanLog(buffer)
+        const { meta, inheritedEventCount, events, eventCount, committedBytes } = scanLog(buffer)
         signal?.throwIfAborted()
         parsed = {
           meta,
           inheritedEventCount,
           events,
+          eventCount,
           tornTruncateTo: committedBytes < buffer.byteLength ? committedBytes : undefined,
           // A torn raw tail is one incomplete JSONL line; it holds no complete
           // record to recover.
           recoveredTail: [],
+          decodedBytes: committedBytes,
         }
       }
     } catch (error: unknown) {
@@ -805,24 +952,82 @@ class JsonlSessionPersistence extends SessionPersistence {
     assertStoredId(expectedId, parsed.meta)
     const location = this.locate(parsed.meta)
     validateStoredEvents(parsed.meta, parsed.events, location)
-    const { events, ...rest } = parsed
+    const { events, decodedBytes, eventCount, ...rest } = parsed
+    // `eventCount` is the number of rows the scan decoded; `events` is what the
+    // format's restore retained. The two are equal for a log whose every row
+    // becomes exactly one event, which is what the V3 generation guaranteed and
+    // what this handle's own length arithmetic still assumes. The current
+    // generation does not: its admission refuses retired content and its
+    // restore folds relationships, so a valid log can decode N rows and retain
+    // fewer. The count is therefore carried for the bounded read (where it is
+    // the only witness to the whole log's length) and is not an identity to
+    // check here.
+    void eventCount
     const stored: CurrentStoredLog = {
       status: 'current',
       ...rest,
       ...freezeStoredEvents(events),
       revision,
     }
-    this.memoizeStoredLog(expectedId, stored)
+    this.memoizeStoredLog(expectedId, stored, decodedBytes)
     return stored
   }
 
-  /** Insert one parsed log into the bounded handoff cache. */
-  private memoizeStoredLog(id: SessionId, stored: StoredLog): void {
+  /**
+   * Insert one parsed log into the handoff cache, within both of its budgets.
+   * @param id - session the log belongs to.
+   * @param stored - parsed log to retain.
+   * @param decodedBytes - decoded JSONL bytes this entry would retain.
+   */
+  /**
+   * Insert one parsed log into the handoff cache, within both of its budgets.
+   * @param id - session the log belongs to.
+   * @param stored - parsed log to retain.
+   * @param decodedBytes - decoded JSONL bytes this entry would retain, or
+   *   `undefined` for a log whose decode never reported a size. An unmeasured
+   *   entry is retained without a byte charge and is bounded by the entry cap
+   *   alone; dropping it instead would hide published migration facts from the
+   *   next preparation, which compares against exactly this cache.
+   */
+  private memoizeStoredLog(id: SessionId, stored: StoredLog, decodedBytes?: number): void {
     this.coldLogMemo.delete(id)
-    this.coldLogMemo.set(id, stored)
+    this.memoBytes.delete(id)
+    // A log past the whole budget is not worth holding at all: it would evict
+    // every smaller handoff and still be refused on the next read's own merits,
+    // so the decode is simply not repeated here.
+    if (decodedBytes === undefined || decodedBytes <= this.memoByteBudget) {
+      this.coldLogMemo.set(id, stored)
+      if (decodedBytes !== undefined) this.memoBytes.set(id, decodedBytes)
+    }
+    this.evictMemoPastBudget()
+  }
+
+  /**
+   * Drop least-recently-used entries until the entry and byte budgets both hold.
+   */
+  private evictMemoPastBudget(): void {
+    let total = 0
+    for (const bytes of this.memoBytes.values()) total += bytes
     for (const oldest of this.coldLogMemo.keys()) {
-      if (this.coldLogMemo.size <= COLD_LOG_MEMO_MAX_ENTRIES) break
+      if (this.coldLogMemo.size <= COLD_LOG_MEMO_MAX_ENTRIES && total <= this.memoByteBudget) break
       this.coldLogMemo.delete(oldest)
+      total -= this.memoBytes.get(oldest) ?? 0
+      this.memoBytes.delete(oldest)
+    }
+    this.forgetMemoBytes()
+  }
+
+  /**
+   * Drop sizes for sessions the memo no longer holds.
+   *
+   * Every mutation path already invalidates an entry by id, so this is a
+   * backstop rather than the mechanism: a size that outlived its entry would
+   * otherwise count against the budget forever. Pruning to the memo itself
+   * keeps the accounting honest without every delete having to remember it.
+   */
+  private forgetMemoBytes(): void {
+    for (const id of this.memoBytes.keys()) {
+      if (!this.coldLogMemo.has(id)) this.memoBytes.delete(id)
     }
   }
 
@@ -860,6 +1065,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     inheritedEventCount: SessionLogOffsetType,
   ): Promise<void> {
     this.coldLogMemo.delete(header.id)
+    this.memoBytes.delete(header.id)
     await this.ensureRootEncoding()
     if (isMaterialized) {
       await this.appendLines(header, events)
@@ -876,6 +1082,7 @@ class JsonlSessionPersistence extends SessionPersistence {
    */
   async persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffsetType): Promise<void> {
     this.coldLogMemo.delete(header.id)
+    this.memoBytes.delete(header.id)
     await this.ensureRootEncoding()
     await this.materialize(header, inheritedEventCount, [])
     this.tracker.materialized(header.id)
@@ -888,6 +1095,7 @@ class JsonlSessionPersistence extends SessionPersistence {
    */
   async truncateTornTail(header: SessionHeader, truncateTo: number): Promise<void> {
     this.coldLogMemo.delete(header.id)
+    this.memoBytes.delete(header.id)
     await this.repair(header, truncateTo)
     this.ctx.logger.warn(`${this.name}: session "${header.id}" recovered from a torn tail; incomplete tail bytes were discarded`)
   }
@@ -939,12 +1147,15 @@ class JsonlSessionPersistence extends SessionPersistence {
   private async readZstdPrefix(
     buffer: Buffer,
     signal?: AbortSignal,
+    window?: SessionFormatEventWindow,
   ): Promise<{
     meta: SessionHeader
     inheritedEventCount: SessionLogOffsetType
     events: SessionEvent[]
+    eventCount: number
     tornTruncateTo: number | undefined
     recoveredTail: SessionEvent[]
+    decodedBytes: number
   }> {
     signal?.throwIfAborted()
     const { frames, tornStart } = scanZstdFrames(buffer)
@@ -961,7 +1172,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       /* v8 ignore next -- a non-empty structural frame list makes the decoder yield its first frame or throw. */
       if (headerFrame.done) throw new Error('empty or header-less Zstandard session log')
       assertZstdHeaderFrame(headerFrame.value)
-      const scanner = new SessionLogScanner(headerFrame.value)
+      const scanner = new SessionLogScanner(headerFrame.value, 'recoverable', window)
 
       let remainingFrames = frames.length - 1
       for (const plaintext of decodedFrames) {
@@ -985,8 +1196,10 @@ class JsonlSessionPersistence extends SessionPersistence {
           meta: prefix.meta,
           inheritedEventCount: prefix.inheritedEventCount,
           events: prefix.events,
+          eventCount: prefix.eventCount,
           tornTruncateTo: undefined,
           recoveredTail: [],
+          decodedBytes: prefix.committedBytes,
         }
       }
       // A torn final frame's append never resolved, but complete JSONL records
@@ -1009,8 +1222,15 @@ class JsonlSessionPersistence extends SessionPersistence {
         meta: prefix.meta,
         inheritedEventCount: prefix.inheritedEventCount,
         events: prefix.events,
+        eventCount: prefix.eventCount,
         tornTruncateTo: tornStart,
-        recoveredTail: prefix.events.slice(complete.eventCount),
+        // The recovered tail is the durable-rewrite input a write open needs,
+        // and it is addressed by absolute event index into the complete list —
+        // which a window does not hold. Only read handles ask for a window, and
+        // a read discards the tail, so a windowed decode reports none rather
+        // than mis-slicing the window it does hold.
+        recoveredTail: window === undefined ? prefix.events.slice(complete.eventCount) : [],
+        decodedBytes: prefix.committedBytes,
       }
     } catch (error) {
       /* v8 ignore next -- decoder failure plus concurrent abort is timing-dependent */
