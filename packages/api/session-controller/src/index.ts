@@ -38,6 +38,8 @@ import type {
   SessionFollowRequest,
   SessionForkRequest,
   SessionForkValue,
+  SessionHandoffRequest,
+  SessionHandoffValue,
   SessionListRequest,
   SessionListValue,
   SessionOpenWorkspacePathRequest,
@@ -357,6 +359,18 @@ export class SessionController extends TypertRemoteService {
   @Remote('fork')
   fork(request: SessionForkRequest): Promise<SessionForkValue> {
     return this.commands.fork(request)
+  }
+
+  /**
+   * Continue one Session in a new one holding only its condensed history, and
+   * archive the source.
+   * @param request - the Session to continue elsewhere.
+   * @param signal - cancels the summarization, not the Session it produces.
+   * @returns the new Session identity and whether its source was archived.
+   */
+  @Remote('handoff')
+  handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    return this.commands.handoff(request, signal)
   }
 
   /**

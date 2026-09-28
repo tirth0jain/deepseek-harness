@@ -549,6 +549,32 @@ export class SessionManager {
   }
 
   /**
+   * Contract session.handoff; on success merge the continuation into summaries
+   * immediately, exactly as `fork` does. The continuation is never blank — its
+   * opening message is the condensation — so it is published as non-blank, and
+   * lineage rides parentSessionId so the list nests it under its source.
+   * @param opts - the source session to continue elsewhere.
+   * @returns the handoff result (the continuation's id and whether the source was archived).
+   */
+  async handoff(
+    opts: { sessionId: SessionId },
+  ): Promise<RemoteResult<{ sessionId: SessionId; archived: boolean }>> {
+    const source = this.summaries.find(s => s.sessionId === opts.sessionId)
+    const result = await this.remote.session.handoff({ sessionId: opts.sessionId })
+    const childId = result.ok
+      ? result.value.sessionId
+      : workspaceAttachSessionId(result.error)
+    if (childId !== undefined) {
+      this.recordMutation({ kind: 'upsert', summary: {
+        sessionId: childId, updatedAt: Date.now(), running: false, blank: false,
+        parentSessionId: opts.sessionId,
+        ...(source?.cwd !== undefined ? { cwd: source.cwd } : {}),
+      } })
+    }
+    return result
+  }
+
+  /**
    * Insert-or-enrich a locally synthesized summary: a new id prepends; an
    * existing entry only gains fields it lacks (the session-added frame and the
    * create() echo race — whichever lands second must fill the placeholder's

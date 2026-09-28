@@ -126,6 +126,13 @@ export function apply(ctx: Context): void {
           // Fork or child-rename failure keeps the current selection.
         })
     },
+    handoffSession: (sessionId) => {
+      uiWorkspace.handoffSession(sessionId)
+        .catch(() => {
+          // A refused handoff — no backend, a cold Session, a busy Agent — keeps
+          // the current selection; the source Session is untouched either way.
+        })
+    },
     renameWorkspace: async (workspaceId, title) => { await workspaces.rename(workspaceId, title) },
     deleteWorkspace: async (workspaceId) => { await workspaces.delete(workspaceId) },
     insertWorkspaceBefore: async (workspaceId, beforeWorkspaceId) => {

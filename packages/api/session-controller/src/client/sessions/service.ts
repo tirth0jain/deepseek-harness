@@ -99,6 +99,28 @@ export class SessionForkError extends Error {
   }
 }
 
+/** What one handoff produced: the continuation, and whether its source was archived. */
+export interface SessionHandoffOutcome {
+  readonly sessionId: SessionId
+  readonly archived: boolean
+}
+
+/** Structured session-handoff failure. */
+export class SessionHandoffError extends Error {
+  override readonly name = 'SessionHandoffError'
+
+  /**
+   * @param rpcError - Host business or folded transport error.
+   * @param sourceSessionId - the session the continuation was condensed from.
+   */
+  constructor(
+    readonly rpcError: RemoteFailure,
+    readonly sourceSessionId: SessionId,
+  ) {
+    super(`session handoff failed: ${rpcError.code}: ${rpcError.message}`)
+  }
+}
+
 /** Identity-stable logical binding for one materialized Client Session. */
 export interface SessionBinding {
   readonly sessionId: SessionId
@@ -492,6 +514,43 @@ export class ClientSessions implements ISessions {
       }
     }
     return childId
+  }
+
+  /**
+   * Continue a Session in a new one holding only its condensed history, and
+   * archive the source.
+   *
+   * The title is inherited rather than incremented: a continuation reads as the
+   * same conversation, so "the same title, again" is what a reader expects,
+   * unlike a fork's parallel branch.
+   * @param opts - the Session to continue elsewhere, and whether to title the
+   *   continuation after its source before resolving.
+   * @returns the continuation's session id and whether its source was archived.
+   * @throws {SessionHandoffError} with the source id.
+   * @throws {Error} when a requested continuation-title rename fails after creation.
+   */
+  async handoff(opts: {
+    sessionId: SessionId
+    inheritTitle?: boolean
+  }): Promise<SessionHandoffOutcome> {
+    const sourceTitle = opts.inheritTitle === true
+      ? this.list.getSnapshot().byId[opts.sessionId]?.title
+      : undefined
+    const result = await this.manager.handoff({ sessionId: opts.sessionId })
+    if (!result.ok) throw new SessionHandoffError(result.error, opts.sessionId)
+    this.projectList()
+    const childId = result.value.sessionId
+    if (sourceTitle !== undefined) {
+      const reference = this.retain(childId, { source: 'controllerOperation' })
+      try {
+        await reference.ready
+        const renamed = await reference.binding.session.rename(sourceTitle)
+        if (!renamed.ok) throw new Error(`handoff child rename failed: ${renamed.error.code}: ${renamed.error.message}`)
+      } finally {
+        reference.release()
+      }
+    }
+    return { sessionId: childId, archived: result.value.archived }
   }
 
   /**

@@ -225,6 +225,31 @@ Three surfaces now offer a save, and two host routes back them.
 
 **What is not covered.** The sidebar document preview has no save control of its own; the same files are reachable from the file tree and the delivered-file card. Uploaded *images* download through the attachment route (they are the second branch of its authorization), but the lightbox offers no save gesture yet.
 
+## Continuing a large chat in a new one
+
+A long Session is retained in full for the life of the process, and the two obvious remedies do not touch that. **Archiving releases nothing**: `WorkspaceRegistry.archiveSession` appends the id to a durable `archivedSessionIds` list and stops. **`/compact` does not shrink the log**, by contract — *"the shadowed content stays in the session log, so replaying the session deterministically reproduces the same condensed conversation."* The model sees less; the process holds the same. And **a fork is not smaller**: `session.fork` seeds the child with `source.events.slice(0, cut)`, the same events.
+
+So the only thing that actually shrinks the working set is a Session whose log is small. The session row's menu now offers **Continue in a new chat (condense this one)**: it condenses the source, carries the condensation into a new Session as that Session's entire history, opens it, and archives the source.
+
+**The summary is the compaction backend's own output**, not a second summarizer, so a continuation is condensed exactly the way an in-place `/compact` would condense it. `CompactionResult` already carries `summary: ContentBlock[]`, so the operation reads it from the call rather than re-parsing the log. A Session already condensed and untouched since has nothing new to condense — `compactNow` returns `null` — so the newest recorded `compaction/summary` is carried instead of refusing the handoff.
+
+**The continuation is a new conversation, not a seeded one.** It is created unseeded (`isSeeded: false`, `inheritedEventCount: 0`) and its one opening message is appended to it, attributed to the plugin rather than to the reader:
+
+```ts
+{ kind: 'plugin', plugin: 'handoff', form: 'notice', summary: boundContextSummary('Continued from an earlier conversation; its condensed history follows.') }
+```
+
+`plugin` is a source kind the Session format already classifies and `notice` is an allowed form, so the transcript shows one collapsed line instead of a wall of carried-over prose. A dedicated `handoff` kind would have been a versioned-format change for a display distinction: `session-format-v2-to-v3` holds `SOURCE_KINDS` as a closed set and throws `SessionFormatUnsupportedMigrationError` on an unclassified source, which blocks *migration*, not just rendering. The measured consequence of the choice is that the continuation's surface is exactly one node, and `deriveMessages()` returns that summary verbatim.
+
+**The compaction seam is read, not injected.** `ctx.get('compaction')` rather than a declared injection, so the Session Controller keeps working in a deployment that mounts no backend — and so a backend is not a build-time dependency of the controller. The slice the operation calls is declared locally as `HandoffSummarizer`, the same idiom `ui-sidebar-documentpreview` uses for the Remote it calls. A deployment without a backend refuses with `reason: 'no-compaction-backend'` rather than failing at mount time.
+
+**Every refusal names its precondition.** `session/handoff-unavailable` carries a stable `reason` — `no-compaction-backend`, `session-not-live`, `compaction-<backend code>`, `nothing-to-carry` — so a caller can say which one failed without parsing prose. A backend error with no `code` is **not** classified: it surfaces as itself, because swallowing a genuine fault into a business code is how a bug becomes a mystery. Archiving runs last and its failure is reported in the result (`archived: false`) rather than thrown, because a caller that cannot open the continuation has lost the work of producing it.
+
+**One UI consequence worth stating.** Condensing requires an idle Agent, so the menu item is disabled while the Session is running. The remaining refusals are swallowed by the row's existing non-fatal posture, which means a cold Session or an empty chat does nothing visible when clicked — the honest fix is a surfaced error, and it is not built.
+
+**What this does not fix.** The source Session is not released: it stays resident until the next harness start. After that restart it costs nothing as long as it is not prompted in, because `promoteOnHistoryOpen: false` makes opening a Session a read. Releasing a Session on archive is the remaining piece, and it is small — `AgentHandle.dispose()` exists and is documented to "stop/drain, unregister, remove the session, and unwind the scope", but both resume sites in `session-controller/src/agent.ts` do `(await this.ctx.agents.resume({ ... })).agent` and discard the only capability that can call it.
+
+
 ## Upstream sync
 
 The fork tracks upstream and merges rather than rebasing, so local commits keep their identity. Two syncs have happened, both onto an identical pair of checkouts:

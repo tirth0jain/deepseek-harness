@@ -42,6 +42,13 @@ export interface UiWorkspace {
    */
   forkSession(sessionId: SessionId): Promise<void>
   /**
+   * Continue a Session in a condensed new one, open it, and archive the source,
+   * unless a later navigation supersedes it.
+   * @param sessionId - source Session.
+   * @returns completion; a superseded request leaves its continuation available without selecting it.
+   */
+  handoffSession(sessionId: SessionId): Promise<void>
+  /**
    * Resolve the reusable or newly created blank Session for a Workspace.
    * @param workspaceId - target Workspace.
    * @returns a Session already addressable through the Session Controller.
@@ -173,6 +180,12 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
     const childId = await this.sessions.fork({ sessionId, increaseTitle: true })
     if (!navigation.aborted) this.replaceMain(childId, navigation)
+  }
+
+  async handoffSession(sessionId: SessionId): Promise<void> {
+    const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
+    const continuation = await this.sessions.handoff({ sessionId, inheritTitle: true })
+    if (!navigation.aborted) this.replaceMain(continuation.sessionId, navigation)
   }
 
   startSession(workspaceId?: WorkspaceId): void {

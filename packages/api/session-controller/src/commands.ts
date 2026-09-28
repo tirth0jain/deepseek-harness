@@ -11,11 +11,11 @@ import type {
 import type { FileUploadReceiptId } from '@deepseek-ai/dsh-client-file-upload/types'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import {
-  ReasoningEffortId, assistantStreamChunks, createUserMessage, freezeMessage,
+  ReasoningEffortId, assistantStreamChunks, boundContextSummary, createUserMessage, freezeMessage,
 } from '@deepseek-ai/dsh-llm'
-import type { MessageSource } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -42,6 +42,8 @@ import type {
   SessionCreateValue,
   SessionForkRequest,
   SessionForkValue,
+  SessionHandoffRequest,
+  SessionHandoffValue,
   SessionPromptRequest,
   SessionPromptValue,
   SessionRenameRequest,
@@ -290,6 +292,148 @@ export class SessionCommandController {
       }
     }
     return { sessionId: childId }
+  }
+
+  /**
+   * Continue one Session in a new one whose whole history is its condensed form.
+   *
+   * A long Session is retained in full for the life of the process, and neither
+   * archiving it nor compacting it changes that: the archive set is a durable
+   * flag, and compaction keeps the shadowed content in the log by contract. The
+   * only thing that actually shrinks the working set is a Session whose log is
+   * small, so this creates one and carries the condensation into it.
+   *
+   * The summary is the compaction backend's own output rather than a second
+   * summarizer, so a continued Session is condensed the same way an in-place
+   * `/compact` would condense it. A Session already condensed and untouched
+   * since has nothing new to condense, so its newest recorded summary is
+   * carried instead of refusing the handoff.
+   *
+   * The source is archived last, and a failure there does not discard the new
+   * Session: it is reported in the result, because a caller that cannot open
+   * the continuation has lost the work of producing it.
+   * @param request - the Session to continue elsewhere.
+   * @param signal - cancels the summarization, not the Session it produces.
+   * @returns the new Session identity and whether its source was archived.
+   */
+  async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    const fail = (reason: string, message: string): RemoteError =>
+      new RemoteError('session/handoff-unavailable', message, { sessionId: request.sessionId, reason })
+    // `ctx.get` is the inject-free read: this controller may be mounted in a
+    // deployment that has no compaction backend, so the seam cannot be a
+    // declared injection without making every route wait on it.
+    const compaction = this.ctx.get('compaction') as HandoffSummarizer | undefined
+    if (compaction === undefined) {
+      throw fail('no-compaction-backend', 'This deployment has no compaction backend, so no summary can be produced.')
+    }
+    const observed = await this.observeForHandoff(request.sessionId)
+    using source = observed
+    const agent = this.ctx.agents.get(request.sessionId)
+    if (agent === undefined) {
+      // `compactNow` serializes against driver turns, which needs the live
+      // Agent; a Session this process has only read has none.
+      throw fail('session-not-live', `Session "${request.sessionId}" is not live in this process, so it cannot be condensed.`)
+    }
+    let summary: readonly ContentBlock[] | undefined
+    try {
+      summary = (await compaction.compactNow(agent, signal))?.summary
+    } catch (error: unknown) {
+      if (signal.aborted) throw error
+      // A backend refusal names its own class; anything else is a real fault
+      // and is not this operation's to reinterpret.
+      const code = errorCodeOf(error)
+      if (code === undefined) throw error
+      throw fail(`compaction-${code}`, `The history could not be condensed: ${errorMessageOf(error)}`)
+    }
+    summary = summary === undefined || summary.length === 0 ? newestSummary(source.events) : summary
+    if (summary === undefined || summary.length === 0) {
+      throw fail('nothing-to-carry', 'This Session has no history to condense yet.')
+    }
+    let workspace: Workspace | undefined
+    try {
+      workspace = await this.forkWorkspace(source.header)
+    } catch (error: unknown) {
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to resolve handoff workspace for session "${request.sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+    const childId = brandString<SessionId>(`session-${randomUUID()}`)
+    const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+    try {
+      const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
+      await this.ctx.agents.create({
+        sessionId: childId,
+        // No seed: the continuation is a new conversation, and its one opening
+        // message is written below rather than inherited as a prefix.
+        meta: {
+          ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
+          parentSession: source.header.id,
+          isSeeded: false,
+          ...(composition.agentPreset === undefined
+            ? {}
+            : { agentPreset: composition.agentPreset }),
+        },
+        agentOptions: { provider, model },
+        setup: composition.setup,
+      })
+    } catch (error: unknown) {
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to start the continuation of session "${request.sessionId}": ${String(error)}`,
+        {},
+      )
+    }
+    const continuation = this.ctx.sessions.get(childId)
+    if (continuation === undefined) {
+      throw new RemoteError(
+        'gateway/internal',
+        `continuation "${childId}" was created but is not in the Session store`,
+        {},
+      )
+    }
+    continuation.append('user/message', createUserMessage({
+      content: carriedHistory(summary),
+      source: handoffSource(),
+    }), { surfaceOp: 'append' })
+    if (workspace !== undefined) {
+      try {
+        await workspace.attachSession(childId)
+      } catch (error: unknown) {
+        throw new RemoteError(
+          'session/workspace-attach-failed',
+          `session "${childId}" was continued but could not attach to workspace "${workspace.id}": ${String(error)}`,
+          { sessionId: childId, workspaceId: workspace.id },
+        )
+      }
+    }
+    let archived = false
+    try {
+      await this.ctx.workspaceRegistry.archiveSession(request.sessionId)
+      archived = true
+    } catch (error: unknown) {
+      this.ctx.logger.warn(
+        `handoff: continuation "${childId}" was created but archiving "${request.sessionId}" failed: ${String(error)}`,
+      )
+    }
+    return { sessionId: childId, archived }
+  }
+
+  /** Observe one handoff source, mapping its absence the way `fork` does. */
+  private async observeForHandoff(sessionId: SessionId): Promise<SessionObservation> {
+    try {
+      return await this.ctx.sessionQuery.observeSession(sessionId)
+    } catch (error: unknown) {
+      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+        throw new RemoteError('session/not-found', `session "${sessionId}" not found`, { sessionId })
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `handoff source unavailable for session "${sessionId}": ${String(error)}`,
+        {},
+      )
+    }
   }
 
   /**
@@ -751,6 +895,99 @@ const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
 
 /** The durable reference an attachment-bearing block carries, whichever store holds it. */
 type ReferencedAttachment = ImageAttachmentRef | FileAttachmentRef
+
+/**
+ * The newest condensation a Session log already recorded.
+ *
+ * A Session condensed and untouched since has nothing left to condense, so a
+ * handoff carries what the last compaction produced rather than refusing. The
+ * summary is log-only — the surface replacement is the `user/message` after it
+ * — so this reads the declaration, not a surface node.
+ * @param events - the source Session's complete log.
+ * @returns the newest summary's content blocks, or undefined when there is none.
+ */
+function newestSummary(events: readonly SessionEvent[]): readonly ContentBlock[] | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    // Read by name rather than by declared type: `compaction/summary` is
+    // declared by the compaction package, and this controller deliberately
+    // takes no build-time edge on a backend it may not have mounted.
+    const event = events[index] as { readonly type?: string; readonly data?: { readonly summary?: readonly ContentBlock[] } } | undefined
+    if (event?.type !== 'compaction/summary') continue
+    const summary = event.data?.summary
+    if (summary !== undefined && summary.length > 0) return summary
+  }
+  return undefined
+}
+
+/**
+ * The opening message of a continued Session: what it is, then the history.
+ * @param summary - the condensation carried over from the source Session.
+ * @returns model-visible blocks for the continuation's one opening message.
+ */
+function carriedHistory(summary: readonly ContentBlock[]): ContentBlock[] {
+  return [
+    {
+      type: 'text',
+      text: 'This conversation continues an earlier one in the same workspace. Everything before this point is '
+        + 'condensed into the summary below; the earlier conversation is archived and still readable.',
+    },
+    ...summary,
+  ]
+}
+
+/**
+ * Durable attribution for a continued Session's opening message.
+ *
+ * `plugin` is the source kind this Session format already classifies, and the
+ * `notice` form is what makes the transcript show one collapsed line instead of
+ * a wall of carried-over prose. A new kind would be a versioned-format change
+ * for a display distinction, so the existing one carries it.
+ * @returns the immutable message source for the carried history.
+ */
+function handoffSource(): MessageSource {
+  return {
+    kind: 'plugin',
+    plugin: 'handoff',
+    form: 'notice',
+    summary: boundContextSummary('Continued from an earlier conversation; its condensed history follows.'),
+  }
+}
+
+/** One classified failure's own code, when it carries one. */
+function errorCodeOf(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
+  return typeof error.code === 'string' && error.code.length > 0 ? error.code : undefined
+}
+
+/** One failure's diagnostic text, whatever shape it arrived in. */
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * The slice of the compaction seam a handoff calls.
+ *
+ * Declared here rather than imported so the Session Controller keeps working in
+ * a deployment that mounts no compaction backend, and so a backend is not a
+ * build-time dependency of the controller. The shape is the seam's own
+ * `compactNow` signature; `ctx.get` is what resolves it at call time.
+ */
+interface HandoffSummarizer {
+  /**
+   * Condense useful history in place on an idle Agent.
+   * @param agent - the idle Agent whose Session is condensed.
+   * @param signal - cancels the summarization.
+   * @returns the condensation, or null when no safe useful range exists.
+   */
+  compactNow(
+    agent: {
+      readonly session: Session
+      readonly options: { readonly provider?: string; readonly model?: string }
+      runMaintenance<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T>
+    },
+    signal: AbortSignal,
+  ): Promise<{ readonly summary: readonly ContentBlock[] } | null>
+}
 
 /** The chunk already pulled, then the rest of the same iteration. */
 async function* reopened(

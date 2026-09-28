@@ -211,6 +211,13 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/steer-unavailable': { readonly itemId: MessageId }
     'session/title-invalid': { readonly sessionId: SessionId }
     'session/fork-unavailable': { readonly sessionId: SessionId }
+    /**
+     * A handoff could not be completed. `reason` is a stable token naming which
+     * precondition failed — `no-compaction-backend`, `session-not-live`,
+     * `compaction-busy`, `compaction-<code>`, or `nothing-to-carry` — so a
+     * caller can say which one without parsing prose.
+     */
+    'session/handoff-unavailable': { readonly sessionId: SessionId; readonly reason: string }
     'subagent/not-found': {
       readonly parentSessionId: SessionId
       readonly childSessionId: SessionId
@@ -313,6 +320,22 @@ export interface SessionForkRequest {
 /** Identity of a newly forked Session. */
 export interface SessionForkValue {
   readonly sessionId: SessionId
+}
+
+/** Handoff request: the Session whose condensed history should open a new one. */
+export interface SessionHandoffRequest {
+  readonly sessionId: SessionId
+}
+
+/** Result of one handoff: the new Session, and whether its source was archived. */
+export interface SessionHandoffValue {
+  readonly sessionId: SessionId
+  /**
+   * Whether the source Session was archived. A new Session that exists while
+   * its source stayed in the list is reported rather than hidden, so a caller
+   * can still open the result and say what did not happen.
+   */
+  readonly archived: boolean
 }
 
 /** Session prompt request. */

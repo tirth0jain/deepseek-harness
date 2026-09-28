@@ -169,7 +169,7 @@ function workspaceGroupHalf(e: { clientY: number; currentTarget: HTMLElement }):
 
 type SessionTreeProps = Pick<
   WorkspaceBrowserProps,
-  'useSessionStatus' | 'startSession' | 'open' | 'forkSession'
+  'useSessionStatus' | 'startSession' | 'open' | 'forkSession' | 'handoffSession'
   | 'insertWorkspaceBefore' | 't' | 'usePanelInfo'
 > & {
   /** Always-mounted Session list snapshot. */
@@ -208,7 +208,7 @@ type SessionTreeProps = Pick<
 
 /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
 function SessionTree({
-  list, useSessionStatus, startSession, open, forkSession, workspaces, ungroupedSessionIds,
+  list, useSessionStatus, startSession, open, forkSession, handoffSession, workspaces, ungroupedSessionIds,
   archivedSessionIds,
   workspaceReady, usePanelInfo,
   onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
@@ -520,7 +520,7 @@ function SessionTree({
               now={now}
               onOpen={open}
               onRename={onSessionRename}
-              onFork={forkSession}
+              onFork={forkSession} onHandoff={handoffSession}
               onArchive={onSessionArchive}
               onReveal={node.id === revealSessionId && group.key === revealGroup
                 ? () => { onSessionRevealed(node.id) }
@@ -566,7 +566,7 @@ function SessionTree({
 
 /** The flat "In one list" body: every session is one draggable top-level row. */
 function FlatList({
-  list, sessionIds, useSessionStatus, open, forkSession, onSessionRename, onSessionArchive,
+  list, sessionIds, useSessionStatus, open, forkSession, handoffSession, onSessionRename, onSessionArchive,
   usePanelInfo, setSessionOrder,
   revealSessionId, onSessionRevealed, t,
 }: Pick<
@@ -574,6 +574,7 @@ function FlatList({
   | 'useSessionStatus'
   | 'open'
   | 'forkSession'
+  | 'handoffSession'
   | 'onSessionRename'
   | 'onSessionArchive'
   | 'usePanelInfo'
@@ -633,7 +634,7 @@ function FlatList({
               now={now}
               onOpen={open}
               onRename={onSessionRename}
-              onFork={forkSession}
+              onFork={forkSession} onHandoff={handoffSession}
               onArchive={onSessionArchive}
               onReveal={node.id === revealSessionId
                 ? () => { onSessionRevealed(node.id) }
@@ -774,6 +775,7 @@ export function WorkspaceBrowser({
   open,
   renameSession,
   forkSession,
+  handoffSession,
   renameWorkspace,
   deleteWorkspace,
   insertWorkspaceBefore,
@@ -1265,7 +1267,7 @@ export function WorkspaceBrowser({
                 list={list}
                 sessionIds={orderedFlatSessionIds}
                 useSessionStatus={useSessionStatus}
-                open={open} forkSession={forkSession}
+                open={open} forkSession={forkSession} handoffSession={handoffSession}
                 onSessionRename={onSessionRename} onSessionArchive={onSessionArchive}
                 setSessionOrder={saveSessionOrder}
                 revealSessionId={revealSessionId}
@@ -1281,6 +1283,7 @@ export function WorkspaceBrowser({
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
                 forkSession={forkSession}
+                handoffSession={handoffSession}
                 workspaces={orderedWorkspaces}
                 ungroupedSessionIds={orderedUngroupedSessionIds}
                 workspaceReady={workspaceReady}
