@@ -13,7 +13,7 @@ import type {
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { UserMessage } from '@deepseek-ai/dsh-llm/types'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import {
@@ -53,7 +53,7 @@ interface TestSnapshot extends SessionSnapshot {
 function snapshotWith(queue: UserMessage[], nextStep: UserMessage[] = []): TestSnapshot {
   return {
     sessionId: SID, running: true, removed: false, openState: 'open', openError: null,
-    hasMore: false, loadingOlder: false, promptError: null, blank: false, subagent: null,
+    hasMore: false, baseSeq: SessionSeq(0), loadingOlder: false, promptError: null, blank: false, subagent: null,
     pendingSubmissions: [],
     lastAgentError: null, promptAttempted: true, awaitingFirstTurn: false,
     testInbox: { 'next-turn': queue, 'next-step': nextStep },

@@ -2,7 +2,7 @@
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm/brand'
 import {
   PendingQuestion, planReviewOf, type QuestionComposerProps, type QuestionWait,
@@ -41,6 +41,7 @@ const sessionState: SessionState = {
   openState: 'open',
   openError: null,
   hasMore: false,
+  baseSeq: SessionSeq(0),
   loadingOlder: false,
   promptError: null,
   blank: false,

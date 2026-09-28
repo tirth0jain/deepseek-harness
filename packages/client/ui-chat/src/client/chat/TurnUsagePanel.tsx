@@ -1,9 +1,14 @@
-/** Completed-Turn token usage action and its accounting details dialog. */
+// Icon-row Turn-stat actions: a database pill labelled with the turn total
+// click-opens the per-Turn usage dialog, and a clock pill labelled with the
+// turn wall time and its throughput click-opens the Turn-time dialog. Both sit
+// right of the branch action in the tail's IconActions row, ahead of the plain
+// clock text.
 
 import { createPortal } from 'react-dom'
-import { IconDatabaseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconClockOutlineRegular, IconDatabaseOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TurnTokenUsage } from '../contract/chat-nodes.ts'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
+import { formatLatencySeconds, formatRunDuration, formatTokensPerSecond } from './message-chrome.ts'
 import { formatCacheHitPercent, formatExactTokens, formatTokens } from './token-format.ts'
 import { MEASURE_STYLE, useStatDialog } from './stat-dialog.ts'
 import css from './TurnUsagePanel.module.css'
@@ -11,6 +16,17 @@ import dialogCss from './stat-dialog.module.css'
 
 export interface TurnUsagePanelProps {
   usage: TurnTokenUsage
+  /** The owning view's locale seat, passed down as a plain prop. */
+  t: ChatViewSlotProps['t']
+}
+
+export interface TurnTimePanelProps {
+  /** Turn wall time in ms, the pill's label. */
+  runMs: number
+  /** Turn throughput, a pill segment and dialog row when known. */
+  tokensPerSecond?: number | undefined
+  /** Turn first-step TTFT in ms, a dialog row when known. */
+  ttftMs?: number | undefined
   /** The owning view's locale seat, passed down as a plain prop. */
   t: ChatViewSlotProps['t']
 }
@@ -101,6 +117,74 @@ export function TurnUsagePanel({ usage, t }: TurnUsagePanelProps) {
                 </span>
               )}
             </dd>
+          </dl>
+        </div>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
+/**
+ * Turn-time IconActions pill with a click-open Turn-time details dialog. The
+ * pill carries the Turn's own throughput beside its wall time, so the headline
+ * number is readable without opening the dialog; a Turn with no sampled
+ * generation keeps the plain duration with no dangling separator.
+ * @param props - Turn timing facts and locale seat.
+ * @returns The clock-and-duration trigger and, while open, its portaled dialog anchored above the trigger.
+ */
+export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePanelProps) {
+  const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
+  return (
+    <span ref={rootRef} className={css.root}>
+      <button
+        type="button"
+        className={css.trigger}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => { setOpen(!open) }}
+      >
+        <IconClockOutlineRegular />
+        <span className={css.label}>
+          {t('message.ranFor', { duration: formatRunDuration(runMs, t) })}
+          {tokensPerSecond !== undefined && (
+            <>
+              <span className={css.sep} aria-hidden>·</span>
+              {t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}
+            </>
+          )}
+        </span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className={dialogCss.panel}
+          role="dialog"
+          aria-label={t('message.turnTime.title')}
+          style={pos ?? MEASURE_STYLE}
+        >
+          <div className={dialogCss.title}>
+            <span className={dialogCss.titleLabel}>
+              <IconClockOutlineRegular />
+              {t('message.turnTime.title')}
+            </span>
+          </div>
+          <div className={dialogCss.titleRule} aria-hidden />
+          <dl className={dialogCss.details} data-turn-time-details>
+            <dt>{t('message.turnTime.duration')}</dt>
+            <dd>{formatRunDuration(runMs, t)}</dd>
+            {tokensPerSecond !== undefined && (
+              <>
+                <dt>{t('message.turnTime.speed')}</dt>
+                <dd>{t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}</dd>
+              </>
+            )}
+            {ttftMs !== undefined && (
+              <>
+                <dt>{t('message.turnTime.ttft')}</dt>
+                <dd>{t('duration.seconds', { seconds: formatLatencySeconds(ttftMs) })}</dd>
+              </>
+            )}
           </dl>
         </div>,
         document.body,

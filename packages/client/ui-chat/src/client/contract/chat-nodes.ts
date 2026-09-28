@@ -91,6 +91,10 @@ export interface TurnTailChatData {
   readonly closing: FinalAssistantChatData | null
   /** Whether non-rendered later evidence makes the closing seq non-tail. */
   readonly branchUnavailable: boolean
+  /** First-step TTFT in ms; absent when that step recorded none. */
+  readonly ttftMs?: number
+  /** Turn throughput over the summed LLM span of its sampled steps. */
+  readonly tokensPerSecond?: number
   /** Exact per-Turn accounting; absent when the loaded evidence is incomplete. */
   readonly tokenUsage?: TurnTokenUsage
 }

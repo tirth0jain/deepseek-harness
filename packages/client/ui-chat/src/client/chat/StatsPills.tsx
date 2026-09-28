@@ -4,15 +4,21 @@
 // Mounted on 'conversation.composer.dock' so it sticks with the composer in the
 // active conversation scrollport (see ConversationRoot data-conversation-scroll).
 
-import { memo, useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { IconDatabaseOutlineRegular, IconGaugeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconDatabaseOutlineRegular, IconDownloadOutlineRegular, IconGaugeOutlineRegular, IconLoadingOutlineRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
+import type { SessionSnapshotSelector } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: merges the sessionStats key into SessionProjectionMap for useProjection.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
+// Type-only: merges the turnOutline key into SessionProjectionMap for useProjection.
+import type {} from '@deepseek-ai/dsh-session-turn-outline/client'
 import type { TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
-import type { ChatViewSlotProps, PerformanceUsageInjected } from '../contract/slots.ts'
+import type { ChatViewSlotProps, PerformanceUsageInjected, StatsPillsInjected } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { formatTokensPerSecond } from './message-chrome.ts'
 import { assistantStepReading } from '../contract/turn-metrics.ts'
@@ -67,10 +73,8 @@ export function deriveStats(nodes: ChatSnapshot['legacy']['nodes']): WindowStats
     if (node.kind !== 'assistant') continue
     turns.add(node.turn)
     steps += 1
-    if (node.timing !== undefined && node.timing.stepStartTime !== null) {
-      llmMs += Math.max(0, node.timing.completedTime - node.timing.stepStartTime)
-    }
     const reading = assistantStepReading(node)
+    if (reading.llmMs !== null) llmMs += reading.llmMs
     if (reading.ttftMs !== null) {
       ttftMs += reading.ttftMs
       ttftSteps += 1
@@ -120,9 +124,11 @@ export function billedInputTokens(usage: TokenUsageProjection): number {
 }
 
 /** Props: the conversation-snapshot selector plus the projection read seat. */
-export interface StatsPillsProps extends InjectFace<PerformanceUsageInjected> {
+export interface StatsPillsProps extends InjectFace<PerformanceUsageInjected>, StatsPillsInjected {
   useChat: SnapshotSelectorHook<ChatSnapshot>
   useProjection: UseProjection
+  /** Session lifecycle state: the pager's remaining-history flag and window base gate the load control. */
+  useSession: SessionSnapshotSelector
   /** The owning dock's locale seat. */
   t: ChatViewSlotProps['t']
 }
@@ -313,12 +319,62 @@ function UsagePill({ usage, t, dialog }: {
   )
 }
 
-export const StatsPills = memo(function StatsPills({ useChat, useProjection, usePerformanceUsage, t }: StatsPillsProps) {
+/**
+ * The load control beside the usage pill: walks the window back through
+ * history one Turn at a time. A window that starts mid-Turn holds only part of
+ * a Turn, and a partially held Turn reports no aggregate, so the button first
+ * completes that Turn; once the window begins exactly at a Turn's start, the
+ * Turn it names is the one immediately before — the next Turn the window does
+ * not hold. Either way the label says which Turn a press will bring in, and
+ * the press rides the `turn/start` seq the host outline publishes, which the
+ * loop logs before the Turn's prompt and steps. One press therefore loads a
+ * whole Turn: the reader's message through the end of the response.
+ */
+function LoadTurnPill({ turn, busy, onLoad, t }: {
+  turn: number
+  busy: boolean
+  onLoad: () => void
+  t: ChatViewSlotProps['t']
+}) {
+  return (
+    <span className={css.anchor}>
+      <button
+        type="button"
+        className={css.pill}
+        disabled={busy}
+        aria-busy={busy ? 'true' : undefined}
+        aria-label={t('chat.loadTurn.aria', { turn })}
+        onClick={onLoad}
+      >
+        {busy ? <IconLoadingOutlineRegular /> : <IconDownloadOutlineRegular />}
+        <span className={css.label}>
+          {busy ? t('chat.loadTurn.busy', { turn }) : t('chat.loadTurn', { turn })}
+        </span>
+      </button>
+    </span>
+  )
+}
+
+export const StatsPills = memo(function StatsPills({
+  useChat, useProjection, useSession, loadThrough, usePerformanceUsage, t,
+}: StatsPillsProps) {
   const mode = usePerformanceUsage(value => value)
   const settledNodes = useChat(s => s.legacy.nodes)
   const usage = useProjection('tokenUsage')
+  // Whole-log outline: names every Turn of the session whether or not the
+  // paged window holds it, which is what makes an unheld Turn detectable here.
+  const outline = useProjection('turnOutline')
+  const hasMore = useSession(s => s.hasMore)
+  // The window's oldest EVENT, which is what tells a Turn held whole from one
+  // the window enters midway. The head NODE's anchor cannot: a Turn's
+  // `turn/start` precedes its first visible node, so that node's anchor sits
+  // after the Turn's own seq whether or not the window covers the Turn's start.
+  const baseSeq = useSession(s => s.baseSeq)
   // One exclusive slot for both dialogs: opening either pill closes the other.
   const [openPill, setOpenPill] = useState<'time' | 'usage' | null>(null)
+  // The Turn whose load is in flight, by number: a control that re-targets
+  // mid-flight must not leave a stale busy flag behind.
+  const [loadingTurn, setLoadingTurn] = useState<number | null>(null)
   // Every figure rides the durable sessionStats projection, so paging and
   // compaction cannot change any of them; an assembly without the unit falls
   // back to the window-scoped fold wholesale (same field names), paid only
@@ -329,6 +385,40 @@ export const StatsPills = memo(function StatsPills({ useChat, useProjection, use
   // billing (e.g. every request failed) shows its counts without a usage pill.
   const hasTokens = usage !== undefined
     && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)
+  // Which Turn a press brings in, walking history back one Turn per press:
+  // the Turn the window's head sits inside when it started midway through one
+  // (that Turn's aggregate is unknown until it is whole), otherwise the Turn
+  // immediately before the window's first. `hasMore` is loadThrough's own
+  // precondition, and without it the control could never discharge.
+  const pendingTurn = useMemo(() => {
+    if (outline === undefined || outline.length === 0 || !hasMore) return undefined
+    // Newest first, so the first entry at or before the head is the Turn the
+    // head sits in.
+    let head = -1
+    for (let index = outline.length - 1; index >= 0; index -= 1) {
+      const entry = outline[index]
+      if (entry !== undefined && entry.seq <= baseSeq) {
+        head = index
+        break
+      }
+    }
+    // The head precedes every known Turn: the window already starts before
+    // this session's first Turn, so no press can add one.
+    const entry = head < 0 ? undefined : outline[head]
+    if (entry === undefined) return undefined
+    // Midway through the head Turn: finish that one before reaching past it.
+    if (entry.seq < baseSeq) return entry
+    // The window begins exactly at the head Turn's start, so that Turn is
+    // whole; the next one back is what the window does not hold.
+    return head === 0 ? undefined : outline[head - 1]
+  }, [outline, hasMore, baseSeq])
+  const loadTurn = useCallback((seq: SessionSeq, turn: number): void => {
+    setLoadingTurn(turn)
+    void loadThrough(seq)
+      // The pager surfaces its own failure; this control only needs to settle.
+      .catch(() => { /* keep the button available for a retry */ })
+      .finally(() => { setLoadingTurn(null) })
+  }, [loadThrough])
   if (mode === 'compact') {
     const speed = stats.decodeMs > 0
       ? t('message.tokensPerSecond', { tps: formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1_000)) })
@@ -344,7 +434,7 @@ export const StatsPills = memo(function StatsPills({ useChat, useProjection, use
       </div>
     )
   }
-  if (stats.steps === 0 && !hasTokens) return null
+  if (stats.steps === 0 && !hasTokens && pendingTurn === undefined) return null
   return (
     <div className={css.root} data-composer-stats>
       {stats.steps > 0 && (
@@ -365,6 +455,14 @@ export const StatsPills = memo(function StatsPills({ useChat, useProjection, use
             open: openPill === 'usage',
             setOpen: (open) => { setOpenPill(open ? 'usage' : null) },
           }}
+        />
+      )}
+      {pendingTurn !== undefined && (
+        <LoadTurnPill
+          turn={pendingTurn.turn}
+          busy={loadingTurn === pendingTurn.turn}
+          onLoad={() => { loadTurn(pendingTurn.seq, pendingTurn.turn) }}
+          t={t}
         />
       )}
     </div>

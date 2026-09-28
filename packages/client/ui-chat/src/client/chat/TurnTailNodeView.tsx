@@ -2,7 +2,7 @@ import { memo } from 'react'
 import type { InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ChatNodeViewProps, PerformanceUsageInjected, TurnTailOwnerProps } from '../contract/slots.ts'
 import { MessageIconActions } from './MessageIconActions.tsx'
-import { TurnUsagePanel } from './TurnUsagePanel.tsx'
+import { TurnTimePanel, TurnUsagePanel } from './TurnUsagePanel.tsx'
 import { assistantText } from './turn-assistant.ts'
 import { hasAssistantReplyContent } from '../contract/assistant-content.ts'
 import type { ChatNode } from '../contract/chat-nodes.ts'
@@ -47,12 +47,30 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
   const owner: TurnTailOwnerProps = { turn, seq: closing?.finalNode.seq ?? data.seq, openFile }
   const tail = renderSlot('conversation.chat.turnTail', owner)
   if (closing === null) return tail === null ? null : <div className={css.root} data-turn-tail={data.turn}>{tail}</div>
+  const runMs = turn.start === undefined || turn.end === undefined
+    ? undefined
+    : Math.max(0, turn.end.time - turn.start.time)
   // Interruption-frozen partials carry no messageId, so they address no
   // durable message and contribute no per-message actions.
   const messageId = closing.finalNode.messageId
   const assistantActions = messageId === undefined
     ? null
     : renderSlot('conversation.chat.assistant-actions', { messageId })
+  // Both Turn-stat pills are 'detailed' readings: the preference's compact
+  // mode keeps the footer to the plain message clock.
+  const turnStats = !detailed ? null : (
+    <>
+      {data.tokenUsage !== undefined && <TurnUsagePanel usage={data.tokenUsage} t={t} />}
+      {runMs !== undefined && (
+        <TurnTimePanel
+          runMs={runMs}
+          tokensPerSecond={data.tokensPerSecond}
+          ttftMs={data.ttftMs}
+          t={t}
+        />
+      )}
+    </>
+  )
   return (
     <div
       className={css.root}
@@ -70,9 +88,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
         branchUnavailable={data.branchUnavailable || hasLaterChatNode}
         className={css.actions}
         extraActions={assistantActions}
-        usageAction={detailed && data.tokenUsage !== undefined
-          ? <TurnUsagePanel usage={data.tokenUsage} t={t} />
-          : null}
+        usageAction={turnStats}
         t={t}
       />
     </div>

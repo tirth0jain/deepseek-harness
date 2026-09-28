@@ -22,7 +22,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatNodeInjected, ChatScrollPosition, ChatViewInjected, QuotaNoticeInjected, QuotaNoticeState, TurnTailOwnerProps,
+  ChatNodeInjected, ChatScrollPosition, ChatViewInjected, PerformanceUsageInjected, QuotaNoticeInjected,
+  QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
@@ -283,8 +284,21 @@ export function apply(ctx: Context): void {
 
   ctx.slots.inject('conversation.composer.dock', () =>
     ctx.slots.register({
-      name: 'conversation.composer.dock', id: 'stats', order: 0, locale: NS,
-      inject: () => ({ hooks: { performanceUsage } }),
+      name: 'conversation.composer.dock',
+      id: 'stats',
+      order: 0,
+      locale: NS,
+      // The dock sits outside ChatView, so it cannot inherit the view's own
+      // paging verb; the load control takes it from the same Session binding.
+      // Resolved per press: composition may run before the binding exists.
+      inject: (sessionId: SessionId): StatsPillsInjected & PerformanceUsageInjected => ({
+        hooks: { performanceUsage },
+        loadThrough: (seq) => {
+          const binding = ctx.sessions.binding(sessionId)
+          if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
+          return binding.session.loadThrough(seq)
+        },
+      }),
     }, StatsPills))
 
   ctx.slots.inject('conversation.approval.detail', () =>

@@ -1,11 +1,11 @@
-// Assistant timing readings and statistics formatting.
+// Per-turn latency/throughput fold and the footer figure formatters.
 
 import { describe, expect, it } from 'vitest'
 import type {
-  AssistantMessageNode,
+  AssistantMessageNode, ConversationNode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
-import { assistantStepReading } from '../src/client/contract/turn-metrics.ts'
-import { formatTokensPerSecond } from '../src/client/chat/message-chrome.ts'
+import { assistantStepReading, deriveTurnMetrics } from '../src/client/contract/turn-metrics.ts'
+import { formatLatencySeconds, formatTokensPerSecond } from '../src/client/chat/message-chrome.ts'
 import { formatCacheHitPercent } from '../src/client/chat/token-format.ts'
 
 interface StepSpec {
@@ -22,34 +22,40 @@ const assistant = ({ seq, turn, step, timing, usage }: StepSpec): AssistantMessa
   ...(usage === undefined ? {} : { usage }),
 })
 
+const user = (seq: number): UserMessageNode => ({
+  kind: 'user', seq, time: seq * 1_000, content: [{ type: 'text', text: 'hi' }] as never, source: null,
+})
+
 describe('assistantStepReading', () => {
-  it('derives ttft, decode time, and output tokens from a fully recorded step', () => {
+  it('derives ttft, decode time, llm span, and output tokens from a fully recorded step', () => {
     const reading = assistantStepReading(assistant({
       seq: 2, turn: 1, step: 1,
       timing: { stepStartTime: 1_000, firstTokenTime: 1_800, completedTime: 6_800 },
       usage: { outputTokens: 200 },
     }))
-    expect(reading).toEqual({ ttftMs: 800, decodeMs: 5_000, outputTokens: 200 })
+    expect(reading).toEqual({ ttftMs: 800, decodeMs: 5_000, llmMs: 5_800, outputTokens: 200 })
   })
 
   it('returns nulls when timing is absent', () => {
     const reading = assistantStepReading(assistant({ seq: 2, turn: 1, step: 1, usage: { outputTokens: 5 } }))
-    expect(reading).toEqual({ ttftMs: null, decodeMs: null, outputTokens: 5 })
+    expect(reading).toEqual({ ttftMs: null, decodeMs: null, llmMs: null, outputTokens: 5 })
   })
 
   it('needs both boundaries for ttft and clamps negative spans to zero', () => {
     expect(assistantStepReading(assistant({
       seq: 2, turn: 1, step: 1,
       timing: { stepStartTime: null, firstTokenTime: 1_800, completedTime: 6_800 },
-    }))).toEqual({ ttftMs: null, decodeMs: 5_000, outputTokens: null })
+    }))).toEqual({ ttftMs: null, decodeMs: 5_000, llmMs: null, outputTokens: null })
+    // A step the client never streamed keeps its span: only the decode window
+    // needs the live first-token reading.
     expect(assistantStepReading(assistant({
       seq: 2, turn: 1, step: 1,
       timing: { stepStartTime: 1_000, firstTokenTime: null, completedTime: 6_800 },
-    }))).toEqual({ ttftMs: null, decodeMs: null, outputTokens: null })
+    }))).toEqual({ ttftMs: null, decodeMs: null, llmMs: 5_800, outputTokens: null })
     expect(assistantStepReading(assistant({
       seq: 2, turn: 1, step: 1,
       timing: { stepStartTime: 2_000, firstTokenTime: 1_500, completedTime: 1_200 },
-    }))).toEqual({ ttftMs: 0, decodeMs: 0, outputTokens: null })
+    }))).toEqual({ ttftMs: 0, decodeMs: 0, llmMs: 0, outputTokens: null })
   })
 
   it('rejects non-object, missing, and non-finite usage token counts', () => {
@@ -62,9 +68,101 @@ describe('assistantStepReading', () => {
   })
 })
 
+describe('deriveTurnMetrics', () => {
+  it('takes ttft from the lowest step and throughput over all spanned steps', () => {
+    const nodes: ConversationNode[] = [
+      user(1),
+      // Out of step order on purpose: the lowest step owns the ttft slot.
+      assistant({
+        seq: 4, turn: 1, step: 2,
+        timing: { stepStartTime: 10_000, firstTokenTime: 10_200, completedTime: 12_000 },
+        usage: { outputTokens: 60 },
+      }),
+      assistant({
+        seq: 2, turn: 1, step: 1,
+        timing: { stepStartTime: 1_000, firstTokenTime: 2_200, completedTime: 4_000 },
+        usage: { outputTokens: 40 },
+      }),
+    ]
+    // 100 tokens over 5s of LLM span (2s + 3s), tool gaps excluded by construction.
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ ttftMs: 1_200, tokensPerSecond: 20 })
+  })
+
+  it('emits ttft without throughput when no step carries usage', () => {
+    const nodes = [assistant({
+      seq: 2, turn: 1, step: 1,
+      timing: { stepStartTime: 1_000, firstTokenTime: 1_900, completedTime: 3_000 },
+    })]
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ ttftMs: 900 })
+  })
+
+  it('emits throughput from a later step that the client never streamed', () => {
+    const nodes = [
+      assistant({ seq: 2, turn: 1, step: 1 }),
+      assistant({
+        seq: 4, turn: 1, step: 2,
+        timing: { stepStartTime: 10_000, firstTokenTime: null, completedTime: 12_500 },
+        usage: { outputTokens: 30 },
+      }),
+    ]
+    // 30 tokens over the recorded span: no live decode window was needed.
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ tokensPerSecond: 12 })
+  })
+
+  it('omits turns with no readings and zero-span throughput', () => {
+    const nodes = [
+      assistant({ seq: 2, turn: 1, step: 1 }),
+      assistant({
+        seq: 4, turn: 2, step: 1,
+        timing: { stepStartTime: null, firstTokenTime: 5_000, completedTime: 5_000 },
+        usage: { outputTokens: 10 },
+      }),
+    ]
+    expect(deriveTurnMetrics(nodes).size).toBe(0)
+  })
+
+  it('omits a rate for a step that generated no tokens', () => {
+    const nodes = [assistant({
+      seq: 2, turn: 1, step: 1,
+      timing: { stepStartTime: 1_000, firstTokenTime: 1_100, completedTime: 3_000 },
+      usage: { outputTokens: 0 },
+    })]
+    // The ttft reading survives; a 0 tok/s rate would only be noise.
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ ttftMs: 100 })
+  })
+
+  it('keeps turns independent and ignores non-assistant nodes', () => {
+    const nodes: ConversationNode[] = [
+      user(1),
+      assistant({
+        seq: 2, turn: 1, step: 1,
+        timing: { stepStartTime: 1_000, firstTokenTime: 1_400, completedTime: 2_000 },
+        usage: { outputTokens: 10 },
+      }),
+      user(3),
+      assistant({
+        seq: 4, turn: 2, step: 1,
+        timing: { stepStartTime: 4_000, firstTokenTime: 4_100, completedTime: 6_000 },
+        usage: { outputTokens: 100 },
+      }),
+    ]
+    const metrics = deriveTurnMetrics(nodes)
+    expect(metrics.get(1)).toEqual({ ttftMs: 400, tokensPerSecond: 10 })
+    expect(metrics.get(2)).toEqual({ ttftMs: 100, tokensPerSecond: 50 })
+  })
+})
+
 describe('footer figure formatters', () => {
   it('omits a redundant decimal zero in cache-hit percentages', () => {
     expect(formatCacheHitPercent(1, 2, 1)).toBe('50')
+  })
+
+  it('formats latency with one decimal under ten seconds and whole seconds beyond', () => {
+    expect(formatLatencySeconds(840)).toBe('0.8')
+    expect(formatLatencySeconds(1_000)).toBe('1')
+    expect(formatLatencySeconds(9_949)).toBe('9.9')
+    expect(formatLatencySeconds(12_400)).toBe('12')
+    expect(formatLatencySeconds(-5)).toBe('0')
   })
 
   it('formats throughput with whole tokens from ten up and one decimal below', () => {

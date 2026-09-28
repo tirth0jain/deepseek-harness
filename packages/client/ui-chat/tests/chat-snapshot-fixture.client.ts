@@ -15,6 +15,7 @@ import {
 import { orderedVisibleChatNodes } from '../src/client/conversation-nodes/chat-snapshot-builder.ts'
 import { ChatTurnProcessProjector } from '../src/client/conversation-nodes/turn-process-presentation.ts'
 import { hasAssistantReplyContent } from '../src/client/contract/assistant-content.ts'
+import { deriveTurnMetrics } from '../src/client/contract/turn-metrics.ts'
 import {
   isSubagentDelegationTool, sameTurnProcessSpec, TURN_PROCESS_INDEPENDENT_KINDS,
   type TurnProcessSpec,
@@ -469,6 +470,9 @@ export function chatSnapshotFixture(input: {
         && location.turn.turn === turnNumber
     })
     const tokenUsage = input.turnUsages?.get(turnNumber)
+    // The real Definition folds these from the Turn's Assistant nodes; the
+    // fixture mirrors that fold because it builds Node data directly.
+    const metrics = deriveTurnMetrics(legacy.nodes).get(turnNumber)
     const tailData = {
       turn: turnNumber,
       seq: endSeq,
@@ -477,6 +481,8 @@ export function chatSnapshotFixture(input: {
       branchUnavailable: closing === null
         || preceding?.kind !== 'assistant-step'
         || (preceding.data as ReturnType<typeof assistantData>).finalNode.seq !== closing.finalNode.seq,
+      ...metrics?.ttftMs === undefined ? {} : { ttftMs: metrics.ttftMs },
+      ...metrics?.tokensPerSecond === undefined ? {} : { tokensPerSecond: metrics.tokensPerSecond },
       ...tokenUsage === undefined ? {} : { tokenUsage },
     }
     dataStore.set('turn-tail', tailData)
