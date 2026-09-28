@@ -60,6 +60,17 @@ export function formatRunDuration(ms: number, t: RunDurationTranslate): string {
 }
 
 /**
+ * Sub-turn latency figure: one decimal under ten seconds, whole seconds
+ * beyond. Unit-less so the locale template owns the second suffix.
+ * @param ms - Latency in milliseconds (negatives clamp to zero).
+ * @returns Display number in seconds without unit.
+ */
+export function formatLatencySeconds(ms: number): string {
+  const s = Math.max(0, ms) / 1000
+  return s < 10 ? String(Math.round(s * 10) / 10) : String(Math.round(s))
+}
+
+/**
  * Localized live elapsed time without padded seconds or early rollover.
  * @param ms - Elapsed duration in milliseconds (negatives clamp to zero).
  * @param t - Translate seat supplying the duration templates.

@@ -9,6 +9,7 @@ import { useDetailedPresentation } from './presentation-fixture.client.ts'
 import { useDisclosure } from '../src/client/chat/use-disclosure.ts'
 import { StatsPills } from '../src/client/chat/StatsPills.tsx'
 import { zh } from '../src/client/locale.ts'
+import { sessionSelector } from './session-snapshot-fixture.client.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 
 const t: AssistantMarkdownProps['t'] = makeTranslate(zh, commonZh)
@@ -52,6 +53,8 @@ describe('render branch tails', () => {
         usePerformanceUsage={selector => selector('detailed')}
         t={t}
         useChat={bindSnapshotSelector(source)}
+        useSession={bindSnapshotSelector(sessionSelector())}
+        loadThrough={() => Promise.resolve()}
         useProjection={() => undefined}
       />,
     )

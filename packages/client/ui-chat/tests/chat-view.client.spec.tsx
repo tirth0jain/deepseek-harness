@@ -98,6 +98,7 @@ function sessionSnapshot(overrides: Partial<TestSessionSnapshot> = {}): TestSess
     openState: 'open',
     openError: null,
     hasMore: false,
+    baseSeq: SessionSeq(0),
     loadingOlder: false,
     promptError: null,
     blank: false,
@@ -2204,7 +2205,8 @@ describe('ChatView', () => {
       turnEnds: new Map([[1, 6]]),
     })
     const view = render(<h.ChatView {...h.props} />)
-    const toggle = view.getByRole('button', { name: '用时 4秒' })
+    const toggle = turnProcessControl(view.container)!
+    expect(toggle.textContent).toBe('用时 4秒')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.getAttribute('data-turn-process-tool-calls')).toBe('1')
     expect(toggle.getAttribute('data-turn-process-messages')).toBe('1')
@@ -2230,12 +2232,12 @@ describe('ChatView', () => {
     expect(members.map(member => member.getAttribute('hidden'))).toEqual([null, null, null])
 
     act(() => { h.set({ nodes: [user(1, 'question'), first] }) })
-    expect(view.getByRole('button', { name: '用时 4秒' }).getAttribute('aria-expanded')).toBe('false')
+    expect(turnProcessControl(view.container)?.getAttribute('aria-expanded')).toBe('false')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
     act(() => { h.set({
       nodes: [user(1, 'question'), first, toolResult(3, 'a'), toolResult(4, 'b', 'subagent'), second],
     }) })
-    const renewedToggle = view.getByRole('button', { name: '用时 4秒' })
+    const renewedToggle = turnProcessControl(view.container)!
     expect(renewedToggle.getAttribute('aria-expanded')).toBe('true')
     expect(members[0]?.getAttribute('hidden')).toBeNull()
   })
@@ -2923,7 +2925,7 @@ describe('ChatView', () => {
     expect(view.getAllByRole('button', { name: '复制' })).toHaveLength(4)
   })
 
-  it('the assistant footer omits turn run time', () => {
+  it('the actions-owning assistant footer shows the turn run time', () => {
     const h = makeHarness({
       nodes: [
         user(1, 'hi'), // time 1_000
@@ -2936,10 +2938,10 @@ describe('ChatView', () => {
     })
     const view = render(<h.ChatView {...h.props} />)
     // The exact turn/end includes trailing tool activity after the final text.
-    expect(view.container.querySelector('[data-turn-tail="1"]')?.textContent).not.toContain('用时 19秒')
+    expect(view.container.querySelector('[data-turn-tail="1"]')?.textContent).toContain('用时 19秒')
   })
 
-  it('the assistant footer omits hour-scale run time', () => {
+  it('the actions-owning assistant footer shows an hour-scale run time', () => {
     const h = makeHarness({
       nodes: [
         user(1, 'hi'),
@@ -2952,10 +2954,10 @@ describe('ChatView', () => {
     })
     const view = render(<h.ChatView {...h.props} />)
     expect(view.container.querySelector('[data-turn-tail="1"]')?.textContent)
-      .not.toContain('用时 1小时05分03秒')
+      .toContain('用时 1小时05分03秒')
   })
 
-  it('the settled footer shows usage only in Detailed mode', () => {
+  it('the settled footer shows usage and per-turn speed only in Detailed mode', () => {
     const first: AssistantMessageNode = {
       kind: 'assistant', seq: 2, time: 2_000, turn: 1, step: 1, blocks: [{ kind: 'text', text: 'mid' }],
       timing: { stepStartTime: 1_000, firstTokenTime: 2_200, completedTime: 5_200 },
@@ -2990,13 +2992,30 @@ describe('ChatView', () => {
     expect(dialog.textContent).toContain('未缓存输入5,060 tok')
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(view.queryByRole('dialog')).toBeNull()
-    const footer = view.container.querySelector<HTMLElement>('[data-turn-tail="1"]')!
-    expect(within(footer).queryByRole('button', { name: /用时/ })).toBeNull()
+    // The turn footer owns the per-Turn readings: the process control above
+    // carries the same run time, so scope every pill query to the footer.
+    const footer = () => view.container.querySelector<HTMLElement>('[data-turn-tail="1"]')!
+    // The time pill carries the run time and this Turn's own LLM throughput
+    // (100 tokens over the two steps' 6.4s of LLM span); first-step ttft
+    // (1.2s) stays dialog-only.
+    const timeTrigger = within(footer()).getByRole('button', { name: /用时 19秒/ })
+    expect(timeTrigger.textContent).toBe('用时 19秒·16 tok/s')
+    expect(view.queryByText(/首 token/)).toBeNull()
+    fireEvent.click(timeTrigger)
+    const timeDialog = view.getByRole('dialog')
+    expect(timeDialog.getAttribute('aria-label')).toBe('本轮用时和速度')
+    expect(timeDialog.textContent).toContain('本轮总用时19秒')
+    expect(timeDialog.textContent).toContain('输出速度（TPS）16 tok/s')
+    expect(timeDialog.textContent).toContain('首 token 用时（TTFT）1.2秒')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(within(footer()).getByRole('button', { name: /用时 19秒/ })).toBeTruthy()
     expect(turnProcessControl(view.container)?.textContent).toBe('用时 19秒')
     act(() => { h.setPerformanceUsage('compact') })
     expect(view.queryByRole('button', { name: /用量/ })).toBeNull()
+    expect(within(footer()).queryByRole('button', { name: /用时/ })).toBeNull()
     act(() => { h.setPerformanceUsage('detailed') })
     expect(view.getByRole('button', { name: /用量/ })).toBeTruthy()
+    expect(within(footer()).getByRole('button', { name: /用时/ })).toBeTruthy()
   })
 
   it('withholds the usage-details trigger when turn usage is outside the window', () => {
@@ -3012,7 +3031,9 @@ describe('ChatView', () => {
     })
     const view = render(<h.ChatView {...h.props} />)
     const footer = view.container.querySelector<HTMLElement>('[data-turn-tail="1"]')!
-    expect(within(footer).queryByRole('button', { name: /用时/ })).toBeNull()
+    // Timing rides the loaded window, so the Turn's own time pill is available;
+    // only the accounting pill is withheld with its evidence outside the window.
+    expect(within(footer).getByRole('button', { name: /用时 19秒/ })).toBeTruthy()
     expect(turnProcessControl(view.container)?.textContent).toBe('用时 19秒')
     expect(view.queryByRole('button', { name: /用量/ })).toBeNull()
   })

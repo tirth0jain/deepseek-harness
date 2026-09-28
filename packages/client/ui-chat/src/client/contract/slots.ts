@@ -228,6 +228,16 @@ export interface PerformanceUsageInjected {
   }
 }
 
+/**
+ * Injected face of the composer-dock session statistics. The dock is composed
+ * outside the Chat view, so the paging verb its load control needs is resolved
+ * from the Session binding rather than inherited from the view.
+ */
+export interface StatsPillsInjected {
+  /** Page history back through seq; resolves when the window covers it. */
+  loadThrough: (seq: SessionSeq) => Promise<void>
+}
+
 /** Business callbacks injected into the Chat view. */
 export interface ChatViewInjected {
   hooks: {

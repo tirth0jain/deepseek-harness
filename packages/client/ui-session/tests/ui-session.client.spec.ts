@@ -11,7 +11,7 @@ import type {
 import { MutableSessionEventSource } from '@deepseek-ai/dsh-api-session-controller/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { HostObservable, RootStandardSourceContribution } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
@@ -95,6 +95,7 @@ function createSessionsBench(ctx: Context): SessionsBench {
         openState: 'open',
         openError: null,
         hasMore: false,
+        baseSeq: SessionSeq(0),
         loadingOlder: false,
         promptError: null,
         blank: false,
