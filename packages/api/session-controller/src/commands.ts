@@ -17,7 +17,6 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, Message, MessageSource } from '@deepseek-ai/dsh-llm'
 import { boundContextSummary } from '@deepseek-ai/dsh-llm'
-import { isCompactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
@@ -1027,7 +1026,8 @@ function attachmentReadFailure(error: unknown, fallback: string): Error {
  * @returns the label opening its carried text.
  */
 function speakerOf(message: Message): string {
-  if (isCompactCheckpointSource(message.source)) return 'Condensed history'
+  const source = message.source as { readonly kind?: unknown }
+  if (source.kind === 'compact-checkpoint') return 'Condensed history'
   return message.role === 'user' ? 'User' : 'Assistant'
 }
 
