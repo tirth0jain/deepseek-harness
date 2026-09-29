@@ -830,10 +830,9 @@ describe('LlmRuntime', () => {
 
     // A rate without an output price would compute a total that is silently
     // wrong, so it is refused where a bad adapter report is refused.
-    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
-      code: 'INVALID_MODEL_COST',
-      message: expect.stringContaining('llm.cost states invalid cost metadata') as unknown as string,
-    })
+    const resolution = ctx.llm.resolveModelInfo('route', 'model')
+    await expect(resolution).rejects.toMatchObject({ code: 'INVALID_MODEL_COST' })
+    await expect(resolution).rejects.toThrow('llm.cost states invalid cost metadata')
   })
 
   it('reads the peak block its schema materializes for an absent band as no band', async () => {
@@ -856,10 +855,9 @@ describe('LlmRuntime', () => {
     })
     ctx.llm.registerAdapter(['route'], new CatalogAdapter({ id: 'route', name: 'Route' }, []))
 
-    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
-      code: 'INVALID_MODEL_COST',
-      message: expect.stringContaining('at least one window') as unknown as string,
-    })
+    const resolution = ctx.llm.resolveModelInfo('route', 'model')
+    await expect(resolution).rejects.toMatchObject({ code: 'INVALID_MODEL_COST' })
+    await expect(resolution).rejects.toThrow('at least one window')
   })
 
   it('accepts the documented nested cost table through its own schema', () => {
@@ -938,10 +936,9 @@ describe('LlmRuntime', () => {
     }(SCRIPT)
     ctx.llm.registerAdapter(['route'], adapter)
 
-    await expect(ctx.llm.resolveModelInfo('route', 'model')).rejects.toMatchObject({
-      code: 'INVALID_MODEL_COST',
-      message: expect.stringContaining(message) as unknown as string,
-    })
+    const resolution = ctx.llm.resolveModelInfo('route', 'model')
+    await expect(resolution).rejects.toMatchObject({ code: 'INVALID_MODEL_COST' })
+    await expect(resolution).rejects.toThrow(message)
   })
 
   it('resolves detached adapter-owned reasoning metadata and materializes its default', async () => {

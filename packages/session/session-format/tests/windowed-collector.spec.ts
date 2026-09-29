@@ -16,7 +16,7 @@ import type { SessionFormatEvent, SessionFormatEventRun } from '../src/types.ts'
 
 /** One synthetic event carrying its own index, so retention is legible. */
 function event(index: number): SessionFormatEvent {
-  return { type: 'test', seq: index } as unknown as SessionFormatEvent
+  return { type: 'test', seq: index } as SessionFormatEvent
 }
 
 /** A compact run that records whether anything actually expanded it. */

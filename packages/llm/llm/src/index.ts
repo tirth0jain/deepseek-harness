@@ -398,7 +398,7 @@ export interface Config {
 export class LlmRuntime extends TypertRemoteService {
   static Config: z<Config> = z.object({
     cost: z.dict(z.dict(configuredCost)),
-  }) as unknown as z<Config>
+  }) as z<Config>
 
   private adapters = new Map<string, AdapterRegistration>()
   private directory = new Map<string, LlmConfigurableProvider>()
