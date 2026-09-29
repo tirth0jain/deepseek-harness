@@ -359,16 +359,17 @@ export class SessionCommandController {
     }
     const childId = brandString<SessionId>(`session-${randomUUID()}`)
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+    let continuation: Agent
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
       // Created through the controller rather than the registry directly, so
       // the continuation is owned like any other Agent the API layer makes
       // live: archiving it later gives it back instead of leaving it resident
       // for the life of the process.
-      await this.agents.createOwned({
+      continuation = await this.agents.createOwned({
         sessionId: childId,
         // No seed: the continuation is a new conversation, and its one opening
-        // message is written below rather than inherited as a prefix.
+        // message is queued below rather than inherited as a prefix.
         meta: {
           ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
           parentSession: source.header.id,
@@ -387,18 +388,25 @@ export class SessionCommandController {
         {},
       )
     }
-    const continuation = this.ctx.sessions.get(childId)
-    if (continuation === undefined) {
+    try {
+      // Injected rather than appended: the loop writes the system prompt at the
+      // first step, and V4 requires that head to be the surface's first node, so
+      // a recap written straight to the surface would leave the artifact
+      // unmigratable. An injected item leads the batch its own turn claims, so
+      // the recap still lands ahead of the prompt that wakes the continuation —
+      // and an idle driver leaves it pending until that prompt arrives, so no
+      // turn ever runs on the recap alone.
+      continuation.inject(createUserMessage({
+        content: carriedHistory(conversation),
+        source: handoffSource(),
+      }))
+    } catch (error: unknown) {
       throw new RemoteError(
         'gateway/internal',
-        `continuation "${childId}" was created but is not in the Session store`,
-        {},
+        `continuation "${childId}" was created but could not queue its condensed history: ${String(error)}`,
+        { sessionId: childId },
       )
     }
-    continuation.append('user/message', createUserMessage({
-      content: carriedHistory(conversation),
-      source: handoffSource(),
-    }), { surfaceOp: 'append' })
     if (workspace !== undefined) {
       try {
         await workspace.attachSession(childId)

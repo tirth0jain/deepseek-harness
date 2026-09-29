@@ -46,7 +46,7 @@ const RENAMED_PRODUCERS: Readonly<Record<string, string>> = Object.freeze({
 
 /** First-party V3 plugin identities that intentionally keep their current kind. */
 const RELEASED_SAME_NAME_PRODUCERS: ReadonlySet<string> = new Set([
-  'agent-instructions', 'session-reference', 'team-message', 'goal',
+  'agent-instructions', 'session-reference', 'team-message', 'goal', 'handoff',
   'skill-invocation', 'skill-catalog', 'coordinator', 'subagent-report',
   'subagent-settled', 'webhook', 'agent-message', 'model-selection',
   'plan-mode', 'time-context', 'tmux-context', 'user-approval',
