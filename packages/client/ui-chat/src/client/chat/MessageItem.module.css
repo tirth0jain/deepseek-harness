@@ -320,12 +320,30 @@
   border-radius: var(--dsw-radius-xl);
   background: var(--dsw-specific-input-major, transparent);
   box-sizing: border-box;
-  /* An admitted file is an anchor; the card keeps its own ink and needs no underline. */
   color: inherit;
-  text-decoration: none;
 }
 
-a.fileCard:hover {
+/* The save control mirrors the presented-file card's action: a compact square
+   beside the file identity, so an uploaded file reads like every other
+   downloadable file. It is a sibling of that identity — never nested inside a
+   clickable card, which would be an interactive element inside another. */
+.fileSave {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  color: var(--dsw-alias-label-primary);
+  text-decoration: none;
+  background: none;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-sm);
+}
+
+.fileSave:hover,
+.fileSave:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 

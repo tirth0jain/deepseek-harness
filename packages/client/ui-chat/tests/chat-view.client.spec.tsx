@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { ProcessGroupData } from '../src/client/contract/process-groups.ts'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -4171,5 +4172,24 @@ describe('TurnNavigator per-turn loading', () => {
     const view = render(<h.ChatView {...h.props} />)
     fireEvent.focus(await view.findByRole('button', { name: '跳转到第 1 轮' }))
     expect(view.getByRole('tooltip').textContent).not.toContain('仅加载')
+  })
+
+  it('saves an uploaded file of this Session from the message card', () => {
+    const attachment = {
+      attachmentId: AttachmentId(`sha256:${'b'.repeat(64)}`),
+      name: 'quarterly notes.md',
+      bytes: 4096,
+    }
+    const uploaded: UserMessageNode = { ...user(1, ''), content: [{ type: 'file', attachment }] }
+    const h = makeHarness({ nodes: [uploaded] })
+    const view = render(<h.ChatView {...h.props} />)
+    const save = view.container.querySelector('[data-message-download]')
+    expect(save).not.toBeNull()
+    expect(save?.getAttribute('download')).toBe('quarterly notes.md')
+    // The Session and the attachment identity are the whole request: the view
+    // owns the first, the message the second, and neither is guessed here.
+    expect(save?.getAttribute('href')).toBe(
+      `${window.location.origin}/api/attachment.download?sessionId=${SID}&attachmentId=${encodeURIComponent(attachment.attachmentId)}`,
+    )
   })
 })

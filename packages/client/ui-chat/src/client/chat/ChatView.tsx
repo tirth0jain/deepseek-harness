@@ -10,11 +10,12 @@ import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/
 import {
   Button, IconChevronDownOutlineRegular, MarkdownDelegateProvider, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
+import type { ChatNodeOwnerProps, ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { PendingSteeringBubble, PendingSubmissionBubble } from './MessageItem.tsx'
 import { ChatNodeSeat } from './ChatNodeSeat.tsx'
 import { ChatGroupSeat } from './ChatGroupSeat.tsx'
+import { attachmentDownloadUrl as attachmentSaveUrl } from './attachment-url.ts'
 import { chatRenderKey } from './render-entry.ts'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { TurnNavigator } from './TurnNavigator.tsx'
@@ -219,6 +220,14 @@ export function ChatView({
     owner => renderSlot('conversation.message.images', { ...owner, loadImage }),
     [loadImage, renderSlot],
   )
+  // The page's own origin is the whole capability: the attachment route is
+  // same-origin and the Session is what authorizes the read, so a renderer gets
+  // a finished URL and never needs to know the route or the Session identity.
+  // A shell reached over file:// has no API origin, and builds nothing.
+  const attachmentDownload = useCallback<NonNullable<ChatNodeOwnerProps['attachmentDownloadUrl']>>(
+    file => attachmentSaveUrl(window.location, sessionId, file.attachmentId),
+    [sessionId],
+  )
 
   const firstKey = order[0]
   const firstSeq = firstKey === undefined ? null : nodeStore.get(firstKey)?.anchorSeq ?? null
@@ -281,6 +290,7 @@ export function ChatView({
                 forkAt={forkAt}
                 loadImage={loadImage}
                 renderMessageImages={renderMessageImages}
+                attachmentDownloadUrl={attachmentDownload}
                 fileMentions={fileMentions}
                 costOf={costOf}
                 renderSlot={renderSlot}

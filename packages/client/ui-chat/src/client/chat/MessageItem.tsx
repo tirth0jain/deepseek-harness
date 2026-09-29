@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { PendingSubmission } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { fileExtension, FileTypeIcon, fileSizeText, JsonBlock, projectUserText, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
+import { fileExtension, FileTypeIcon, fileSizeText, IconDownloadOutlineRegular, JsonBlock, projectUserText, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import type { ModelRetryNode, TurnErrorNode, UserMessageNode } from '../contract/snapshot.ts'
 import { CompactionItem } from './CompactionItem.tsx'
@@ -39,15 +39,17 @@ function contentParts(content: readonly unknown[]): {
 }
 
 /**
- * One uploaded file in a user message: its identity, and a save gesture when
- * the page can address the Host's attachment route.
+ * One uploaded file in a user message: its identity, and a save control beside
+ * it whenever the page can address the Host's attachment route.
  *
- * The card was inert, which left an uploaded file unreachable once its composer
- * card was gone. It stays a plain span whenever no URL can be built: a
- * submission echo holds bytes the Host has not admitted yet, so that receipt
- * has nothing to save under this Session.
+ * The bytes live in content-addressed storage with no path to read, so the
+ * Session-keyed attachment route is the only way back to them; the save is
+ * offered exactly when a node renderer was handed a URL for this attachment.
+ * It sits beside the identity rather than swallowing the card, so it reads like
+ * every other downloadable file in the app. A submission echo holds bytes the
+ * Host has not admitted yet, so that receipt keeps a plain card with no save.
  * @param props - the durable attachment reference, its download URL when one exists, and the locale seat.
- * @returns the file card, as a download link when the bytes are addressable.
+ * @returns the file card, with a save control when the bytes are addressable.
  */
 function FileAttachmentCard({ file, url, t }: {
   file: UserFile['attachment']
@@ -56,16 +58,18 @@ function FileAttachmentCard({ file, url, t }: {
 }): ReactNode {
   const meta = [fileExtension(file.name).toUpperCase().slice(0, 8), fileSizeText(file.bytes)]
     .filter(Boolean).join(' ')
-  const body = <>
+  const saveLabel = t('message.downloadFile', { name: file.name })
+  return <span className={css.fileCard} title={file.name}>
     <FileTypeIcon path={file.name} className={css.fileIcon} />
     <span className={css.fileContent}>
       <span className={css.fileName}>{file.name}</span>
       <span className={css.fileMeta}>{meta}</span>
     </span>
-  </>
-  if (url === undefined) return <span className={css.fileCard} title={file.name}>{body}</span>
-  return <a className={css.fileCard} href={url} download={file.name} title={file.name}
-    aria-label={t('message.downloadFile', { name: file.name })}>{body}</a>
+    {url !== undefined && <a className={css.fileSave} href={url} download={file.name}
+      aria-label={saveLabel} title={saveLabel} data-message-download>
+      <IconDownloadOutlineRegular size={14} />
+    </a>}
+  </span>
 }
 
 function retrySeconds(milliseconds: number): number {

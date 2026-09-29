@@ -5,9 +5,10 @@
  *
  * An upload lives in content-addressed storage with no path to read, so the
  * only way back to its bytes is the attachment route keyed by the Session that
- * references it. The card renders that as an ordinary anchor — the browser's own
- * download, not a fetch into this page's heap — and stays a plain span whenever
- * no URL can be built, which is what a local submission echo gets.
+ * references it. The card renders that as a save control beside the file
+ * identity — the browser's own download anchor, not a fetch into this page's
+ * heap — and offers no save at all whenever no URL can be built, which is what
+ * a local submission echo gets.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
@@ -59,17 +60,19 @@ describe('uploaded file card', () => {
   it('saves the file under its own name when the page can address the bytes', () => {
     const url = '/api/attachment.download?sessionId=s-1&attachmentId=sha256%3Ab'
     const view = renderCard(url)
-    const link = view.container.querySelector('[data-message-attachments] a')
-    expect(link).not.toBeNull()
-    expect(link?.getAttribute('href')).toBe(url)
-    expect(link?.getAttribute('download')).toBe('quarterly notes.md')
-    expect(link?.getAttribute('aria-label')).toBe(zh['message.downloadFile'].replace('{name}', 'quarterly notes.md'))
-    expect(link?.textContent).toContain('quarterly notes.md')
+    const card = view.container.querySelector('[data-message-attachments]')
+    expect(card?.textContent).toContain('quarterly notes.md')
+    const save = card?.querySelector('[data-message-download]')
+    expect(save).not.toBeNull()
+    expect(save?.getAttribute('href')).toBe(url)
+    expect(save?.getAttribute('download')).toBe('quarterly notes.md')
+    expect(save?.getAttribute('aria-label')).toBe(zh['message.downloadFile'].replace('{name}', 'quarterly notes.md'))
+    expect(save?.querySelector('svg')).not.toBeNull()
   })
 
   it('stays an inert card when no URL can be built', () => {
     const view = renderCard(undefined)
-    expect(view.container.querySelector('[data-message-attachments] a')).toBeNull()
+    expect(view.container.querySelector('[data-message-download]')).toBeNull()
     expect(view.container.querySelector('[data-message-attachments]')?.textContent)
       .toContain('quarterly notes.md')
   })
