@@ -49,22 +49,6 @@ function rowId(providerId: string, modelId: string): string {
   return `${providerId}/${modelId}`
 }
 
-const BUILTIN_DESCRIPTION_KEYS: Readonly<Record<string, ModelKey>> = {
-  'deepseek-account/deepseek-v4-flash': 'option.deepseekV4Flash.description',
-  'deepseek-account/deepseek-v4-pro': 'option.deepseekV4Pro.description',
-  'deepseek-official/deepseek-v4-flash': 'option.deepseekV4Flash.description',
-  'deepseek-official/deepseek-v4-pro': 'option.deepseekV4Pro.description',
-}
-
-function descriptionOf(
-  providerId: string,
-  model: ModelDirectoryState['groups'][number]['models'][number],
-  t: TranslateNS<'model'>,
-): string | undefined {
-  const key = BUILTIN_DESCRIPTION_KEYS[rowId(providerId, model.id)]
-  return key !== undefined && model.description === en[key] ? t(key) : model.description
-}
-
 /**
  * One model's published rate as a compact cell, or undefined when the route
  * publishes none.
@@ -82,9 +66,8 @@ function optionsOf(directory: ModelDirectoryState, t: TranslateNS<'model'>): Sel
   for (const group of orderModelProviders(directory.groups)) {
     const name = group.id === 'deepseek-account' ? t('provider.account') : group.name
     for (const model of group.models) {
-      const description = descriptionOf(group.id, model, t)
       const rate = rateOf(model)
-      const detail = description !== undefined ? `${name} · ${description}` : name
+      const detail = model.description !== undefined ? `${name} · ${model.description}` : name
       rows.push({
         id: rowId(group.id, model.id),
         label: model.name,

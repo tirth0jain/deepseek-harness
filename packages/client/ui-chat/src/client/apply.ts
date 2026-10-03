@@ -24,7 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, PerformanceUsageInjected, QuotaNoticeInjected,
+  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, QuotaNoticeInjected,
   QuotaNoticeState, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'

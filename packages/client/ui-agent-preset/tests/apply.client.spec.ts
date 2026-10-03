@@ -138,7 +138,7 @@ async function bench(options: {
 
   }
   const remote = new TestRemote(ctx, { settings })
-  if (options.memory === true) remote.$host = { home: undefined, isLoopback: false }
+  if (options.memory === true) remote.$host = { home: undefined, isLoopback: false, canWriteSettings: false }
   // The roster and the switch are the AgentPresets Remote namespace; the
   // shared double carries no generated namespaces, so this spec stages its
   // own. Registered twice on purpose: the nested key satisfies the plugin's
