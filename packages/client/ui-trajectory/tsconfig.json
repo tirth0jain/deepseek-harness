@@ -24,6 +24,9 @@
       "path": "../ui-model-selection"
     },
     {
+      "path": "../../util/values"
+    },
+    {
       "path": "../ui-renderer"
     },
     {

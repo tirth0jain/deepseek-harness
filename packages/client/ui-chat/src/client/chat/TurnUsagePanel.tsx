@@ -176,6 +176,16 @@ export function TurnUsagePanel({ usage, cost, t }: TurnUsagePanelProps) {
 }
 
 /**
+ * Join elapsed-time parts into one label, upstream's own rendering convention.
+ * @param ms - Turn wall time in ms.
+ * @param t - owning view's locale seat.
+ * @returns the concatenated numbers and localized units.
+ */
+function formatRunDurationText(ms: number, t: ChatViewSlotProps['t']): string {
+  return formatRunDuration(ms, t).map(part => part.text).join('')
+}
+
+/**
  * Turn-time IconActions pill with a click-open Turn-time details dialog. The
  * pill carries the Turn's own throughput beside its wall time, so the headline
  * number is readable without opening the dialog; a Turn with no sampled
@@ -196,7 +206,7 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
       >
         <IconClockOutlineRegular />
         <span className={css.label}>
-          {t('message.ranFor', { duration: formatRunDuration(runMs, t) })}
+          {t('message.ranFor', { duration: formatRunDurationText(runMs, t) })}
           {tokensPerSecond !== undefined && (
             <>
               <span className={css.sep} aria-hidden>·</span>
@@ -222,7 +232,7 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
           <div className={dialogCss.titleRule} aria-hidden />
           <dl className={dialogCss.details} data-turn-time-details>
             <dt>{t('message.turnTime.duration')}</dt>
-            <dd>{formatRunDuration(runMs, t)}</dd>
+            <dd>{formatRunDurationText(runMs, t)}</dd>
             {tokensPerSecond !== undefined && (
               <>
                 <dt>{t('message.turnTime.speed')}</dt>

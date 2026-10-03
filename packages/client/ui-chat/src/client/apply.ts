@@ -25,14 +25,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
   ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, PerformanceUsageInjected, QuotaNoticeInjected,
-  QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps,
+  QuotaNoticeState, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
 import { ChatView } from './chat/ChatView.tsx'
 import { registerChatNodeRenderers } from './chat/register-node-renderers.ts'
-import { StatsPills } from './chat/StatsPills.tsx'
+import { ActivityPill, UsagePill } from './chat/StatsPills.tsx'
 import { registerConversationNodes } from './conversation-nodes/register.ts'
 import { QuotaNoticeHost } from './chat/QuotaNoticeHost.tsx'
 import { en, NS, zh } from './locale.ts'
@@ -166,7 +166,7 @@ export function apply(ctx: Context): void {
     scope.slots.inject('settings.general.item', () => scope.slots.register({
       name: 'settings.general.item',
       id: 'link-opening',
-      order: 14,
+      order: 17,
       locale: NS,
       inject: (): LinkOpeningRowInjected => ({
         hooks: { linkOpening, browserAvailable },
@@ -189,7 +189,7 @@ export function apply(ctx: Context): void {
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item',
     id: 'performance-usage',
-    order: 13,
+    order: 30,
     locale: NS,
     inject: (): PerformanceUsageRowInjected => ({
       hooks: { performanceUsage },
@@ -314,24 +314,16 @@ export function apply(ctx: Context): void {
     }),
   }, QuotaNoticeHost))
 
-  ctx.slots.inject('conversation.composer.dock', () =>
-    ctx.slots.register({
-      name: 'conversation.composer.dock',
-      id: 'stats',
-      order: 0,
-      locale: NS,
-      // The dock sits outside ChatView, so it cannot inherit the view's own
-      // paging verb; the load control takes it from the same Session binding.
-      // Resolved per press: composition may run before the binding exists.
-      inject: (sessionId: SessionId): StatsPillsInjected & PerformanceUsageInjected => ({
-        hooks: { performanceUsage },
-        loadThrough: (seq) => {
-          const binding = ctx.sessions.binding(sessionId)
-          if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
-          return binding.session.loadThrough(seq)
-        },
-      }),
-    }, StatsPills))
+  // One dock entry per pill, so a plugin replaces or adds a single pill by id.
+  const statPillInject = () => ({ hooks: { performanceUsage } })
+  ctx.slots.inject('conversation.composer.dock', function* () {
+    yield ctx.slots.register({
+      name: 'conversation.composer.dock', id: 'activity', order: 0, locale: NS, inject: statPillInject,
+    }, ActivityPill)
+    yield ctx.slots.register({
+      name: 'conversation.composer.dock', id: 'usage', order: 1, locale: NS, inject: statPillInject,
+    }, UsagePill)
+  })
 
   ctx.slots.inject('conversation.approval.detail', () =>
     ctx.slots.register({ name: 'conversation.approval.detail' }, ApprovalCommand))
