@@ -185,7 +185,8 @@ describe('Chat apply wiring', () => {
     b.chatSettings.publish({ value: { linkOpening: 'sidebar', transcriptView: 'compact', performanceUsage: 'compact' } })
     expect(face.hooks.performanceUsage.getSnapshot()).toBe('compact')
     for (const entry of [
-      ...b.runtime.slots.entries('conversation.composer.dock'),
+      // The load control is an action, not a reading: it takes no display-mode seat.
+      ...b.runtime.slots.entries('conversation.composer.dock').filter(entry => entry.options.id !== 'loadTurn'),
       b.runtime.slots.entries('conversation.chat.node').find(entry => entry.options.key === 'turn-tail')!,
     ]) {
       const injected = (entry.inject as () => Pick<PerformanceUsageRowInjected, 'hooks'>)()

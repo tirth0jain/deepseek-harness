@@ -24,7 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, PerformanceUsageInjected, QuotaNoticeInjected,
+  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, QuotaNoticeInjected,
   QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
@@ -328,8 +328,7 @@ export function apply(ctx: Context): void {
     // Resolved per press: composition may run before the binding exists.
     yield ctx.slots.register({
       name: 'conversation.composer.dock', id: 'loadTurn', order: 2, locale: NS,
-      inject: (sessionId: SessionId): StatsPillsInjected & PerformanceUsageInjected => ({
-        hooks: { performanceUsage },
+      inject: (sessionId: SessionId): StatsPillsInjected => ({
         loadThrough: (seq) => {
           const binding = ctx.sessions.binding(sessionId)
           if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)

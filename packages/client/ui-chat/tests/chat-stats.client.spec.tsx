@@ -523,7 +523,6 @@ describe('composer stats pills', () => {
     ) {
       return render(
         <LoadTurnPill
-          usePerformanceUsage={selector => selector('detailed')}
           useProjection={projections({ tokenUsage: USAGE, turnOutline: outline })}
           useSession={bindSnapshotSelector(sessionSelector({
             hasMore: session.hasMore ?? false,
@@ -594,17 +593,11 @@ describe('composer stats pills', () => {
       expect(view.getByRole('button', { name: /Load all of turn 2/ }).textContent).toBe('Load turn 2')
     })
 
-    it('stays out of compact mode, which renders readings and no controls', () => {
-      const view = render(
-        <LoadTurnPill
-          usePerformanceUsage={selector => selector('compact')}
-          useProjection={projections({ tokenUsage: USAGE, turnOutline: outline })}
-          useSession={bindSnapshotSelector(sessionSelector({ hasMore: true, baseSeq: SessionSeq(500) }))}
-          loadThrough={() => Promise.resolve()}
-          t={tEn}
-        />,
-      )
-      expect(view.container.querySelector('[data-composer-stat="loadTurn"]')).toBeNull()
+    it('renders without a display-mode seat, so compact mode cannot hide it', () => {
+      // Loading history is an action, not one of the readings compact mode trims
+      // to plain figures, so the control takes no display-mode seat at all.
+      const view = dock({ hasMore: true, baseSeq: 500 })
+      expect(view.container.querySelector('[data-composer-stat="loadTurn"]')).not.toBeNull()
     })
   })
 

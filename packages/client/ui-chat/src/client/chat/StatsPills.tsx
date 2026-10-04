@@ -341,7 +341,7 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
 })
 
 /** Props of the composer dock's load control: the pager seat plus its own action. */
-export interface LoadTurnPillProps extends InjectFace<PerformanceUsageInjected>, StatsPillsInjected {
+export interface LoadTurnPillProps extends StatsPillsInjected {
   useProjection: UseProjection
   /** Session lifecycle state: the pager's remaining-history flag and window base gate the control. */
   useSession: SessionSnapshotSelector
@@ -350,16 +350,15 @@ export interface LoadTurnPillProps extends InjectFace<PerformanceUsageInjected>,
 }
 
 /**
- * Composer dock control that pages history back one Turn per press. Detailed
- * mode only, matching the readings it sits beside: compact mode renders plain
- * figures and no controls.
+ * Composer dock control that pages history back one Turn per press. Both display
+ * modes render it: loading history is an action, not one of the readings compact
+ * mode trims to plain figures.
  * @param props - projection and session read seats, the paging action, and the locale seat.
  * @returns the load control, or null when no earlier Turn is reachable.
  */
 export const LoadTurnPill = memo(function LoadTurnPill({
-  useProjection, useSession, loadThrough, usePerformanceUsage, t,
+  useProjection, useSession, loadThrough, t,
 }: LoadTurnPillProps) {
-  const mode = usePerformanceUsage(value => value)
   // Whole-log outline: names every Turn of the session whether or not the
   // paged window holds it, which is what makes an unheld Turn detectable here.
   const outline = useProjection('turnOutline')
@@ -406,7 +405,7 @@ export const LoadTurnPill = memo(function LoadTurnPill({
       .catch(() => { /* keep the button available for a retry */ })
       .finally(() => { setLoadingTurn(null) })
   }, [loadThrough])
-  if (mode === 'compact' || pendingTurn === undefined) return null
+  if (pendingTurn === undefined) return null
   const busy = loadingTurn === pendingTurn.turn
   return (
     <span className={css.anchor} data-composer-stat="loadTurn">
