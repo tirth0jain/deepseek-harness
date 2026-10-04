@@ -383,7 +383,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
             },
           },
         },
-        bindDraftPersistence: write => inputHub.shell(sessionId).bindDraftPersistence(write),
+        bindDraftPersistence: write => inputHub.bindDraftPersistence(sessionId, write),
         openView,
       }
     },

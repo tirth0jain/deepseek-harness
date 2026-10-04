@@ -19,6 +19,7 @@ import {
   type ApiSessionAgentResult,
 } from './agent.ts'
 import { SessionCommandController } from './commands.ts'
+import { ComposerDraftStore } from './composer-draft.ts'
 import { SessionControlController } from './control.ts'
 import { SessionHistoryController } from './history.ts'
 import { SessionFileReferences } from './file-references.ts'
@@ -36,6 +37,8 @@ import type {
   SessionAttachmentValue,
   SessionCancelRequest,
   SessionCancelValue,
+  SessionComposerDraftRequest,
+  SessionComposerDraftValue,
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
@@ -59,6 +62,7 @@ import type {
   SessionSearchValue,
   SessionSelectModelRequest,
   SessionSelectModelValue,
+  SessionSetComposerDraftRequest,
   SessionProjectionsRequest,
   SessionProjectionsValue,
   SessionProjectionValues,
@@ -155,6 +159,7 @@ export class SessionController extends TypertRemoteService {
 
   private readonly agents: ApiSessionAgentController
   private readonly commands: SessionCommandController
+  private readonly composerDrafts: ComposerDraftStore
   private readonly controlState: SessionControlController
   private readonly history: SessionHistoryController
   private readonly listState: ApiSessionList
@@ -176,6 +181,7 @@ export class SessionController extends TypertRemoteService {
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
     this.commands = new SessionCommandController(ctx, this.agents, process.cwd())
+    this.composerDrafts = new ComposerDraftStore(ctx)
     ctx.effect(() => ctx.fileUploads.registerAgentResolver(async (sessionId) => {
       const result = await this.agents.resolveAgent(sessionId)
       if ('error' in result) throw result.error
@@ -564,6 +570,30 @@ export class SessionController extends TypertRemoteService {
   @Remote('updateQueue')
   updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
     return this.commands.updateQueue(request)
+  }
+
+  /**
+   * Read the composer draft one Session last stored. A draft is reader input,
+   * not Session history: it never enters the log, and it survives a restart in
+   * its own storage domain so an unsent prompt is not lost with the process.
+   * @param request - Session whose draft is read.
+   * @returns the stored draft text, empty when nothing is stored.
+   */
+  @Remote('composerDraft')
+  async composerDraft(request: SessionComposerDraftRequest): Promise<SessionComposerDraftValue> {
+    return { text: await this.composerDrafts.read(request.sessionId) }
+  }
+
+  /**
+   * Store the composer draft of one Session. Writing an empty draft clears the
+   * record, so a sent prompt leaves nothing behind.
+   * @param request - Session and its complete draft text.
+   * @returns completion after durability, or after a logged no-op when the
+   *   deployment mounts no storage.
+   */
+  @Remote('setComposerDraft')
+  async setComposerDraft(request: SessionSetComposerDraftRequest): Promise<void> {
+    await this.composerDrafts.write(request.sessionId, request.text)
   }
 
   /**

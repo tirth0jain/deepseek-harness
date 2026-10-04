@@ -106,6 +106,21 @@ export interface ISession {
    */
   updateQueue(itemId: MessageId, action: QueueAction): Promise<RemoteResult<{ accepted: true }>>
   /**
+   * Read the composer draft this Session last stored on the Host. A draft is
+   * reader input rather than Session history, so it survives a harness restart
+   * in the Host's own storage instead of in the log.
+   * @returns the stored draft text; empty when nothing is stored, the read
+   *   failed, or the deployment mounts no storage.
+   */
+  composerDraft(): Promise<string>
+  /**
+   * Store this Session's composer draft on the Host. An empty draft clears the
+   * stored record.
+   * @param text - the complete draft text.
+   * @returns completion; a refused write leaves the browser draft authoritative.
+   */
+  setComposerDraft(text: string): Promise<void>
+  /**
    * Cancel the running turn. Pending queued work remains and resumes in FIFO
    * order after the Host reaches cancellation quiescence.
    * @returns acceptance, or the business error.

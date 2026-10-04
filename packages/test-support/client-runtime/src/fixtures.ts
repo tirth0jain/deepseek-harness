@@ -41,7 +41,8 @@ export type SessionFixtureSnapshot = FixtureSnapshot<SessionSnapshot>
  * Session fixture accepted by {@link TestSessions.add}: identity plus optional
  * snapshot/list-row overrides and the session behavior face the feature under
  * test actually calls (kept open — the runtime never fakes methods a test did
- * not supply, so an unstubbed call fails loud at the call site).
+ * not supply, so an unstubbed call fails loud at the call site, except the two
+ * composer-draft verbs, whose benign defaults match a Host without storage).
  */
 export interface SessionFixture {
   id: string

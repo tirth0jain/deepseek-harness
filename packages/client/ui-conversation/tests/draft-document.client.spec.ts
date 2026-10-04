@@ -536,6 +536,34 @@ describe('draft documents in the input shell', () => {
     }
   })
 
+  it('restores a failed send into text typed while it was in flight', async () => {
+    const pending = Promise.withResolvers<SubmitOutcome>()
+    const sink = vi.fn<SessionInputDeps['defaultSink']>().mockReturnValueOnce(pending.promise)
+    const provider = triggerProvider(createSnapshotStore<ReadonlyMap<'/' | '@', readonly string[]>>(new Map()))
+    const shell = makeShell({ inputTriggers: () => provider, defaultSink: sink })
+    const write = vi.fn<(draft: DraftSnapshot) => void>()
+    shell.bindDraftPersistence(write)
+    const failed = documentOf('failed prompt ', file)
+    try {
+      shell.setDraft(failed)
+      shell.submit()
+      await vi.waitFor(() => { expect(sink).toHaveBeenCalledOnce() })
+      shell.setDraft('typed during the flight')
+      pending.resolve({ kind: 'error', text: 'rejected' })
+      // The failure lands after the newer text instead of being parked until an
+      // empty composer and dropped by the next keystroke.
+      const expected = documentOf('typed during the flight\n\nfailed prompt ', file)
+      await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual(expected) })
+      expect(write).toHaveBeenLastCalledWith(expected)
+      expect(chips(shell)).toMatchObject([{ ref: file.ref }])
+    } finally {
+      shell.dispose()
+      pending.resolve({ kind: 'error' })
+      await pending.promise
+      await setImmediate()
+    }
+  })
+
   it.each(['reject', 'dispose then resolve', 'dispose then reject'] as const)(
     'contains pending reference serialization when it must %s', async (settlement) => {
       const serialization = Promise.withResolvers<string>()

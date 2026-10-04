@@ -71,6 +71,7 @@
   "dependencies": {
     "@deepseek-ai/dsh-brand": "workspace:*",
     "@deepseek-ai/dsh-deque": "workspace:*",
+    "@deepseek-ai/dsh-storage-domain": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
     "mime-types": "^3.0.2",
     "zod": "^4.4.3"

@@ -139,6 +139,28 @@ export class FixtureSession implements SessionFace {
   }
 
   /**
+   * Soft stub: the composer reads its archived draft on every shell it builds,
+   * so an unstubbed face behaves like a Host without storage instead of failing
+   * every composer test. Supply `composerDraft` on the fixture's session face to
+   * exercise a seeded draft.
+   * @returns no stored draft.
+   */
+  composerDraft(): Promise<string> {
+    return Promise.resolve('')
+  }
+
+  /**
+   * Soft stub: the composer archives drafts in the background, so an unstubbed
+   * face accepts the write and stores nothing, matching a Host without storage.
+   * Supply `setComposerDraft` on the fixture's session face to observe writes.
+   * @param _text - the complete draft text.
+   * @returns completion.
+   */
+  setComposerDraft(_text: string): Promise<void> {
+    return Promise.resolve()
+  }
+
+  /**
    * Fail-loud stub; supply `cancel` on the fixture's session face to exercise it.
    * @returns never — always throws.
    */

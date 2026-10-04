@@ -761,16 +761,17 @@ export class SessionInputShell implements SessionInput {
     )
   }
 
-  /** Restore one failed detached send without overwriting text entered after a restoration. */
+  /** Restore one failed detached send: a failure never discards text. */
   private settleDetachedFailure(attempt: SubmitAttempt, message?: string): void {
     const record = this.detachedDrafts.get(attempt.seq)
     if (record === undefined) return
     this.detachedDrafts.delete(attempt.seq)
     this.restoreAttachments(record.attachmentIds)
     this.failedDetached.set(attempt.seq, record)
-    if (this.projection.clipboardText === '' || this.failedRestoreRev === this.rev) {
-      this.restoreFailedDrafts()
-    }
+    // Always restore. Waiting for an empty composer stranded the prompt of
+    // every failure that settled while the reader had typed something else,
+    // and the next keystroke discarded the parked copy.
+    this.restoreFailedDrafts()
     this.dispatchRun(({ type: 'sink-settled', attempt, ok: false, ...(message === undefined ? {} : { message }) }))
   }
 
@@ -779,7 +780,10 @@ export class SessionInputShell implements SessionInput {
     const records = [...this.failedDetached.entries()].sort(([a], [b]) => a - b).map(([, record]) => record)
     if (records.length === 0) return
     const separator = '\n\n'
-    let draft = ''
+    // Text the reader typed since the last restoration is theirs, so the failed
+    // prompts follow it instead of replacing it. Untouched, the composer holds
+    // exactly the previous restoration, and the rebuild replaces it.
+    let draft = this.failedRestoreRev === this.rev ? '' : this.projection.clipboardText
     const occurrences: Occurrence[] = []
     for (const record of records) {
       const base = draft.length + (draft === '' ? 0 : separator.length)

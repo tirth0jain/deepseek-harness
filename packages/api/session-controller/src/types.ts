@@ -412,6 +412,24 @@ export interface SessionUpdateQueueValue {
   readonly accepted: true
 }
 
+/** Composer-draft read request. */
+export interface SessionComposerDraftRequest {
+  readonly sessionId: SessionId
+}
+
+/** The stored composer draft of one Session. */
+export interface SessionComposerDraftValue {
+  /** Complete stored draft text; empty when nothing is stored. */
+  readonly text: string
+}
+
+/** Composer-draft write request. */
+export interface SessionSetComposerDraftRequest {
+  readonly sessionId: SessionId
+  /** Complete draft text; empty clears the stored draft. */
+  readonly text: string
+}
+
 /** Active-turn cancellation request. */
 export interface SessionCancelRequest {
   readonly sessionId: SessionId

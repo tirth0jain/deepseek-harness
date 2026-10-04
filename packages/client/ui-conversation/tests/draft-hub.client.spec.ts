@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { makeTranslate, TestSessions } from '@deepseek-ai/dsh-client-test-runtime'
+import { makeTranslate, TestSessions, type SessionBehaviorOverrides } from '@deepseek-ai/dsh-client-test-runtime'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { $nodesOfType } from 'lexical'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -25,7 +25,7 @@ const saved: DraftSnapshot = {
   }],
 }
 
-async function storedSession(draft: unknown) {
+async function storedSession(draft: unknown, face?: SessionBehaviorOverrides) {
   const id = SessionId(`draft-hub-${randomUUID()}`)
   const key = `dsh.conversation.${id}`
   const previous = localStorage.getItem(key)
@@ -42,7 +42,7 @@ async function storedSession(draft: unknown) {
     await ctx.fiber.dispose()
   })
   ctx.provide('sessions', sessions)
-  await sessions.add({ id })
+  await sessions.add({ id, ...(face === undefined ? {} : { session: face }) })
   const reference = sessions.retain(id)
   onTestFinished(() => { reference.release() })
   await reference.ready
@@ -199,6 +199,34 @@ it('restores legacy text before a view and reuses the live draft on later shell 
   expect(b.hub.for(b.binding.ctx)).toBe(b.shell)
   expect(b.shell.draftSnapshot).toEqual({ text: 'edited before mounting a view', references: [] })
   expect(localStorage.getItem(b.key)).toBe(b.raw)
+})
+
+it('seeds the archived Host draft when this browser holds none', async () => {
+  const b = await storedSession('', { composerDraft: () => Promise.resolve('archived prompt') })
+  const shell = b.hub.shellFor(b.binding)
+  expect(shell.draftSnapshot).toEqual({ text: '', references: [] })
+  await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual({ text: 'archived prompt', references: [] }) })
+})
+
+it('keeps a local draft over the archived one', async () => {
+  const archived = vi.fn(() => Promise.resolve('archived prompt'))
+  const b = await storedSession('/saved legacy', { composerDraft: archived })
+  const shell = b.hub.shellFor(b.binding)
+  expect(shell.draftSnapshot).toEqual({ text: '/saved legacy', references: [] })
+  // The browser's own draft wins, so the archived read never happens.
+  expect(archived).not.toHaveBeenCalled()
+})
+
+it('writes a changed draft to the Host once the quiet period passes', async () => {
+  const written = vi.fn((_text: string) => Promise.resolve())
+  const b = await storedSession('', { setComposerDraft: written })
+  const shell = b.hub.shellFor(b.binding)
+  const unbind = b.hub.bindDraftPersistence(b.id, () => {})
+  onTestFinished(unbind)
+  shell.setDraft('half-written prompt')
+  // The local writer is synchronous; the Host write waits for quiet.
+  expect(written).not.toHaveBeenCalled()
+  await vi.waitFor(() => { expect(written).toHaveBeenCalledWith('half-written prompt') }, { timeout: 2_000 })
 })
 
 it('imports reference chips on the first Hub shell and preserves them without an explicit clear', async () => {

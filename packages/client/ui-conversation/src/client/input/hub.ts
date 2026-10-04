@@ -20,12 +20,13 @@ import type {
   DraftAttachmentId, DraftAttachmentSerializationResult, DraftInitializationOptions, DraftInitializationResult, InputTriggerController,
   SessionInputResolver, SessionInput, SubmitOutcome,
 } from '../contract/input.ts'
-import type { ComposerKeyboard } from '../contract/draft-editor.ts'
+import type { ComposerKeyboard, DraftSnapshot } from '../contract/draft-editor.ts'
 import type { InputSubmitMode } from '../contract/composer-submission.ts'
 import type { PopupDismissFace } from './facade.ts'
 import { SessionInputShell } from './facade.ts'
 import { reportMessageSubmission } from './submission-analytics.ts'
 import { readConversationDraft } from '../stores.ts'
+import { ComposerDraftSync } from '../draft-sync.ts'
 
 /** Structural command face for per-session popup resolution. */
 interface CommandFace {
@@ -54,6 +55,7 @@ interface ConversationAttachmentFace {
 /** Session-addressed input facade registry (SessionInputResolver face + composer-layer extras). */
 export class InputHub implements SessionInputResolver {
   private readonly shells = new WeakMap<SessionBinding, SessionInputShell>()
+  private readonly draftSync = new ComposerDraftSync()
 
   /**
    * @param ctx - client root context (services resolved lazily per call — boot order stays free).
@@ -156,6 +158,9 @@ export class InputHub implements SessionInputResolver {
       return () => {
         for (const off of offs) off()
         const drafts = shell.dispose()
+        // The last keystrokes still reach the Host: a scope that closes while a
+        // debounced write is queued must not take the draft with it.
+        this.draftSync.flush(binding.sessionId)
         this.shells.delete(binding)
         const conversation = this.rootCtx.get('conversation') as ConversationAttachmentFace | undefined
         for (const attachmentId of drafts) conversation?.releaseDraftAttachment(attachmentId)
@@ -167,8 +172,33 @@ export class InputHub implements SessionInputResolver {
         return () => { shell.refreshLexiconSubscription() }
       }, 'conversation.input: reference catalogs')
     })
-    shell.setDraft(readConversationDraft(binding.sessionId))
+    const saved = readConversationDraft(binding.sessionId)
+    shell.setDraft(saved)
+    // A draft typed but never sent outlives the browser it was typed in, so
+    // seed the archived copy when this browser holds none. A local draft always
+    // wins, and the seed never overwrites text already typed in this composer.
+    if (saved.text === '') {
+      void session.composerDraft().then((text) => {
+        if (text !== '' && shell.draftSnapshot.text === '') shell.setDraft(text)
+      }, () => { /* the composer works without its archived draft */ })
+    }
     return shell
+  }
+
+  /**
+   * Bind one Session's draft persistence: the caller's local writer plus the
+   * debounced Host write that carries the draft across a restart.
+   * @param id - target Session.
+   * @param write - local draft writer (the Session store).
+   * @returns the unbind disposer.
+   */
+  bindDraftPersistence(id: SessionId, write: (draft: DraftSnapshot) => void): () => void {
+    const binding = this.sessions().binding(id)
+    if (binding === undefined) throw new Error(`conversation.input: session "${id}" resolved no binding`)
+    return this.shellFor(binding).bindDraftPersistence((draft) => {
+      write(draft)
+      this.draftSync.schedule(binding.session, draft.text)
+    })
   }
 
   /**
@@ -228,7 +258,8 @@ export class InputHub implements SessionInputResolver {
    * Default sink: optimistic clear + prompt. The session is always a real
    * host entity (materialized when its workspace was picked), so there is
    * exactly one path; a failed first prompt is an ordinary prompt failure
-   * (banner via promptError, draft restored only while untouched).
+   * (banner via promptError, and the failed text is restored into the composer
+   * whatever it holds by then).
    */
   private sink(
     session: SessionFace,

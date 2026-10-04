@@ -338,6 +338,24 @@ export class Session implements SessionFace {
   }
 
   /**
+   * Read the composer draft this Session last stored on the Host.
+   * @returns the stored draft text; empty when the read failed or stores nothing.
+   */
+  async composerDraft(): Promise<string> {
+    const result = await this.remote.session.composerDraft({ sessionId: this.sessionId })
+    return result.ok ? result.value.text : ''
+  }
+
+  /**
+   * Store this Session's composer draft on the Host; an empty draft clears it.
+   * @param text - the complete draft text.
+   * @returns completion; a refused write leaves the browser draft authoritative.
+   */
+  async setComposerDraft(text: string): Promise<void> {
+    await this.remote.session.setComposerDraft({ sessionId: this.sessionId, text })
+  }
+
+  /**
    * Stop the active turn while the Host preserves pending inbox work; failures
    * land in promptError (same error-strip display slot). A subagent address
    * routes through `subagents.interruptByParent`, whose durable parent-address

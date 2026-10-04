@@ -52,6 +52,10 @@ function fakeSession(): SessionFace {
     prompt: () => Promise.reject(new Error('unused fake Session operation')),
     readAttachment: () => Promise.reject(new Error('unused fake Session operation')),
     updateQueue: () => Promise.reject(new Error('unused fake Session operation')),
+    // The composer reads and archives drafts on every shell it builds, so these
+    // two behave like a Host without storage instead of failing the fake.
+    composerDraft: () => Promise.resolve(''),
+    setComposerDraft: () => Promise.resolve(),
     cancel: () => Promise.reject(new Error('unused fake Session operation')),
     rename: () => Promise.reject(new Error('unused fake Session operation')),
     loadOlder: () => Promise.reject(new Error('unused fake Session operation')),
