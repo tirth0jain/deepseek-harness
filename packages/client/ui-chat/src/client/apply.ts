@@ -24,15 +24,15 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, QuotaNoticeInjected,
-  QuotaNoticeState, TurnTailOwnerProps,
+  ChatModelCostState, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, PerformanceUsageInjected, QuotaNoticeInjected,
+  QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
 import { ChatView } from './chat/ChatView.tsx'
 import { registerChatNodeRenderers } from './chat/register-node-renderers.ts'
-import { ActivityPill, UsagePill } from './chat/StatsPills.tsx'
+import { ActivityPill, LoadTurnPill, UsagePill } from './chat/StatsPills.tsx'
 import { registerConversationNodes } from './conversation-nodes/register.ts'
 import { QuotaNoticeHost } from './chat/QuotaNoticeHost.tsx'
 import { en, NS, zh } from './locale.ts'
@@ -323,6 +323,20 @@ export function apply(ctx: Context): void {
     yield ctx.slots.register({
       name: 'conversation.composer.dock', id: 'usage', order: 1, locale: NS, inject: statPillInject,
     }, UsagePill)
+    // The dock sits outside ChatView, so the load control takes its paging verb
+    // from the same Session binding rather than inheriting the view's own.
+    // Resolved per press: composition may run before the binding exists.
+    yield ctx.slots.register({
+      name: 'conversation.composer.dock', id: 'loadTurn', order: 2, locale: NS,
+      inject: (sessionId: SessionId): StatsPillsInjected & PerformanceUsageInjected => ({
+        hooks: { performanceUsage },
+        loadThrough: (seq) => {
+          const binding = ctx.sessions.binding(sessionId)
+          if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
+          return binding.session.loadThrough(seq)
+        },
+      }),
+    }, LoadTurnPill)
   })
 
   ctx.slots.inject('conversation.approval.detail', () =>

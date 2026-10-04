@@ -26,7 +26,7 @@ import type {
 import type { QuotaNoticeInjected } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { PerformanceUsageRowInjected } from '../src/client/settings/PerformanceUsageRow.tsx'
 import { CHAT_SETTINGS_NAMESPACE, type ChatSettings } from '../src/chat-settings.ts'
-import { ActivityPill, UsagePill } from '../src/client/chat/StatsPills.tsx'
+import { ActivityPill, LoadTurnPill, UsagePill } from '../src/client/chat/StatsPills.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
   interface ConversationTurnDataMap {
@@ -128,7 +128,7 @@ describe('Chat apply wiring', () => {
     expect(b.runtime.slots.spec('conversation.chat.node'))
       .toMatchObject({ kind: 'keyed', scope: 'session' })
     expect(b.runtime.slots.entries('conversation.composer.dock').map(row => row.options.id))
-      .toEqual(['activity', 'usage'])
+      .toEqual(['activity', 'usage', 'loadTurn'])
     expect(b.runtime.slots.entries('settings.general.item').map(row => row.options.id))
       .toEqual(['transcript-view', 'link-opening', 'composer-enter', 'performance-usage'])
     await b.runtime.dispose()
@@ -145,9 +145,9 @@ describe('Chat apply wiring', () => {
       b.runtime.slots.entriesOfSlot('conversation.composer.dock')
         .map((entry): [string, unknown] => [entry.options.id ?? '', entry.component]),
     )
-    expect(winners()).toEqual({ activity: PluginActivity, usage: UsagePill })
+    expect(winners()).toEqual({ activity: PluginActivity, usage: UsagePill, loadTurn: LoadTurnPill })
     dispose()
-    expect(winners()).toEqual({ activity: ActivityPill, usage: UsagePill })
+    expect(winners()).toEqual({ activity: ActivityPill, usage: UsagePill, loadTurn: LoadTurnPill })
   })
 
   it.each([

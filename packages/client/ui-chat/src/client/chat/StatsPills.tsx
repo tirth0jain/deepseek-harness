@@ -1,18 +1,25 @@
-// Composer statistics pills, each its own 'conversation.composer.dock' list
-// entry (activity, usage) so a plugin can replace or add one pill by id.
-// Compact keeps speed and cache hit as plain readings; Detailed adds counts,
-// token totals, and click-open dialogs. Settled-node identity prevents
-// stream-delta updates from rerendering the pills.
+// Composer dock entries for one session: the activity and usage readings, and
+// the load control that pages history back one Turn per press. Each is its own
+// 'conversation.composer.dock' list entry, so a plugin can replace or add one
+// pill by id. Compact keeps speed and cache hit as plain readings; Detailed
+// adds counts, token totals, and click-open dialogs. Settled-node identity
+// prevents stream-delta updates from rerendering the pills.
 
-import { memo, useMemo, type ReactNode } from 'react'
+import { memo, useCallback, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { IconDatabaseOutlineRegular, IconGaugeOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  IconDatabaseOutlineRegular, IconDownloadOutlineRegular, IconGaugeOutlineRegular, IconLoadingOutlineRegular,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { UseProjection } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InjectFace, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionSnapshotSelector } from '@deepseek-ai/dsh-client-ui-session/client'
+import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
 // Type-only: merges the sessionStats key into SessionProjectionMap for useProjection.
 import type {} from '@deepseek-ai/dsh-session-stats/client'
+// Type-only: merges the turnOutline key into SessionProjectionMap for useProjection.
+import type {} from '@deepseek-ai/dsh-session-turn-outline/client'
 import type { TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
-import type { ChatViewSlotProps, PerformanceUsageInjected } from '../contract/slots.ts'
+import type { ChatViewSlotProps, PerformanceUsageInjected, StatsPillsInjected } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { formatTokensPerSecond } from './message-chrome.ts'
 import { assistantStepReading } from '../contract/turn-metrics.ts'
@@ -330,5 +337,92 @@ export const UsagePill = memo(function UsagePill({ useProjection, usePerformance
       </dl>
       {/* jscpd:ignore-end */}
     </DialogPill>
+  )
+})
+
+/** Props of the composer dock's load control: the pager seat plus its own action. */
+export interface LoadTurnPillProps extends InjectFace<PerformanceUsageInjected>, StatsPillsInjected {
+  useProjection: UseProjection
+  /** Session lifecycle state: the pager's remaining-history flag and window base gate the control. */
+  useSession: SessionSnapshotSelector
+  /** The owning dock's locale seat. */
+  t: Translate
+}
+
+/**
+ * Composer dock control that pages history back one Turn per press. Detailed
+ * mode only, matching the readings it sits beside: compact mode renders plain
+ * figures and no controls.
+ * @param props - projection and session read seats, the paging action, and the locale seat.
+ * @returns the load control, or null when no earlier Turn is reachable.
+ */
+export const LoadTurnPill = memo(function LoadTurnPill({
+  useProjection, useSession, loadThrough, usePerformanceUsage, t,
+}: LoadTurnPillProps) {
+  const mode = usePerformanceUsage(value => value)
+  // Whole-log outline: names every Turn of the session whether or not the
+  // paged window holds it, which is what makes an unheld Turn detectable here.
+  const outline = useProjection('turnOutline')
+  const hasMore = useSession(s => s.hasMore)
+  // The window's oldest EVENT, which is what tells a Turn held whole from one
+  // the window enters midway. The head NODE's anchor cannot: a Turn's
+  // `turn/start` precedes its first visible node, so that node's anchor sits
+  // after the Turn's own seq whether or not the window covers the Turn's start.
+  const baseSeq = useSession(s => s.baseSeq)
+  // The Turn whose load is in flight, by number: a control that re-targets
+  // mid-flight must not leave a stale busy flag behind.
+  const [loadingTurn, setLoadingTurn] = useState<number | null>(null)
+  // Which Turn a press brings in, walking history back one Turn per press:
+  // the Turn the window's head sits inside when it started midway through one
+  // (that Turn's aggregate is unknown until it is whole), otherwise the Turn
+  // immediately before the window's first. `hasMore` is loadThrough's own
+  // precondition, and without it the control could never discharge.
+  const pendingTurn = useMemo(() => {
+    if (outline === undefined || outline.length === 0 || !hasMore) return undefined
+    // Newest first, so the first entry at or before the head is the Turn the
+    // head sits in.
+    let head = -1
+    for (let index = outline.length - 1; index >= 0; index -= 1) {
+      const entry = outline[index]
+      if (entry !== undefined && entry.seq <= baseSeq) {
+        head = index
+        break
+      }
+    }
+    // The head precedes every known Turn: the window already starts before
+    // this session's first Turn, so no press can add one.
+    const entry = head < 0 ? undefined : outline[head]
+    if (entry === undefined) return undefined
+    // Midway through the head Turn: finish that one before reaching past it.
+    if (entry.seq < baseSeq) return entry
+    // The window begins exactly at the head Turn's start, so that Turn is
+    // whole; the next one back is what the window does not hold.
+    return head === 0 ? undefined : outline[head - 1]
+  }, [outline, hasMore, baseSeq])
+  const loadTurn = useCallback((seq: SessionSeq, turn: number): void => {
+    setLoadingTurn(turn)
+    void loadThrough(seq)
+      // The pager surfaces its own failure; this control only needs to settle.
+      .catch(() => { /* keep the button available for a retry */ })
+      .finally(() => { setLoadingTurn(null) })
+  }, [loadThrough])
+  if (mode === 'compact' || pendingTurn === undefined) return null
+  const busy = loadingTurn === pendingTurn.turn
+  return (
+    <span className={css.anchor} data-composer-stat="loadTurn">
+      <button
+        type="button"
+        className={css.pill}
+        disabled={busy}
+        aria-busy={busy ? 'true' : undefined}
+        aria-label={t('chat.loadTurn.aria', { turn: pendingTurn.turn })}
+        onClick={() => { loadTurn(pendingTurn.seq, pendingTurn.turn) }}
+      >
+        {busy ? <IconLoadingOutlineRegular /> : <IconDownloadOutlineRegular />}
+        <span className={css.label}>
+          {busy ? t('chat.loadTurn.busy', { turn: pendingTurn.turn }) : t('chat.loadTurn', { turn: pendingTurn.turn })}
+        </span>
+      </button>
+    </span>
   )
 })

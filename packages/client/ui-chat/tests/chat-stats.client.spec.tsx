@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import type {
   AssistantMessageNode, ChatSnapshot, LegacyConversationSlice, ToolResultNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
+import { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import { PartialArguments } from '@deepseek-ai/dsh-util-values'
-import { ActivityPill, UsagePill, deriveStats, formatDuration, type StatPillProps } from '../src/client/chat/StatsPills.tsx'
+import { ActivityPill, LoadTurnPill, UsagePill, deriveStats, formatDuration, type StatPillProps } from '../src/client/chat/StatsPills.tsx'
 import { formatTokens } from '../src/client/chat/token-format.ts'
 import { en, zh } from '../src/client/locale.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
+import { sessionSelector } from './session-snapshot-fixture.client.ts'
 
 const t: StatPillProps['t'] = makeTranslate(zh, commonZh)
 const tEn: StatPillProps['t'] = makeTranslate(en, commonEn)
@@ -504,6 +506,106 @@ describe('composer stats pills', () => {
     act(() => { set({ partial: { turn: 1, step: 2, blocks: [{ kind: 'text', text: 'a' }] } }) })
     act(() => { set({ partial: { turn: 1, step: 2, blocks: [{ kind: 'text', text: 'ab' }] } }) })
     expect(renders).toBe(before)
+  })
+
+  describe('load control', () => {
+    /** Whole-log outline: turn/start seqs the paged window may or may not cover. */
+    const outline = [
+      { turn: 1, seq: 10, prompt: 'first', response: 'done' },
+      { turn: 2, seq: 400, prompt: 'second', response: 'done' },
+      { turn: 3, seq: 900, prompt: 'third', response: 'done' },
+    ]
+
+    /** Render the control over the outline with a window whose oldest event is `baseSeq`. */
+    function dock(
+      session: { hasMore?: boolean; baseSeq?: number },
+      loadThrough: () => Promise<void> = () => Promise.resolve(),
+    ) {
+      return render(
+        <LoadTurnPill
+          usePerformanceUsage={selector => selector('detailed')}
+          useProjection={projections({ tokenUsage: USAGE, turnOutline: outline })}
+          useSession={bindSnapshotSelector(sessionSelector({
+            hasMore: session.hasMore ?? false,
+            baseSeq: SessionSeq(session.baseSeq ?? 0),
+          }))}
+          loadThrough={loadThrough}
+          t={tEn}
+        />,
+      )
+    }
+
+    it('completes the Turn the window enters midway', () => {
+      // The window's oldest event (500) sits inside turn 2, so turn 2 is only
+      // partly held and reports no aggregate yet.
+      const view = dock({ hasMore: true, baseSeq: 500 })
+      const button = view.getByRole('button', { name: 'Load all of turn 2 — your message through the full response' })
+      expect(button.textContent).toBe('Load turn 2')
+      expect(button.hasAttribute('disabled')).toBe(false)
+    })
+
+    it('walks back one Turn once the window begins exactly at a Turn start', () => {
+      // The window's oldest event IS turn 2's turn/start, so turn 2 is whole;
+      // the next Turn the window does not hold is its predecessor.
+      const view = dock({ hasMore: true, baseSeq: 400 })
+      expect(view.getByRole('button', { name: /Load all of turn 1/ }).textContent).toBe('Load turn 1')
+    })
+
+    it('keeps walking back through earlier Turns, not just the newest', () => {
+      // Inside turn 3: that is the Turn to finish, at the far end of history.
+      const view = dock({ hasMore: true, baseSeq: 950 })
+      expect(view.getByRole('button', { name: /Load all of turn 3/ })).toBeTruthy()
+      // Beginning exactly at turn 3's start: turn 3 is whole, so it offers 2.
+      const whole = dock({ hasMore: true, baseSeq: 900 })
+      expect(whole.getByRole('button', { name: /Load all of turn 2/ })).toBeTruthy()
+      // A window that starts at turn 1's own start has nothing before it.
+      const oldest = dock({ hasMore: true, baseSeq: 10 })
+      expect(within(oldest.container).queryByRole('button', { name: /Load all of turn/ })).toBeNull()
+    })
+
+    it("pages history through the targeted Turn's turn/start seq, which carries the whole Turn", () => {
+      const loadThrough = vi.fn(() => Promise.resolve())
+      const view = dock({ hasMore: true, baseSeq: 500 }, loadThrough)
+      fireEvent.click(view.getByRole('button', { name: /Load all of turn 2/ }))
+      // The seq logged before the Turn's prompt and steps, not the window head:
+      // paging through it is what brings in the reader's message as well.
+      expect(loadThrough).toHaveBeenCalledWith(400)
+    })
+
+    it('offers nothing once the pager has no history left', () => {
+      const view = dock({ hasMore: false, baseSeq: 900 })
+      expect(view.queryByRole('button', { name: /Load all of turn/ })).toBeNull()
+    })
+
+    it('shows the busy wording and refuses a second press while the page is in flight', async () => {
+      let settle: (() => void) | undefined
+      const loadThrough = vi.fn(() => new Promise<void>((resolve) => { settle = resolve }))
+      const view = dock({ hasMore: true, baseSeq: 500 }, loadThrough)
+      fireEvent.click(view.getByRole('button', { name: /Load all of turn 2/ }))
+      const busy = view.getByRole('button', { name: /Load all of turn 2/ })
+      expect(busy.textContent).toBe('Loading turn 2…')
+      expect(busy.hasAttribute('disabled')).toBe(true)
+      expect(busy.getAttribute('aria-busy')).toBe('true')
+      // The clearing runs in the promise's `.finally`, one microtask later.
+      await act(async () => {
+        settle?.()
+        await Promise.resolve()
+      })
+      expect(view.getByRole('button', { name: /Load all of turn 2/ }).textContent).toBe('Load turn 2')
+    })
+
+    it('stays out of compact mode, which renders readings and no controls', () => {
+      const view = render(
+        <LoadTurnPill
+          usePerformanceUsage={selector => selector('compact')}
+          useProjection={projections({ tokenUsage: USAGE, turnOutline: outline })}
+          useSession={bindSnapshotSelector(sessionSelector({ hasMore: true, baseSeq: SessionSeq(500) }))}
+          loadThrough={() => Promise.resolve()}
+          t={tEn}
+        />,
+      )
+      expect(view.container.querySelector('[data-composer-stat="loadTurn"]')).toBeNull()
+    })
   })
 
 })
