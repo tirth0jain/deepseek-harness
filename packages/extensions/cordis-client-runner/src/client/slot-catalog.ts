@@ -176,7 +176,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.assistant-actions\', () => ctx.slots.register(\n      { name: \'conversation.chat.assistant-actions\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:414',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:466',
   },
   {
     key: 'conversation.chat.commandview',
@@ -224,7 +224,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     occupants: [],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.commandview\', () => ctx.slots.register(\n      { name: \'conversation.chat.commandview\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:396',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:448',
   },
   {
     key: 'conversation.chat.flow',
@@ -234,7 +234,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     doc: 'Ordered Chat rows and local echoes with viewport-bound visibility hooks.',
     registerOptions: [],
     ownerProps: [
-      '/** Ordered rows and reconciled local echoes rendered inside one Chat viewport. */\nexport interface ChatFlowOwnerProps extends Pick<ChatNodeOwnerProps,\n  \'cwd\' | \'openSkill\' | \'openFile\' | \'inspectCall\' | \'forkAt\' | \'loadImage\' | \'fileMentions\'> {\n  readonly entries: readonly RenderEntry[]\n  readonly pendingInputs: readonly (PendingSubmission | InboxState[\'next-step\'][number])[]\n  readonly lastInputTurn: number | undefined\n  readonly deferCollapse: boolean\n}',
+      '/** Ordered rows and reconciled local echoes rendered inside one Chat viewport. */\nexport interface ChatFlowOwnerProps extends Pick<ChatNodeOwnerProps,\n  \'cwd\' | \'openSkill\' | \'openFile\' | \'inspectCall\' | \'forkAt\' | \'loadImage\'\n  | \'attachmentDownloadUrl\' | \'fileMentions\' | \'costOf\'> {\n  readonly entries: readonly RenderEntry[]\n  readonly pendingInputs: readonly (PendingSubmission | InboxState[\'next-step\'][number])[]\n  readonly lastInputTurn: number | undefined\n  readonly deferCollapse: boolean\n}',
     ],
     ownerPropsReferences: [
       'ChatNodeOwnerProps',
@@ -267,7 +267,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.flow\', () => ctx.slots.register(\n      { name: \'conversation.chat.flow\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:365',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:417',
   },
   {
     key: 'conversation.chat.node',
@@ -284,14 +284,16 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       },
     ],
     ownerProps: [
-      '/** Stable owner currency delivered to a keyed Chat renderer. */\nexport interface ChatNodeOwnerProps {\n  /** Renderer-owned Node portion selected by the grouping Definition. */\n  groupPart?: string\n  cwd?: string | undefined\n  /** Open the current source file of a skill referenced by a sent message. */\n  openSkill: (name: string) => void\n  openFile: (path: string, options?: OpenFileOptions) => void\n  inspectCall: ((callId: ToolCallId) => void) | undefined\n  forkAt: (seq: number) => void\n  /**\n   * Session-authorized image loader, down-threaded from the Chat view so a\n   * chat-node renderer can render the attachment presentation slot directly\n   * with only the durable references plus this loader, instead of receiving a\n   * rendering closure.\n   */\n  loadImage: MessageImageLoader\n  renderMessageImages: RenderMessageImages\n  fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined\n  /** Turn-process state when this Node belongs to a projected Turn. */\n  turnProcess?: TurnProcessOwnerProps | undefined\n}',
+      '/** Stable owner currency delivered to a keyed Chat renderer. */\nexport interface ChatNodeOwnerProps {\n  /** Renderer-owned Node portion selected by the grouping Definition. */\n  groupPart?: string\n  cwd?: string | undefined\n  /** Open the current source file of a skill referenced by a sent message. */\n  openSkill: (name: string) => void\n  openFile: (path: string, options?: OpenFileOptions) => void\n  inspectCall: ((callId: ToolCallId) => void) | undefined\n  forkAt: (seq: number) => void\n  /**\n   * Session-authorized image loader, down-threaded from the Chat view so a\n   * chat-node renderer can render the attachment presentation slot directly\n   * with only the durable references plus this loader, instead of receiving a\n   * rendering closure.\n   */\n  loadImage: MessageImageLoader\n  renderMessageImages: RenderMessageImages\n  /**\n   * Same-origin URL that saves one uploaded file of this Session, or undefined\n   * when the page cannot address the API origin. Threaded down like `loadImage`\n   * so a node renderer offers the save without knowing the route or the Session\n   * identity; absent means no URL is available here at all.\n   */\n  attachmentDownloadUrl?: ((attachment: FileAttach /* …truncated — full shape in source */',
     ],
     ownerPropsReferences: [
+      'FileAttachmentRef',
       'MarkdownFileMentions',
       'MessageImageLoader',
       'OpenFileOptions',
       'RenderMessageImages',
       'TurnProcessOwnerProps',
+      'TurnRateLookup',
       'TurnTailOwnerProps',
     ],
     standardProps: [
@@ -338,7 +340,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.node\', () => ctx.slots.register(\n      { name: \'conversation.chat.node\', key: \'<one key the owner dispatches>\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:377',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:429',
   },
   {
     key: 'conversation.chat.reasoning.body',
@@ -378,7 +380,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.reasoning.body\', () => ctx.slots.register(\n      { name: \'conversation.chat.reasoning.body\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:402',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:454',
   },
   {
     key: 'conversation.chat.turnTail',
@@ -440,7 +442,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.chat.turnTail\', () => ctx.slots.register(\n      { name: \'conversation.chat.turnTail\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:408',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:460',
   },
   {
     key: 'conversation.composer',
@@ -585,6 +587,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     occupants: [
       'client-ui-chat ActivityPill id \'activity\'',
       'client-ui-chat UsagePill id \'usage\'',
+      'client-ui-chat LoadTurnPill id \'loadTurn\'',
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.composer.dock\', () => ctx.slots.register(\n      { name: \'conversation.composer.dock\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
@@ -1255,7 +1258,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'shadows-shipped-ui',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'conversation.message.images\', () => ctx.slots.register(\n      { name: \'conversation.message.images\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:390',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:442',
   },
   {
     key: 'conversation.plan-review.actions',
@@ -2977,6 +2980,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       'client-ui-workspace SessionRenameDialog id \'workspace.session-rename\'',
       'client-ui-workspace SessionArchiveConfirmDialog id \'workspace.session-archive\'',
       'client-ui-workspace RowActionToast id \'workspace.row-toast\'',
+      'client-ui-workspace HandoffNotice id \'handoff-notice\'',
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.overlay\', () => ctx.slots.register(\n      { name: \'shell.overlay\', id: \'my-entry\', order: 100, label: \'My entry\' },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
@@ -3020,7 +3024,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     ],
     replaceRisk: 'none',
     example: 'return {\n  inject: [\'slots\'],\n  apply(ctx) {\n    ctx.slots.inject(\'shell.quota-notice\', () => ctx.slots.register(\n      { name: \'shell.quota-notice\', select: owner => null },\n      () => React.createElement(\'div\', null, \'hello\'),\n    ))\n  },\n}',
-    source: 'packages/client/ui-chat/src/client/contract/slots.ts:422',
+    source: 'packages/client/ui-chat/src/client/contract/slots.ts:474',
   },
   {
     key: 'sidebar',
@@ -4053,7 +4057,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     kind: 'list',
     scope: 'root',
     summary: 'The rows of one Session\'s "..." menu, in ascending `order`.',
-    doc: 'The rows of one Session\'s "..." menu, in ascending `order`. ui-workspace\nregisters the shipped rows here — `pin` (100), `rename` (200), `fork`\n(300), `archive` (400) — so a plugin row is placed by its own `order`\namong them. Use a package-namespaced `id`; reusing a shipped id at\nanother `priority` shadows that row. Each entry renders one\n`role="menuitem"` `<button>` (the shipped rows use ui-primitives\'\n`MenuItemButton`, which adds the host styling and `separatorBefore`),\ndecides its own visibility from its own state, and dismisses the menu\nthrough the injected `useMenuOpenState` hook after acting; the list\'s\nkeyboard walk and focus return read the DOM, so any such button joins\nthem. Labels come from the contributing package\'s locale namespace.',
+    doc: 'The rows of one Session\'s "..." menu, in ascending `order`. ui-workspace\nregisters the shipped rows here — `pin` (100), `rename` (200), `fork`\n(300), `handoff` (350), `archive` (400) — so a plugin row is placed by\nits own `order` among them. Use a package-namespaced `id`; reusing a\nshipped id at another `priority` shadows that row. Each entry renders one\n`role="menuitem"` `<button>` (the shipped rows use ui-primitives\'\n`MenuItemButton`, which adds the host styling and `separatorBefore`),\ndecides its own visibility from its own state, and dismisses the menu\nthrough the injected `useMenuOpenState` hook after acting; the list\'s\nkeyboard walk and focus return read the DOM, so any such button joins\nthem. Labels come from the contributing package\'s locale namespace.',
     registerOptions: [
       {
         name: 'id',
@@ -4097,6 +4101,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       'client-ui-workspace PinSessionMenuItem id \'pin\'',
       'client-ui-workspace RenameSessionMenuItem id \'rename\'',
       'client-ui-workspace ForkSessionMenuItem id \'fork\'',
+      'client-ui-workspace HandoffSessionMenuItem id \'handoff\'',
       'client-ui-workspace ArchiveSessionMenuItem id \'archive\'',
     ],
     replaceRisk: 'none',

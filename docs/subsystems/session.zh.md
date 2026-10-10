@@ -973,6 +973,24 @@ downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): P
 @Remote('updateQueue') updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>
 
 /**
+ * Read the composer draft one Session last stored. A draft is reader input,
+ * not Session history: it never enters the log, and it survives a restart in
+ * its own storage domain so an unsent prompt is not lost with the process.
+ * @param request - Session whose draft is read.
+ * @returns the stored draft text, empty when nothing is stored.
+ */
+@Remote('composerDraft') async composerDraft(request: SessionComposerDraftRequest): Promise<SessionComposerDraftValue>
+
+/**
+ * Store the composer draft of one Session. Writing an empty draft clears the
+ * record, so a sent prompt leaves nothing behind.
+ * @param request - Session and its complete draft text.
+ * @returns completion after durability, or after a logged no-op when the
+ *   deployment mounts no storage.
+ */
+@Remote('setComposerDraft') async setComposerDraft(request: SessionSetComposerDraftRequest): Promise<void>
+
+/**
  * Cancel one active Agent turn without dropping its pending inbox.
  * @param request - Session whose active Agent turn is cancelled.
  * @returns acknowledgement that cancellation was requested.

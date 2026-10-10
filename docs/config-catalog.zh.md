@@ -222,13 +222,26 @@ export interface Config {
 ## `@deepseek-ai/dsh-api-session-controller`
 
 - `inject`: `agentDefaultModel` · `agents` · `attachments` · `fileUploads` · `fs` · `llm` · `sessions` · `sessionProjections` · `sessionQuery` · `typert` · `workspaceRegistry`
-- `source`: [`packages/api/session-controller/src/index.ts:80`](../packages/api/session-controller/src/index.ts)
+- `source`: [`packages/api/session-controller/src/index.ts:87`](../packages/api/session-controller/src/index.ts)
 
 ```ts config-catalog
 /** Session Controller deployment policy. */
 export interface Config {
   /** Override platform desktop-opener detection. */
   readonly nativeOpen?: boolean
+  /**
+   * Activate a stored Session's Agent in the background when its history is
+   * opened for reading. Defaults to `true`, the shipped behaviour.
+   *
+   * Activating early costs the Session's whole event graph for the life of the
+   * process — a long conversation measures gigabytes — because nothing releases
+   * an Agent once it exists, and it appends the pickup `session/end-seed` that
+   * makes a merely-opened Session look freshly used. Set `false` to open a
+   * Session read-only: every operation that needs an Agent (prompt, queue,
+   * command, cancel) already resolves one on demand, so the Agent is then
+   * created by the first real use rather than by the first look.
+   */
+  readonly promoteOnHistoryOpen?: boolean
   /** Positive integral milliseconds of list work before yielding between complete rows. */
   readonly listWorkSliceMs?: number
 }
@@ -448,9 +461,28 @@ export interface ConnectionConfig {
    * Authorities this deployment serves beyond loopback: exact `host:port`, or
    * port-less `host` matching any port. The fence accepts loopback and the
    * listener's own bind IP independently; other remote authorities require
-   * an entry here. A non-canonical or non-bare authority fails plugin load.
+   * an entry here, so a non-loopback (`0.0.0.0`) deployment must declare the
+   * names it is reached by. A non-canonical or non-bare authority fails
+   * plugin load.
+   *
+   * A listed authority is also admitted to the settings document: the browser
+   * half reaches the same verdict for its own page authority, so
+   * `ctx.connection.canWriteSettings` is true there. Without that, a headless
+   * deployment reached only over the network could never edit its own settings.
    */
   trustedHosts?: string[]
+  /**
+   * Enforce the browser token handshake. Default: true.
+   *
+   * Set false only when something in front of the harness already authenticates
+   * every visitor (a reverse proxy with its own access control, for example).
+   * The `/api` trust fence still applies, but any request it admits is then
+   * authorized, so reachability becomes the entire access policy: bind to the
+   * interface that proxy reaches and declare exactly the authorities it
+   * forwards. The launch token is neither minted into the printed URL nor
+   * accepted, and no browser-session signing secret is created.
+   */
+  browserAuth?: boolean
   /** Absolute browser-session lifetime in days. Default: 30. */
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
@@ -1705,6 +1737,102 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-jobs-local -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-llm -->
+<a id="deepseek-aidsh-llm"></a>
+
+## `@deepseek-ai/dsh-llm`
+
+- `source`: [`packages/llm/llm/src/index.ts:385`](../packages/llm/llm/src/index.ts)
+
+```ts config-catalog
+/** Configuration for the `llm` service. */
+export interface Config {
+  /**
+   * List prices for routes whose adapter reports none, keyed by provider route
+   * and then by exact model id. A stated rate wins over the adapter's own, so
+   * this is also where a wrongly reported rate is corrected.
+   */
+  cost?: LlmCostOverrides
+}
+
+/**
+ * List prices stated by configuration, keyed by provider route and then by
+ * exact model id.
+ *
+ * A route's rate normally comes from its adapter. An adapter that reports no
+ * rate therefore prices nothing downstream, and no consumer can tell "this
+ * route is free" from "this route never said" — a third-party adapter that
+ * keeps its tariff to itself leaves every estimate silently blank. This table
+ * is the operator's answer for exactly those routes, and it is also the place
+ * to correct a rate an adapter reports wrongly.
+ *
+ * Model ids are matched exactly, so a key may itself contain `/` (as
+ * `deepseek/deepseek-v4.1-flash` does) without ambiguity: the provider route is
+ * the outer key and is never split.
+ */
+export type LlmCostOverrides = Readonly<Record<string, Readonly<Record<string, LlmModelCost>>>>
+
+/**
+ * List price for one exact provider/model route, in USD per million tokens.
+ *
+ * What a deployment actually pays is its own contract — a subscription
+ * gateway bills nothing per call, a routed provider may price a model
+ * differently from its author — so this is a published rate carried for
+ * display, never a billing record. An absent bucket stays absent rather than
+ * defaulting to zero: "this route does not charge for cache writes" and
+ * "nobody published a rate" are different facts, and only the first may be
+ * multiplied into a total.
+ *
+ * The fields above are the rate's base band. A tariff that raises the same
+ * rate inside recurring windows states those windows in {@link LlmModelCost.peak},
+ * and an estimate read against a moment inside one applies that band instead.
+ */
+export interface LlmModelCost {
+  /** Uncached prompt tokens. */
+  input: number
+  /** Generated tokens, reasoning included (reasoning is a reported subset, not an extra charge). */
+  output: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
+  /**
+   * Second band this rate moves to inside recurring windows, when the tariff
+   * publishes one. Absent means every moment prices at the fields above: a
+   * flat card is the absence of a band, not a window that never opens.
+   */
+  peak?: LlmModelCostPeak
+}
+
+/**
+ * The band a route's published rate moves to inside recurring windows.
+ *
+ * A tariff that doubles its peak is stated once as a factor rather than as a
+ * second table of prices: the ratio is what the card publishes, so an edit to
+ * the base band cannot leave the two bands describing different tariffs.
+ */
+export interface LlmModelCostPeak {
+  /** Factor applied to every rate of the base band while a window is open. */
+  readonly multiplier: number
+  /** Windows the peak band is in force in, in UTC; an unlisted moment is base band. */
+  readonly windows: readonly LlmModelCostPeakWindow[]
+}
+
+/** One recurring window in which a route's rate moves to its peak band. */
+export interface LlmModelCostPeakWindow {
+  /** Days the window opens on; a day it does not name stays on the base band. */
+  readonly days: readonly LlmModelCostWeekday[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  readonly start: string
+  /** Window end, `HH:MM` UTC, exclusive, later in the same day than the start. */
+  readonly end: string
+}
+
+/** Weekday names a rate window may name, in UTC. */
+export type LlmModelCostWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-llm -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-llm-deepseek-account -->
 <a id="deepseek-aidsh-llm-deepseek-account"></a>
 
@@ -1745,7 +1873,7 @@ export interface Config extends ProtocolConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:342`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -1787,6 +1915,119 @@ export interface PiAiProviderProfile {
    * model the catalog does not describe is refused rather than skipped.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
+  /**
+   * Refresh this route's model catalog from its endpoint on every web page
+   * load: the route is re-interrogated at its model-listing URL and the
+   * merged result is stored into the `llm-pi-ai` user settings section, so a
+   * gateway that gains or retires models, or corrects a context window, is
+   * reflected without hand-editing `settings.yaml`.
+   *
+   * Only the endpoint itself is ever consulted — nothing here consults the
+   * installed pi-ai catalog, and capacities the listing does not disclose
+   * (output caps, modalities, reasoning) are never invented. Already-listed
+   * entries keep every field the deployment wrote, and a field the listing
+   * now discloses replaces the stored one; a model the listing no longer
+   * serves is dropped, because retirement is the gateway's call. A model
+   * the listing adds gets exactly the fields the listing discloses (id,
+   * display name, capacities) — reasoning efforts are never auto-added,
+   * since no listing endpoint reports them; declare them per model on the
+   * Models page for the models that need them. A model's remaining facts
+   * fall to the route's `defaultContextWindow`, `defaultMaxTokens`, and
+   * `defaultInput` at resolution. An empty successful listing is refused
+   * as ambiguous rather than trusted, so a transient gateway hiccup cannot
+   * erase the stored catalog.
+   *
+   * Web-page loads are throttled per route, so burst refreshes coalesce
+   * behind one listing request. A route whose listing this build cannot read
+   * (a protocol with no `/models` endpoint, or a route without a baseURL) is
+   * skipped with a warning. Nothing runs unless this flag is set; headless
+   * compositions have no web page loads to hook and never refresh.
+   */
+  autoRefresh?: boolean
+  /**
+   * Enrich this route's automatically refreshed catalog from an external
+   * metadata source, filling the facts a model listing endpoint structurally
+   * cannot state.
+   *
+   * A listing endpoint reports which ids it serves and, at best, their
+   * capacities. A gateway that reports ids alone leaves every model without a
+   * context window, an accepted-modality claim, or a price — so spend stays
+   * blank and a vision model cannot accept an image, however correct the
+   * model list itself is. `models.dev` publishes those facts per provider and
+   * model, and this option reads them and fills only what the deployment left
+   * unstated.
+   *
+   * The source is a third party and is subordinate to configuration in both
+   * directions that matter: a field the deployment stated — its own tariff, a
+   * narrowed modality claim, its chosen efforts — is never overwritten, and
+   * membership remains the endpoint's alone, so a model the catalog lists but
+   * the gateway does not serve is never added. A fetch failure is contained:
+   * the refresh completes with the fields the listing disclosed, exactly as
+   * if this option were unset.
+   *
+   * The catalog document is fetched at most once every six hours per process
+   * and shared by every route that opts in. This has no effect unless
+   * {@link PiAiProviderProfile.autoRefresh} is also set, since enrichment
+   * rides the same refresh.
+   */
+  enrichFrom?: 'models.dev'
+  /**
+   * The provider id this route's models are filed under in the external
+   * catalog, when it differs from the route key; absent uses the route key.
+   *
+   * Nothing guesses at an alias: a route named `my-gateway` whose models the
+   * catalog files under `opencode-go` names that id here.
+   */
+  modelsDevProvider?: string
+  /**
+   * Take the reasoning efforts the external catalog discloses, for models
+   * whose entry states none.
+   *
+   * Off by default, and deliberately so: declaring a model's efforts is
+   * otherwise the deployment's call, and a level the catalog offers is not
+   * proof the gateway accepts it. Turning this on trades that control for not
+   * having to declare efforts per model. It has no effect unless
+   * {@link PiAiProviderProfile.enrichFrom} is set.
+   */
+  enrichReasoning?: boolean
+  /**
+   * Model ids this route must never hold, whatever its own endpoint serves.
+   *
+   * A gateway may advertise models it will not actually answer for on this
+   * route's protocol. OpenCode Go is the worked example: one base URL fronts
+   * three APIs, `/chat/completions` for most models but `/responses` for a
+   * few and `/messages` for others, and a model reached on the wrong endpoint
+   * fails every request. `pi-ai`'s protocol is a property of the *route*, not
+   * of a model, so the split cannot be expressed in one route — the models
+   * that need another protocol are declared on a second route and named here,
+   * which is what stops this route's automatic refresh from pulling them back
+   * in. Membership would otherwise be entirely the endpoint's call, and the
+   * endpoint's listing says nothing about which API a model answers on.
+   *
+   * An excluded id is refused in both directions: it is never added from a
+   * listing, and a stored entry already carrying it is dropped, so naming an
+   * id here is enough to move a model between routes. An id no listing and no
+   * stored entry carries is reported as an unused exclusion rather than
+   * ignored, because a typo here is otherwise silent.
+   */
+  excludeModels?: string[]
+  /**
+   * Header name that carries the conversation's own session id on every
+   * request to this route, when a gateway asks for one.
+   *
+   * OpenCode Go requires a stable session id per conversation in
+   * `x-opencode-session` and refuses requests without it; `pi-ai`'s session
+   * affinity sends its own header names (`x-client-request-id`,
+   * `x-session-affinity`), so a gateway naming a different one cannot be
+   * satisfied by compat alone. A static `headers` entry satisfies the letter
+   * of the requirement but gives every conversation the same id, which is
+   * exactly what the gateway asks not to do — it is the per-conversation
+   * value that lets routing and prompt caching work. Naming the header here
+   * sends the real session id under it, winning a static entry of the same
+   * name; a request with no session id (a headless call, a subagent with
+   * none) falls back to whatever `headers` states, or omits the header.
+   */
+  sessionHeader?: string
   /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
@@ -1887,6 +2128,17 @@ export interface PiAiModelProfile {
    * declares the offered levels and their wire spellings.
    */
   reasoningEfforts?: false | PiAiReasoningEfforts
+  /**
+   * Published list price for this model, in USD per million tokens. Absent
+   * keeps the installed catalog entry's own price; a hand-declared gateway
+   * model has none, so it stays unpriced and its usage reports no cost. A
+   * model listing endpoint publishes no prices — that is one of the facts
+   * {@link PiAiProviderProfile.autoRefresh} cannot learn — so a deployment
+   * that wants spend shown for a gateway route states the rate here. A tariff
+   * that raises this rate inside recurring windows states them in the same
+   * block's `peak`, whichever side the rate itself came from.
+   */
+  cost?: PiAiModelCost
   /** pi-ai wire-compatibility switches for this model, winning over the route's per field; one its protocol does not declare is refused. */
   compat?: PiAiCompatProfile
 }
@@ -2005,11 +2257,52 @@ export type PiAiModality = Model<Api>['input'][number]
  */
 export type PiAiReasoningEfforts = Partial<Record<ModelThinkingLevel, string | null>>
 
+/** One model's published rate, USD per million tokens; `input`/`output` are the priced pair. */
+export interface PiAiModelCost {
+  /** Uncached prompt tokens. */
+  input?: number
+  /** Generated tokens, reasoning included. */
+  output?: number
+  /** Prompt tokens served from the provider's prompt cache. */
+  cacheRead?: number
+  /** Prompt tokens written to the provider's prompt cache. */
+  cacheWrite?: number
+  /** Second band the rates above move to inside recurring windows, when the tariff has one. */
+  peak?: PiAiModelCostPeak
+}
+
 /** One reasoning-dispatch wire format a profile may name. */
 export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFormat']>
 
 /** The reasoning-budget field spellings pi-ai accepts. */
 export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['thinkingTokenBudgetField']>
+
+/**
+ * One model's declared peak band, in the config's own all-optional terms so an
+ * absent block stays distinguishable from a stated one. The band belongs to
+ * the *rate*, not to a rate source: an entry that inherits the installed
+ * catalog's price may still declare the windows that price moves in.
+ */
+export interface PiAiModelCostPeak {
+  /** Factor every base rate moves by inside a window. */
+  multiplier?: number
+  /** Windows the band is in force in, in UTC. */
+  windows?: PiAiModelCostWindow[]
+}
+
+/** One declared peak window; every field is required once the window is written. */
+export interface PiAiModelCostWindow {
+  /**
+   * Days the window opens on. Typed as plain strings because this is the
+   * configuration boundary: resolution narrows them to weekday names and
+   * refuses the rest by name.
+   */
+  days?: string[]
+  /** Window start, `HH:MM` UTC, inclusive. */
+  start?: string
+  /** Window end, `HH:MM` UTC, exclusive. */
+  end?: string
+}
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-llm-pi-ai -->
 
@@ -2754,7 +3047,7 @@ export type SessionLogCompressionLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
 
 ## `@deepseek-ai/dsh-session-persistence-jsonl`
 
-- `source`: [`packages/session/session-persistence-jsonl/src/index.ts:90`](../packages/session/session-persistence-jsonl/src/index.ts)
+- `source`: [`packages/session/session-persistence-jsonl/src/index.ts:108`](../packages/session/session-persistence-jsonl/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config for the JSONL backend's root and physical encoding. */
@@ -2769,6 +3062,18 @@ export interface Config {
   root: string
   /** Physical encoding; defaults to checksummed Zstandard frames. */
   compression?: JsonlCompression
+  /**
+   * Ceiling on the decoded JSONL one cold-read handoff may keep resident,
+   * across every memoized Session.
+   *
+   * A Session log on a long conversation decodes to hundreds of megabytes and
+   * the parsed graph it becomes is several times that, so this bound — not the
+   * entry cap beside it — is what decides how much a handoff may hold. Raise it
+   * to trade memory for a repeated decode when reopening a large Session;
+   * lower it on a memory-constrained host. A log past the budget is not
+   * memoized at all.
+   */
+  coldLogMemoMaxBytes?: number
 }
 
 /** Physical encoding selected for JSONL session artifacts. */
@@ -4319,6 +4624,30 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-web-fetch-http -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-web-search-brightdata -->
+<a id="deepseek-aidsh-web-search-brightdata"></a>
+
+## `@deepseek-ai/dsh-web-search-brightdata`
+
+- `inject`: `web`
+- `refs`: `Volatile` (`@deepseek-ai/cordis`)
+- `source`: [`packages/web/web-search-brightdata/src/index.ts:46`](../packages/web/web-search-brightdata/src/index.ts)
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
+export interface Config {
+  /** Literal Bright Data API token; prefer {@link apiKeyEnv} so no secret enters configuration files. */
+  apiKey: Volatile<string | undefined>
+  /** Credential reference resolved for each search; defaults to `$BRIGHTDATA_API_TOKEN`. */
+  apiKeyEnv: Volatile<string>
+  /** Web Unlocker endpoint base; `/request` is appended. */
+  baseURL: Volatile<string | undefined>
+  /** Bright Data zone name. Defaults to the free MCP provisioning's `mcp_unlocker`. */
+  zone: Volatile<string>
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-web-search-brightdata -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-web-search-deepseek -->
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
@@ -4577,7 +4906,6 @@ export interface Config {
 | `@deepseek-ai/dsh-host-directory-picker-auto` | `webServer` · `connection` · `loader` | [`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts) |
 | `@deepseek-ai/dsh-host-directory-picker-native` | — | [`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts) |
 | `@deepseek-ai/dsh-host-plugin-inventory` | `loader` | [`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts) |
-| `@deepseek-ai/dsh-llm` | — | [`packages/llm/llm/src/index.ts`](../packages/llm/llm/src/index.ts) |
 | `@deepseek-ai/dsh-lsp` | — | [`packages/lsp/lsp/src/index.ts`](../packages/lsp/lsp/src/index.ts) |
 | `@deepseek-ai/dsh-mcp-resources` | `tools` | [`packages/mcp/mcp-resources/src/index.ts`](../packages/mcp/mcp-resources/src/index.ts) |
 | `@deepseek-ai/dsh-otel` | — | [`packages/telemetry/otel/src/index.ts`](../packages/telemetry/otel/src/index.ts) |

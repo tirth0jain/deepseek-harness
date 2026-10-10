@@ -225,11 +225,11 @@ export function apply(ctx: Context): void {
     }),
   }, TranscriptViewRow))
 
-  const nodeSources = (binding: SessionBinding): ChatFlowDataInjected => {
+  const nodeSources = (binding: SessionBinding, sessionId: SessionId): ChatFlowDataInjected => {
     const chat = chatSource(binding)
     const conversation = ctx.uiConversation.binding(binding)
     return {
-      hooks: { presentation },
+      hooks: { presentation, modelCosts: modelCostStore(ctx, sessionId) },
       keyedHooks: {
         chatNode: key => chat.getSnapshot().nodes.source(key),
         chatNodeBottom: key => chat.getSnapshot().nodes.bottomSource(key),
@@ -248,7 +248,7 @@ export function apply(ctx: Context): void {
     inject: (sessionId: SessionId): ChatFlowDataInjected => {
       const binding = ctx.sessions.binding(sessionId)
       if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
-      return nodeSources(binding)
+      return nodeSources(binding, sessionId)
     },
   }, ChatFlow))
 
@@ -267,20 +267,13 @@ export function apply(ctx: Context): void {
         const binding = ctx.sessions.binding(sessionId)
         if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
         const session = binding.session
+        // `forkAt` reads the turn timeline, so this view keeps its own chat source.
         const chat = chatSource(binding)
-        const conversation = ctx.uiConversation.binding(binding)
         return {
-          // Upstream's flow-scoped sources stay spread in as the base; the
-          // fork's own hooks and keyed sources follow, adding the per-session
-          // model-cost store and preserving upstream's `chatNodeBottom`.
-          ...nodeSources(binding),
-          hooks: { presentation, modelCosts: modelCostStore(ctx, sessionId) },
-          keyedHooks: {
-            chatNode: key => chat.getSnapshot().nodes.source(key),
-            chatNodeBottom: key => chat.getSnapshot().nodes.bottomSource(key),
-            chatNodeProcess: key => chat.getSnapshot().nodes.processSource(key),
-            chatGroup: key => conversation.snapshot.getSnapshot().views.grouped('chat')?.groupSource(key as GroupKey),
-          },
+          // Upstream's flow-scoped sources carry the presentation policy and
+          // `chatNodeBottom`; the fork's own hook adds the per-session
+          // model-cost store beside them.
+          ...nodeSources(binding, sessionId),
           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
           // Files open in the right Sidebar, not in a desktop application: the
           // content stays in the product, beside the conversation that produced

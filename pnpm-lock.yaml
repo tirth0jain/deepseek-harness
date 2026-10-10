@@ -115,12 +115,12 @@ importers:
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
-      '@types/semver':
-        specifier: ^7.8.0
-        version: 7.8.0
       '@types/papaparse':
         specifier: ^5.5.2
         version: 5.5.2
+      '@types/semver':
+        specifier: ^7.8.0
+        version: 7.8.0
       '@types/spdx-expression-parse':
         specifier: ^4.0.0
         version: 4.0.0
@@ -469,6 +469,9 @@ importers:
       '@deepseek-ai/dsh-web-app':
         specifier: workspace:*
         version: link:../../packages/bundle/web-app
+      '@deepseek-ai/dsh-web-search-brightdata':
+        specifier: workspace:*
+        version: link:../../packages/web/web-search-brightdata
       '@deepseek-ai/dsh-workflow-ptc':
         specifier: workspace:*
         version: link:../../packages/workflow/workflow-ptc
@@ -1400,6 +1403,9 @@ importers:
       '@deepseek-ai/dsh-deque':
         specifier: workspace:*
         version: link:../../util/deque
+      '@deepseek-ai/dsh-storage-domain':
+        specifier: workspace:*
+        version: link:../../storage/storage-domain
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
         version: link:../../../vendor/schemastery
@@ -1506,9 +1512,6 @@ importers:
       '@deepseek-ai/dsh-storage':
         specifier: workspace:*
         version: link:../../storage/storage
-      '@deepseek-ai/dsh-storage-domain':
-        specifier: workspace:*
-        version: link:../../storage/storage-domain
       '@deepseek-ai/dsh-storage-json':
         specifier: workspace:*
         version: link:../../storage/storage-json
@@ -3433,6 +3436,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-layout':
         specifier: workspace:*
         version: link:../ui-layout
+      '@deepseek-ai/dsh-client-ui-model-selection':
+        specifier: workspace:*
+        version: link:../ui-model-selection
       '@deepseek-ai/dsh-client-ui-primitives':
         specifier: workspace:*
         version: link:../ui-primitives
@@ -6157,6 +6163,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-conversation':
         specifier: workspace:*
         version: link:../ui-conversation
+      '@deepseek-ai/dsh-client-ui-model-selection':
+        specifier: workspace:*
+        version: link:../ui-model-selection
       '@deepseek-ai/dsh-client-ui-primitives':
         specifier: workspace:*
         version: link:../ui-primitives
@@ -6178,6 +6187,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: workspace:*
         version: link:../../core/session
+      '@deepseek-ai/dsh-token-meter':
+        specifier: workspace:*
+        version: link:../../llm/token-meter
       '@deepseek-ai/dsh-tools':
         specifier: workspace:*
         version: link:../../core/tools
@@ -14760,6 +14772,34 @@ importers:
         specifier: workspace:*
         version: link:../web
 
+  packages/web/web-search-brightdata:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../core/agent
+      '@deepseek-ai/dsh-credentials':
+        specifier: workspace:^
+        version: link:../../credentials/credentials
+      '@deepseek-ai/dsh-launch-environment':
+        specifier: workspace:^
+        version: link:../../util/launch-environment
+      '@deepseek-ai/dsh-session':
+        specifier: workspace:^
+        version: link:../../core/session
+      '@deepseek-ai/dsh-settings':
+        specifier: workspace:^
+        version: link:../../settings/settings
+      '@deepseek-ai/dsh-web':
+        specifier: workspace:^
+        version: link:../web
+
   packages/web/web-search-deepseek:
     dependencies:
       '@deepseek-ai/schemastery':
@@ -15640,10 +15680,6 @@ importers:
         version: 3.5.42(typescript@6.0.3)
 
 packages:
-
-  papaparse@5.5.3:
-    resolution: {integrity: sha512-5QvjGxYVjxO59MGU2lHVYpRWBBtKHnlIAcSe1uNFCkkptUh63NFRj0FJQm7nR67puEruUci/ZkjmEFrjCAyP4A==}
-
 
   '@agentclientprotocol/sdk@1.4.0':
     resolution: {integrity: sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==}
@@ -21701,6 +21737,9 @@ packages:
   pako@1.0.11:
     resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
 
+  papaparse@5.5.3:
+    resolution: {integrity: sha512-5QvjGxYVjxO59MGU2lHVYpRWBBtKHnlIAcSe1uNFCkkptUh63NFRj0FJQm7nR67puEruUci/ZkjmEFrjCAyP4A==}
+
   papaparse@5.7.0:
     resolution: {integrity: sha512-qBGxg/7Q3Kl9Wfhrz2Z74UnvnHTXLNG6jmKJFeBvP2+y4lV7So+7SR62+Zd47JvdrCkX+nDcnr0ObPzek/+6RA==}
 
@@ -23226,9 +23265,6 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  papaparse@5.5.3: {}
-
 
   '@agentclientprotocol/sdk@1.4.0(zod@4.4.3)':
     dependencies:
@@ -29442,6 +29478,8 @@ snapshots:
   pako@0.2.9: {}
 
   pako@1.0.11: {}
+
+  papaparse@5.5.3: {}
 
   papaparse@5.7.0: {}
 
