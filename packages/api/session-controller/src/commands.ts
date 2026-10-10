@@ -248,6 +248,10 @@ export class SessionCommandController {
       )
     }
     using source = observed
+    // The fork belongs in the directory the source is actually working in:
+    // `header.cwd` is the immutable original project, while a committed
+    // `working-directory/change` records where later operations ran.
+    const sourceCwd = source.projections?.values.workingDirectory ?? source.header.cwd
     const boundary = atSeq ?? latestCompletedPrefixBoundary(source.events)
     if (boundary === undefined || source.events[boundary]?.seq !== boundary) {
       throw new RemoteError(
@@ -278,7 +282,7 @@ export class SessionCommandController {
         seed,
         inheritedEventCount: SessionLogOffset(boundary + 1),
         meta: {
-          ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
+          ...(sourceCwd === undefined ? {} : { cwd: sourceCwd }),
           parentSession: source.header.id,
           isSeeded: true,
           ...(composition.agentPreset === undefined
@@ -336,6 +340,9 @@ export class SessionCommandController {
       new RemoteError('session/handoff-unavailable', message, { sessionId: request.sessionId, reason })
     const observed = await this.observeForHandoff(request.sessionId)
     using source = observed
+    // As in `fork`: the continuation inherits the effective directory, not the
+    // immutable original project recorded in the header.
+    const sourceCwd = source.projections?.values.workingDirectory ?? source.header.cwd
     // Resolved, never required to be live already. A deployment may
     // deliberately leave a Session with no Agent until an operation needs one
     // (`promoteOnHistoryOpen: false`), so the act of looking at a Session
@@ -371,7 +378,7 @@ export class SessionCommandController {
         // No seed: the continuation is a new conversation, and its one opening
         // message is queued below rather than inherited as a prefix.
         meta: {
-          ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }),
+          ...(sourceCwd === undefined ? {} : { cwd: sourceCwd }),
           parentSession: source.header.id,
           isSeeded: false,
           ...(composition.agentPreset === undefined
