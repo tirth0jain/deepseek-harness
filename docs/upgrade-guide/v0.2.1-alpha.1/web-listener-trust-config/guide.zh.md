@@ -1,6 +1,6 @@
 ---
 kind: upgrade-guide
-description: "Web profile 用 `webStartup` 取代 `webRuntime` 服务与 `web-runtime` 行的 `trustedHosts` 配置，并拒绝通配监听地址。"
+description: "Web profile 用 `webStartup` 取代 `webRuntime` 服务与 `web-runtime` 行的 `trustedHosts` 配置。"
 ---
 
 # Web 监听与信任配置迁移到 `webStartup`
@@ -11,7 +11,9 @@ description: "Web profile 用 `webStartup` 取代 `webRuntime` 服务与 `web-ru
 
 Web profile 不再提供 `webRuntime` 服务，`web-runtime` 行也不再声明 `trustedHosts` 配置值。仍注入 `webRuntime` 的 profile、overlay 或 `--patch` 文件会等待一个永不挂载的服务，读取 `ctx.webRuntime.trustedHosts` 的表达式则会求值失败，导致必需的 Connection 无法启动。
 
-`web-startup` 行提供唯一的 `webStartup` 服务，携带本次调用的 `--trusted-host` authority；`connection` 行通过 `ctx.webStartup.trustedHosts` 读取它们。监听 host 现在也必须是本机网卡的一个具体 IPv4 或 IPv6 地址：`host: 0.0.0.0`、`--host ::` 及其他未指定地址都会在加载时被拒绝，因为绑定所有接口会把端口暴露到网络。
+`web-startup` 行提供唯一的 `webStartup` 服务，携带本次调用的 `--trusted-host` authority；`connection` 行通过 `ctx.webStartup.trustedHosts` 读取它们。监听 host 通常是本机网卡的一个具体 IPv4 或 IPv6 地址。上游会在加载时拒绝未指定地址（`host: 0.0.0.0`、`--host ::`），因为绑定所有接口会把端口暴露到网络。
+
+> **本部署有意与之不同。** 它保留通配绑定：Web 运行器位于反向代理之后并传入 `--host 0.0.0.0`，因此 webserver schema 与 web 命令都接受它。/api 浏览器信任围栏未作改动，仍会判定哪些 authority 可以访问该监听器，因此代理部署必须用 `--trusted-host` 声明它被访问时使用的每个名称。
 
 ## 迁移
 
@@ -32,5 +34,5 @@ Web profile 不再提供 `webRuntime` 服务，`web-runtime` 行也不再声明 
        trustedHosts: !!js "['app.internal', ...ctx.webStartup.trustedHosts]"
    ```
 
-4. 将通配 `host` 换成本机网卡的一个具体地址。所绑定的 IP 会被 Host 栅栏直接接受，无需 `--trusted-host`；代理或 DNS authority 仍需显式配置。
-5. 使用迁移后的 overlay 启动：`dsh --profile web --patch ./extra.yml --no-open` 必须打印 `dsh web:` URL 行并正常服务。仍在等待 `webRuntime` 的行会让必需的 Connection 保持 pending 并报告激活失败；被拒绝的 `host` 会在加载时失败。`dsh --profile web --patch ./extra.yml --dump-config` 可在启动前打印组合后的 patch。[Web 组合包 README](../../../../packages/bundle/web-app/README.zh.md)说明这些行。
+4. 选择监听 `host`。上游要求本机网卡的一个具体地址；本部署还接受通配地址 `0.0.0.0`，其反向代理运行器正是传入该值。无论哪种方式，所绑定的 IP 都会被 Host 栅栏直接接受，无需 `--trusted-host`；代理或 DNS authority 仍需显式配置。
+5. 使用迁移后的 overlay 启动：`dsh --profile web --patch ./extra.yml --no-open` 必须打印 `dsh web:` URL 行并正常服务。仍在等待 `webRuntime` 的行会让必需的 Connection 保持 pending 并报告激活失败。`dsh --profile web --patch ./extra.yml --dump-config` 可在启动前打印组合后的 patch。[Web 组合包 README](../../../../packages/bundle/web-app/README.zh.md)说明这些行。

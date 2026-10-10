@@ -1,6 +1,6 @@
 ---
 kind: upgrade-guide
-description: "The Web profile replaces the `webRuntime` service and the `web-runtime` row's `trustedHosts` config with `webStartup`, and rejects a wildcard listener host."
+description: "The Web profile replaces the `webRuntime` service and the `web-runtime` row's `trustedHosts` config with `webStartup`."
 ---
 
 # Web listener and trust configuration moves to `webStartup`
@@ -11,7 +11,9 @@ English | [中文](guide.zh.md)
 
 The Web profile no longer provides the `webRuntime` service, and the `web-runtime` row no longer declares a `trustedHosts` config value. A profile, overlay, or `--patch` file that injects `webRuntime` now waits for a service that never mounts, and an expression reading `ctx.webRuntime.trustedHosts` fails to evaluate, so the required Connection cannot start.
 
-The `web-startup` row provides one `webStartup` service carrying the invocation's `--trusted-host` authorities, and the `connection` row reads them from `ctx.webStartup.trustedHosts`. The listener host must also be one concrete IPv4 or IPv6 address of a local interface: `host: 0.0.0.0`, `--host ::`, and every other unspecified address are rejected at load, because binding every interface exposes the port to the network.
+The `web-startup` row provides one `webStartup` service carrying the invocation's `--trusted-host` authorities, and the `connection` row reads them from `ctx.webStartup.trustedHosts`. The listener host is normally one concrete IPv4 or IPv6 address of a local interface. Upstream rejects the unspecified addresses (`host: 0.0.0.0`, `--host ::`) at load, because binding every interface exposes the port to the network.
+
+> **This deployment diverges.** It keeps the wildcard bind: the Web runner sits behind a reverse proxy and passes `--host 0.0.0.0`, so the webserver schema and the web command accept it. The /api browser-trust fence is unchanged and still decides which authorities may reach the listener, so a proxied deployment must declare each name it is reached by with `--trusted-host`.
 
 ## Migration
 
@@ -32,5 +34,5 @@ The `web-startup` row provides one `webStartup` service carrying the invocation'
        trustedHosts: !!js "['app.internal', ...ctx.webStartup.trustedHosts]"
    ```
 
-4. Replace a wildcard `host` with one concrete address of a local interface. The bind IP itself is accepted by the Host fence with no `--trusted-host` entry; a proxy or DNS authority still needs one.
-5. Boot with the migrated overlay: `dsh --profile web --patch ./extra.yml --no-open` must print the `dsh web:` URL line and serve. A row still waiting on `webRuntime` leaves the required Connection pending and reports an activation failure, and a rejected `host` fails at load. `dsh --profile web --patch ./extra.yml --dump-config` prints the composed patch before boot. [The Web bundle README](../../../../packages/bundle/web-app/README.md) owns the composed rows.
+4. Choose the listener `host`. Upstream requires one concrete address of a local interface; this deployment also accepts the wildcard `0.0.0.0`, which is what its reverse-proxy runner passes. Either way the bind IP itself is accepted by the Host fence with no `--trusted-host` entry, and a proxy or DNS authority still needs one.
+5. Boot with the migrated overlay: `dsh --profile web --patch ./extra.yml --no-open` must print the `dsh web:` URL line and serve. A row still waiting on `webRuntime` leaves the required Connection pending and reports an activation failure. `dsh --profile web --patch ./extra.yml --dump-config` prints the composed patch before boot. [The Web bundle README](../../../../packages/bundle/web-app/README.md) owns the composed rows.

@@ -174,8 +174,8 @@ Serve the DeepSeek Harness browser UI.
 
 Options:
   --host <host>                  bind address: one concrete IPv4 or IPv6 literal
-                                 of a local interface; wildcard addresses are
-                                 rejected
+                                 of a local interface, or 0.0.0.0 to bind all
+                                 interfaces
   --no-open                      do not open the Web UI in the default browser
   --port <port>                  listen port; pass 0 to let the OS pick a free
                                  one
@@ -184,6 +184,8 @@ Options:
                                  grants no trust
   --trusted-host <authority...>  extra authority the /api browser-trust fence
                                  accepts (host or host:port; repeatable)
+  --no-browser-auth              skip the launch-token handshake; only for a
+                                 deployment something else already authenticates
   --tls-cert <file>              PEM server certificate chain; requires
                                  --tls-key
   --tls-key <file>               unencrypted PEM private key; requires
@@ -195,6 +197,11 @@ Examples:
   dsh --profile web --no-open                serve without opening a browser
   dsh --profile web --port 8080              serve on another port
   dsh --profile web --host 10.0.0.7          bind one local interface address
+  dsh --profile web --host 0.0.0.0           bind all interfaces (LAN / reverse proxy);
+                                             browsers must still pass the /api trust fence
+  dsh --profile web --host 0.0.0.0 \
+    --trusted-host dsh.example.com           accept a reverse proxy's forwarded host
+  dsh --profile web --no-browser-auth        trust an upstream proxy's own authentication
   dsh --profile web --public-url https://app.example/ui/ --trusted-host app.example
                                              advertise a prefix-stripping HTTPS proxy entry and admit its authority
   dsh --profile web --tls-cert ./server-chain.pem --tls-key ./server-key.pem
