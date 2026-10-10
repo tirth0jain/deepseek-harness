@@ -117,14 +117,13 @@ describe('web command-line provider', () => {
     expect(observed.exits).toEqual([])
   })
 
-  // The webserver suite owns the wildcard spellings; the CLI only has to
-  // refuse them by address value before any consumer activates.
-  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('rejects wildcard --host %s before activating consumers', async (host) => {
+  // This deployment keeps the fork's all-interfaces mode: the Web runner sits
+  // behind a reverse proxy and passes `--host 0.0.0.0`, so a wildcard bind is
+  // accepted rather than refused by address value.
+  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('accepts wildcard --host %s for a proxied deployment', async (host) => {
     const { values, observed } = await bootProvider(['--host', host])
-    expect(observed.out).toContain(`error: --host ${host} is an unspecified (wildcard) address`)
-    expect(values).toBeUndefined()
-    expect(observed.readerConfig).toBeUndefined()
-    expect(observed.exits).toEqual([1])
+    expect(values).toMatchObject({ browserAuth: true, host, openBrowser: true, trustedHosts: [] })
+    expect(observed.exits).toEqual([])
   })
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
@@ -189,15 +188,18 @@ describe('web command-line provider', () => {
       '--trusted-host', 'lab.internal',
     ])
     expect(values).toEqual({
+      browserAuth: true,
       openBrowser: true,
       publicUrl: 'https://web.example/ui',
       trustedHosts: ['lab.internal'],
     })
     expect(observed.readerConfig).toEqual({
+      browserAuth: true,
       host: '127.0.0.1',
       openBrowser: true,
       port: 3080,
       publicUrl: 'https://web.example/ui',
+      tls: undefined,
       trustedHosts: ['lab.internal'],
     })
     expect(observed.exits).toEqual([])
