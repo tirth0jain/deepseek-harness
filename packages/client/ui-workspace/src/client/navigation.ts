@@ -51,9 +51,14 @@ export interface UiWorkspace {
    * Fork a Session without changing the current selection.
    * @param sessionId - source Session.
    * @param onCreated - observer before the optional child-title update.
+   * @param options - optional permission to start source migration; omission preserves the Host default.
    * @returns the child SessionId after creation and inherited-title increment.
    */
-  forkSession(sessionId: SessionId, onCreated?: (childId: SessionId) => void): Promise<SessionId>
+  forkSession(
+    sessionId: SessionId,
+    onCreated?: (childId: SessionId) => void,
+    options?: Pick<Parameters<ISessions['fork']>[0], 'allowMigration'>,
+  ): Promise<SessionId>
   /**
    * Continue a Session in a condensed new one, open it, and archive the source,
    * unless a later navigation supersedes it.
@@ -68,7 +73,7 @@ export interface UiWorkspace {
    */
   connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId>
   /**
-   * Start a New Session flow and navigate to its Session; a creation the Host
+   * Create a fresh Session, or reuse a blank when preparing an explicit draft. A creation the Host
    * refuses is shown through the Workspace notice and leaves the selection as it was.
    * @param workspaceId - explicit target; absent inherits the current or most recent Workspace.
    * @param options - initial content; existing text or attachments are preserved unless clearPreviousDraft is true.
@@ -174,12 +179,17 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     }, 'ui-workspace: Workspace navigation policy')
   }
 
-  async connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId> {
+  connectWorkspace(workspaceId: WorkspaceId): Promise<SessionId> {
+    return this.connectBlank(workspaceId, true)
+  }
+
+  private async connectBlank(workspaceId: WorkspaceId, reuse: boolean): Promise<SessionId> {
     const workspace = this.workspaces.list.getSnapshot().items
       .find(item => item.workspaceId === workspaceId)
     if (workspace === undefined) {
       throw new Error(`uiWorkspace.connectWorkspace: unknown workspace ${workspaceId}`)
     }
+    if (!reuse) return this.sessions.create({ workspaceId })
     const inflight = this.connecting.get(workspaceId)
     if (inflight !== undefined) return inflight
 
@@ -214,11 +224,17 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     this.replaceMain(target, this.lifetime.signal, 'reveal')
   }
 
-  async openWorkspace(workspaceId: WorkspaceId, beforeOpen?: (sessionId: SessionId) => void): Promise<void> {
+  openWorkspace(workspaceId: WorkspaceId, beforeOpen?: (sessionId: SessionId) => void): Promise<void> {
+    return this.openWorkspaceSession(workspaceId, beforeOpen, true)
+  }
+
+  private async openWorkspaceSession(
+    workspaceId: WorkspaceId, beforeOpen: ((sessionId: SessionId) => void) | undefined, reuse: boolean,
+  ): Promise<void> {
     const navigation = AbortSignal.any([this.ctx.layout.beginNavigation(), this.lifetime.signal])
     let sessionId: SessionId
     try {
-      sessionId = await this.connectWorkspace(workspaceId)
+      sessionId = await this.connectBlank(workspaceId, reuse)
     } catch (error: unknown) {
       // Reported here, not in connectWorkspace: startup restoration calls that
       // directly and stays console-only.
@@ -229,8 +245,17 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     this.replaceMain(sessionId, navigation, 'reveal', beforeOpen)
   }
 
-  async forkSession(sessionId: SessionId, onCreated?: (childId: SessionId) => void): Promise<SessionId> {
-    return this.sessions.fork({ sessionId, increaseTitle: true, ...onCreated === undefined ? {} : { onCreated } })
+  async forkSession(
+    sessionId: SessionId,
+    onCreated?: (childId: SessionId) => void,
+    options?: Pick<Parameters<ISessions['fork']>[0], 'allowMigration'>,
+  ): Promise<SessionId> {
+    return this.sessions.fork({
+      sessionId,
+      increaseTitle: true,
+      ...onCreated === undefined ? {} : { onCreated },
+      ...options?.allowMigration === undefined ? {} : { allowMigration: options.allowMigration },
+    })
   }
 
   /**
@@ -269,11 +294,14 @@ class UiWorkspaceService extends Service implements UiWorkspace {
       this.clearMain()
       return
     }
-    void this.openWorkspace(target, initializeDraft ? (id) => {
-      const binding = this.sessions.binding(id)
-      if (binding === undefined) this.draftPreparationFailed()
-      this.prepareDraft(binding, draftOptions)
-    } : undefined).catch(
+    const opening = draftOptions === undefined
+      ? this.openWorkspaceSession(target, undefined, false)
+      : this.openWorkspace(target, initializeDraft ? (id) => {
+        const binding = this.sessions.binding(id)
+        if (binding === undefined) this.draftPreparationFailed()
+        this.prepareDraft(binding, draftOptions)
+      } : undefined)
+    void opening.catch(
       (reason: unknown) => { console.warn('new session failed:', reason) },
     )
   }

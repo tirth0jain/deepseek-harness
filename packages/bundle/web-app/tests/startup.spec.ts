@@ -66,6 +66,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    publicUrl: !!js ctx.webStartup.publicUrl',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
     '    browserAuth: !!js ctx.webStartup.browserAuth',
+    '    tls: !!js ctx.webStartup.tls',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -101,6 +102,8 @@ describe('web command-line provider', () => {
       '--port', '8080',
       '--trusted-host', 'lab.internal', 'lab-2.internal',
       '--trusted-host', '10.0.0.9',
+      '--tls-cert', 'fullchain.pem',
+      '--tls-key', 'private-key.pem',
     ])
     expect(values).toEqual({
       browserAuth: true,
@@ -108,9 +111,20 @@ describe('web command-line provider', () => {
       openBrowser: false,
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
+      tls: { certFile: 'fullchain.pem', keyFile: 'private-key.pem' },
     })
     expect(observed.readerConfig).toEqual(values)
     expect(observed.exits).toEqual([])
+  })
+
+  // The webserver suite owns the wildcard spellings; the CLI only has to
+  // refuse them by address value before any consumer activates.
+  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('rejects wildcard --host %s before activating consumers', async (host) => {
+    const { values, observed } = await bootProvider(['--host', host])
+    expect(observed.out).toContain(`error: --host ${host} is an unspecified (wildcard) address`)
+    expect(values).toBeUndefined()
+    expect(observed.readerConfig).toBeUndefined()
+    expect(observed.exits).toEqual([1])
   })
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
@@ -187,6 +201,14 @@ describe('web command-line provider', () => {
       trustedHosts: ['lab.internal'],
     })
     expect(observed.exits).toEqual([])
+  })
+
+  it.each(['--tls-cert', '--tls-key'])('rejects an unpaired %s before activating consumers', async (flag) => {
+    const { values, observed } = await bootProvider([flag, 'server.pem'])
+    expect(observed.out).toContain('--tls-cert and --tls-key must be supplied together')
+    expect(values).toBeUndefined()
+    expect(observed.readerConfig).toBeUndefined()
+    expect(observed.exits).toEqual([1])
   })
 
   it('rejects a malformed --public-url before the consumer activates', async () => {
