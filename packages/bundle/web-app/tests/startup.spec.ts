@@ -4,7 +4,7 @@
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
@@ -120,9 +120,15 @@ describe('web command-line provider', () => {
   // This deployment keeps the fork's all-interfaces mode: the Web runner sits
   // behind a reverse proxy and passes `--host 0.0.0.0`, so a wildcard bind is
   // accepted rather than refused by address value.
-  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('accepts wildcard --host %s for a proxied deployment', async (host) => {
+  it.each(['0.0.0.0', '::ffff:0.0.0.0'])('accepts wildcard --host %s and derives LAN authorities', async (host) => {
     const { values, observed } = await bootProvider(['--host', host])
-    expect(values).toMatchObject({ browserAuth: true, host, openBrowser: true, trustedHosts: [] })
+    expect(values).toMatchObject({ browserAuth: true, host, openBrowser: true })
+    // The wildcard literal is never a Host, so the fence needs the machine's
+    // own LAN literals or a browser dialing one would be refused.
+    const interfaces = Object.values(networkInterfaces()).flat()
+      .filter((iface): iface is NonNullable<typeof iface> => iface !== undefined && iface.family === 'IPv4' && !iface.internal)
+      .map(iface => iface.address)
+    expect(values?.trustedHosts).toEqual(interfaces)
     expect(observed.exits).toEqual([])
   })
 
@@ -167,19 +173,6 @@ describe('web command-line provider', () => {
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([1])
-  })
-
-  it('accepts the all-interfaces host and passes it to consumers', async () => {
-    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(values).toEqual({ browserAuth: true, openBrowser: true, host: '0.0.0.0', trustedHosts: [] })
-    expect(observed.readerConfig).toEqual({
-      browserAuth: true,
-      host: '0.0.0.0',
-      openBrowser: true,
-      port: 3080,
-      trustedHosts: [],
-    })
-    expect(observed.exits).toEqual([])
   })
 
   it('publishes --public-url as advertisement only, leaving the fence to --trusted-host', async () => {

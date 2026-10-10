@@ -7,10 +7,11 @@
  * @module @deepseek-ai/dsh-web-app/startup
  */
 
+import { networkInterfaces } from 'node:os'
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
-import { type TlsConfig } from '@deepseek-ai/dsh-host-webserver'
+import { isWildcardHost, type TlsConfig } from '@deepseek-ai/dsh-host-webserver'
 import { parsePublicUrl } from './public-url.ts'
 
 /** Stable Cordis plugin name. */
@@ -91,6 +92,24 @@ Examples:
 }
 
 /**
+ * LAN authorities a wildcard bind is reachable by.
+ *
+ * A wildcard listener's own bind literal is `0.0.0.0`, which never appears as
+ * a `Host`, so the fence's bind-address rule contributes nothing and a browser
+ * dialing the machine's LAN address would be refused. Derive one port-less
+ * IPv4 literal per non-internal interface — DNS rebinding needs an
+ * attacker-controlled name, while an IP-literal Host is safe on any port.
+ * @param host - the invocation's `--host`, when it named one.
+ * @returns the derived authorities, or none for a concrete bind.
+ */
+function lanTrustAddresses(host: string | undefined): string[] {
+  if (host === undefined || !isWildcardHost(host)) return []
+  return Object.values(networkInterfaces()).flat()
+    .filter((iface): iface is NonNullable<typeof iface> => iface !== undefined && iface.family === 'IPv4' && !iface.internal)
+    .map(iface => iface.address)
+}
+
+/**
  * Parse and provide the Web invocation as an ordinary Cordis service. The
  * command's action publishes the flags this invocation named; `--host 0.0.0.0`
  * is accepted (binding all interfaces, e.g. behind a LAN reverse proxy; the
@@ -128,7 +147,7 @@ export function apply(ctx: Context): void {
       ...options.port !== undefined && { port: Number(options.port) },
       ...options.publicUrl !== undefined && { publicUrl: options.publicUrl },
       ...tls !== undefined && { tls },
-      trustedHosts: options.trustedHost ?? [],
+      trustedHosts: [...lanTrustAddresses(options.host), ...options.trustedHost ?? []],
       browserAuth: options.browserAuth,
     } satisfies WebStartupValues)
   })
