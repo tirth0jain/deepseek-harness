@@ -12,7 +12,7 @@ import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativ
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { callVisibility } from '@deepseek-ai/dsh-session-scope'
+import { assertVisibility, callVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
@@ -591,6 +591,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('composerDraft')
   async composerDraft(request: SessionComposerDraftRequest): Promise<SessionComposerDraftValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return { text: await this.composerDrafts.read(request.sessionId) }
   }
 
@@ -603,7 +604,34 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('setComposerDraft')
   async setComposerDraft(request: SessionSetComposerDraftRequest): Promise<void> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     await this.composerDrafts.write(request.sessionId, request.text)
+  }
+
+  /**
+   * Refuse one Session the caller does not own.
+   *
+   * An attached Session answers from memory, which is the path every legitimate
+   * call takes — a draft is only ever saved for a Session the caller has open,
+   * and autosave runs on every keystroke. Only an id naming some other Session
+   * pays for the persisted-header lookup, and none of those are the caller's.
+   * @param sessionId - the Session being reached.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
+   * @throws RemoteError when the caller is constrained and the Session is not theirs.
+   */
+  private async assertSessionVisible(
+    sessionId: SessionId,
+    maySee: PathVisibility | undefined,
+  ): Promise<void> {
+    if (maySee === undefined) return
+    const target = `Session ${JSON.stringify(sessionId)}`
+    const live = this.ctx.sessions.get(sessionId)
+    if (live !== undefined) {
+      assertVisibility(maySee, live.header.cwd, target)
+      return
+    }
+    using observation = await this.ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
+    assertVisibility(maySee, observation.header.cwd, target)
   }
 
   /**
