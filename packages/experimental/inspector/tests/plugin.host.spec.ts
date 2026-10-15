@@ -78,7 +78,7 @@ describe('experimental Inspector Host plugin', () => {
     context.inspector.publish('host/plugin-probe', { ready: true })
 
     const value = bootstrap?.kind === 'global' ? bootstrap.value : undefined
-    const api = connection.createSharedFetchHandler('/api')
+    const api = connection.createSharedFetchHandler('/api', connection.operator)
     const fetched = await api.fetch(new Request(`http://localhost${INSPECTOR_BOOTSTRAP_PATH}`))
     expect(fetched.headers.get('cache-control')).toBe('no-store')
     expect(await fetched.json()).toEqual(value)
@@ -154,7 +154,7 @@ describe('experimental Inspector Host plugin', () => {
     expect(open).toHaveBeenCalledWith(expect.stringMatching(/^devtools:\/\//u), {
       app: { name: 'chrome' }, wait: false,
     })
-    const api = connection.createSharedFetchHandler('/api')
+    const api = connection.createSharedFetchHandler('/api', connection.operator)
     const response = await api.fetch(new Request(`http://localhost${INSPECTOR_BOOTSTRAP_PATH}`))
     expect(response.status).toBe(200)
     expect(await response.json()).toHaveProperty('endpoint', expect.stringContaining('/ingest'))

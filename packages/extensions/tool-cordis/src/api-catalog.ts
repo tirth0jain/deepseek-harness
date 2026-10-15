@@ -764,9 +764,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
-        signature: 'createSharedFetchHandler(channel: \'/api\'): ConnectionFetchHandler',
+        signature: 'createSharedFetchHandler(channel: \'/api\', peer: PeerScope): ConnectionFetchHandler',
         description: 'Compose exact Fetch routes and the shared-channel RPC interceptor.',
-        parameters: [{ name: 'channel', description: 'shared channel mounted by Connection.' }],
+        parameters: [
+          { name: 'channel', description: 'shared channel mounted by Connection.' },
+          { name: 'peer', description: 'Peer this composition serves, bound per request.' },
+        ],
         returns: 'Fetch handler for trusted, authenticated requests.',
       },
       {

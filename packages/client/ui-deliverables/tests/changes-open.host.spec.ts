@@ -68,7 +68,7 @@ async function fixture() {
     inject: ['connection', 'sessionQuery', 'sessionController', 'workspaceFiles', 'fs', 'sandboxPolicy', 'workspaceChanges'],
     apply: registerPresentOpen,
   })
-  const handler = connection.createSharedFetchHandler('/api')
+  const handler = connection.createSharedFetchHandler('/api', connection.operator)
   const open = (query = '?sessionId=owner&seq=9&index=0') => handler.fetch(new Request(`http://localhost${CHANGES_OPEN_PATH}${query}`, { method: 'POST' }))
   const read = (query = '?sessionId=owner&seq=9') => handler.fetch(new Request(`http://localhost${CHANGED_FILES_PATH}${query}`))
   const compare = (query = '?sessionId=owner&seq=9&index=0') => handler.fetch(new Request(`http://localhost${CHANGES_DIFF_PATH}${query}`))

@@ -178,7 +178,7 @@ async function buildApi(
       : { compressionLevel: services.compressionLevel },
   })
   await fiber.await()
-  const handler = connection.createSharedFetchHandler('/api')
+  const handler = connection.createSharedFetchHandler('/api', connection.operator)
   return {
     fetch: handler,
     downloads: {

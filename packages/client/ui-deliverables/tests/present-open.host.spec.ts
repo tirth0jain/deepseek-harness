@@ -51,7 +51,7 @@ async function fixture() {
   const connection = new HostConnectionService(ctx, [], {} as BrowserAuth)
   const fiber = ctx.plugin({ inject: ['connection', 'sessionQuery', 'sessionController', 'workspaceFiles', 'fs', 'sandboxPolicy'], apply: registerPresentOpen })
   await fiber
-  const handler = connection.createSharedFetchHandler('/api')
+  const handler = connection.createSharedFetchHandler('/api', connection.operator)
   const open = (query = '?sessionId=owner&seq=7&index=0', signal?: AbortSignal) => handler.fetch(new Request(
     `http://localhost${PRESENT_OPEN_PATH}${query}`, { method: 'POST', signal: signal ?? null },
   ))

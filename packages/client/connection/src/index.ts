@@ -172,7 +172,6 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       // the settings document instead of being treated as a read-only stranger.
       table.push({ kind: 'global', name: '__DSH_TRUSTED_HOSTS__', value: trustedHosts })
     })
-    const fetchHandler = connection.createSharedFetchHandler(API_PATH)
     const route: WebRoute = {
       kind: 'prefix',
       path: API_PATH,
@@ -183,6 +182,9 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
           return
         }
+        // Composed per request: the handler has to serve whoever this request
+        // was admitted as, not whoever happened to set the route up.
+        const fetchHandler = connection.createSharedFetchHandler(API_PATH, admission.peer)
         await webCtx.waterfall('connection/request', req, res, () => bridge(req, res, fetchHandler, maxRequestBodyBytes))
       },
     }

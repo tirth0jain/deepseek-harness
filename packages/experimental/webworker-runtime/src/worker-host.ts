@@ -266,7 +266,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       if (typertGateway === undefined) {
         throw new Error('webworker host: the tree activated without a typertGateway service')
       }
-      const handler = connection.createSharedFetchHandler('/api')
+      const handler = connection.createSharedFetchHandler('/api', connection.operator)
       const usage = loader.usage()
       console.info(`webworker host: tree active (modules=${String(usage.modules)}, data overlays=${String(overlays.length)}, direct lane=connection.createSharedFetchHandler, als causality=${options.alsCausality === undefined ? 'inert' : 'snapshot/restore'}, image lowering=${LOWERING_VERSION})`)
 

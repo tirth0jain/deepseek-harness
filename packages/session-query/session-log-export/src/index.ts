@@ -1,6 +1,8 @@
 /** Session-log download command and Host-owned streaming route. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
+import { peerVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import type { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import Schema from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -60,7 +62,8 @@ interface SessionLogConnection {
       readonly path: string
       readonly methods: readonly ('GET' | 'HEAD')[]
       readonly requestBody: 'buffered'
-      readonly fetch: (request: Request) => Promise<Response>
+      /** `peer` is the Peer the request was admitted as; a Fetch route has no `invocation`. */
+      readonly fetch: (request: Request, peer: PeerScope) => Promise<Response>
     }): () => Promise<void>
   }
 }
@@ -88,11 +91,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     path: SESSION_LOG_EXPORT_PATH,
     methods: ['GET', 'HEAD'],
     requestBody: 'buffered',
-    fetch: async (request) => {
+    fetch: async (request, peer) => {
       const response = await sessionLogExportResponse(
         ctx,
         request,
         config.compressionLevel ?? DEFAULT_SESSION_LOG_COMPRESSION_LEVEL,
+        peerVisibility(ctx, peer),
       )
       if (request.method === 'GET') return response
       await response.body?.cancel()
@@ -109,6 +113,7 @@ async function sessionLogExportResponse(
   ctx: Context,
   request: Request,
   compressionLevel: SessionLogCompressionLevel,
+  maySee?: PathVisibility,
 ): Promise<Response> {
   const url = new URL(request.url)
   const query = Object.fromEntries(url.searchParams)
@@ -127,6 +132,18 @@ async function sessionLogExportResponse(
       'session log export is unavailable: missing session-query, session-persistence, or attachments service',
       { status: 500 },
     )
+  }
+  if (maySee !== undefined) {
+    // Descendants are not re-tested: a subagent Session is created with its
+    // parent's working directory, so anything reachable from this root is
+    // under the same root.
+    const snapshots = await deps.sessionPersistence.list()
+    const header = snapshots.find(entry => String(entry.header.id) === String(sessionId))?.header
+    // Answered as absent rather than forbidden, so a refused id is
+    // indistinguishable from one that never existed.
+    if (header === undefined || !maySee(header.cwd)) {
+      return new Response('session not found', { status: 404 })
+    }
   }
   const ready: SessionLogExportReady = {
     sessionQuery: deps.sessionQuery,

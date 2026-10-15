@@ -29,11 +29,13 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-client-connection": "workspace:*",
+    "@deepseek-ai/schemastery": "workspace:*",
     "@deepseek-ai/dsh-typert-protocol": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-client-connection": "workspace:*",
+    "@deepseek-ai/schemastery": "workspace:*",
     "@deepseek-ai/dsh-typert-protocol": "workspace:*"
   }
 }

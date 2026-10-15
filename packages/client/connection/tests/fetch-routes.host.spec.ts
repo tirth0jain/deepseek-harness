@@ -29,7 +29,7 @@ describe('Connection exact Fetch routes', () => {
       requestBody: 'streaming',
       fetch: route,
     })
-    const shared = connection.createSharedFetchHandler('/api')
+    const shared = connection.createSharedFetchHandler('/api', connection.operator)
 
     const response = await shared.fetch(new Request(
       'http://host/api/session.export?sessionId=session-1',

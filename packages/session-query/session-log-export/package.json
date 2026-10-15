@@ -55,6 +55,7 @@
     "@deepseek-ai/dsh-client-locale": "workspace:*",
     "@deepseek-ai/dsh-client-store": "workspace:*",
     "@deepseek-ai/dsh-client-ui-commands": "workspace:*",
+    "@deepseek-ai/dsh-session-scope": "workspace:*",
     "@deepseek-ai/dsh-client-ui-conversation": "workspace:*",
     "@deepseek-ai/dsh-client-ui-message-feedback": "workspace:*",
     "@deepseek-ai/dsh-client-ui-primitives": "workspace:*",

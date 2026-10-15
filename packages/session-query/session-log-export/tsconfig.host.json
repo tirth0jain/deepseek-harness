@@ -16,6 +16,7 @@
     { "path": "../../attachment/attachment" },
     { "path": "../../util/brand" },
     { "path": "../../core/session" },
+    { "path": "../../identity/session-scope" },
     { "path": "../../interaction/commands" },
     { "path": "../../session/session-format" },
     { "path": "../../session/session-persistence" },

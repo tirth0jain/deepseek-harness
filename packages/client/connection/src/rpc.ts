@@ -181,8 +181,15 @@ export interface ConnectionFetchRoute {
   readonly methods: readonly ConnectionFetchMethod[]
   /** Buffered requests obey the configured JSON cap; streaming requests arrive with backpressure and no aggregate cap. */
   readonly requestBody: ConnectionRequestBodyMode
-  /** Handle one request after the physical carrier has applied its trust and authentication policy. */
-  readonly fetch: (request: Request) => Promise<Response>
+  /**
+   * Handle one request after the physical carrier has applied its trust and
+   * authentication policy.
+   * @param request - the request, with query parameters still available.
+   * @param peer - the Peer the request was admitted as. This is the only place
+   *   a Fetch route learns who is calling, since a Fetch route is not a Remote
+   *   call and so has no `invocation`.
+   */
+  readonly fetch: (request: Request, peer: PeerScope) => Promise<Response>
 }
 
 /** Host registry for exact Fetch routes that cannot use JSON Remote invocation. */
@@ -248,9 +255,12 @@ export interface HostConnectionHandle {
   /**
    * Compose exact Fetch routes and the shared-channel RPC interceptor.
    * @param channel - shared channel mounted by Connection.
+   * @param peer - the Peer this composition serves. Bound per request rather
+   *   than captured at registration: whoever registered a route is not
+   *   necessarily whoever is calling it.
    * @returns Fetch handler for trusted, authenticated requests.
    */
-  createSharedFetchHandler(channel: '/api'): ConnectionFetchHandler
+  createSharedFetchHandler(channel: '/api', peer: PeerScope): ConnectionFetchHandler
 
   /**
    * Apply Connection's Host/Origin checks and browser authentication to

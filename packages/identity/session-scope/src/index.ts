@@ -104,7 +104,22 @@ export type PathVisibility = (path: string | undefined) => boolean
  *   undefined when this deployment does not constrain them.
  */
 export function callVisibility(ctx: Context): PathVisibility | undefined {
-  const scope = ctx.get('sessionScope')?.scopeOfPeer(ctx.invocation?.peer)
+  return peerVisibility(ctx, ctx.invocation?.peer)
+}
+
+/**
+ * Build the path-visibility predicate for one Peer.
+ *
+ * The counterpart to {@link callVisibility} for entry points that are not
+ * Remote calls — an exact Fetch route has no `invocation`, so it takes its Peer
+ * from the carrier instead.
+ * @param ctx - plugin context carrying the scoping service, if loaded.
+ * @param peer - the Peer the request was admitted as.
+ * @returns predicate answering whether one `cwd` is visible, or undefined when
+ *   this deployment does not constrain that caller.
+ */
+export function peerVisibility(ctx: Context, peer: PeerScope | undefined): PathVisibility | undefined {
+  const scope = ctx.get('sessionScope')?.scopeOfPeer(peer)
   if (scope === undefined || scope.admin) return undefined
   return path => path !== undefined && scopeMayAccess(scope, path)
 }

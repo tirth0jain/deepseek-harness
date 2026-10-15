@@ -38,7 +38,7 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
 interface ConnectionRpcInterceptor {
   readonly matches: ConnectionRpcEndpointMatcher
-  readonly fetchHandler: ConnectionFetchHandler
+  readonly handler: ConnectionRpcHandler
 }
 
 interface RegisteredFetchRoute {
@@ -197,9 +197,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param channel - shared channel mounted by Connection.
    * @returns Fetch handler that selects one owner or returns 404.
    */
-  createSharedFetchHandler(
-    channel: '/api',
-  ): ConnectionFetchHandler {
+  createSharedFetchHandler(channel: '/api', peer: PeerScope): ConnectionFetchHandler {
     return {
       requestBodyMode: ({ method, url }) => {
         const route = this.fetchRoutes.get(url.pathname)
@@ -208,13 +206,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
       fetch: (request) => {
         const pathname = new URL(request.url).pathname
         const route = this.fetchRoutes.get(pathname)
-        if (route?.methods.has(request.method) === true) return route.fetch(request)
+        if (route?.methods.has(request.method) === true) return route.fetch(request, peer)
         const endpoint = endpointFromPath(channel, pathname)
         const interceptor = this.interceptors.get(channel)
         if (endpoint === undefined || interceptor === undefined || !interceptor.matches(endpoint)) {
           return Promise.resolve(new Response('not found', { status: 404 }))
         }
-        return interceptor.fetchHandler.fetch(request)
+        return rpcFetchHandler(channel, interceptor.handler, peer).fetch(request)
       },
     }
   }
@@ -244,7 +242,6 @@ export class HostConnectionService extends Service implements HostConnectionHand
     handler: ConnectionRpcHandler,
   ): () => Promise<void> {
     assertChannel(channel)
-    const fetchHandler = rpcFetchHandler(channel, handler, this.operator)
     const route: WebRoute = {
       kind: 'prefix',
       path: channel,
@@ -255,7 +252,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
           res.end(admission.rejection === 401 ? 'unauthorized' : 'forbidden')
           return
         }
-        await bridge(req, res, fetchHandler)
+        // Bound per request. A handler built at registration would carry the
+        // operator Peer forever, so every caller would speak for it.
+        await bridge(req, res, rpcFetchHandler(channel, handler, admission.peer))
       },
     }
     return owner.effect(
@@ -275,7 +274,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
     const interceptor: ConnectionRpcInterceptor = {
       matches,
-      fetchHandler: rpcFetchHandler(channel, handler, this.operator),
+      handler,
     }
     return owner.effect(() => {
       if (this.interceptors.has(channel)) {

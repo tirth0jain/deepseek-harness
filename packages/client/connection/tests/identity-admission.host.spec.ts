@@ -139,4 +139,61 @@ describe('request identity admission', () => {
     expect(resolver.remembered).toEqual([])
     await dispose()
   })
+
+  it('hands the admitted Peer to the shared-channel interceptor, not the operator', async () => {
+    // Regression: the interceptor used to capture the operator Peer when it was
+    // registered, so `admit()` computed a per-identity Peer that every Remote
+    // call then discarded. Scoping looked wired and enforced nothing.
+    const { connection, dispose } = await mounted()
+    const seen: PeerScope[] = []
+    connection.rpc.intercept('/api', () => true, async (_endpoint, _payload, _signal, peer) => {
+      seen.push(peer)
+      return { ok: true, value: null }
+    })
+    connection.setIdentityResolver(identityResolver())
+    const admitted = connection.admit({
+      headers: { ...LOOPBACK, 'x-auth-request-email': 'punit@rubysteels.com' },
+    })
+    if (!('peer' in admitted)) throw new Error('expected admission')
+
+    const handler = connection.createSharedFetchHandler('/api', admitted.peer)
+    const response = await handler.fetch(new Request('http://127.0.0.1/api/session.list', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId: 'r1', method: 'session.list', payload: {} }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual([admitted.peer])
+    expect(seen[0]).not.toBe(connection.operator)
+    await dispose()
+  })
+
+  it('hands the admitted Peer to an exact Fetch route', async () => {
+    // A Fetch route is not a Remote call, so the Peer parameter is the only way
+    // it can learn who is calling — session.export depends on it.
+    const { connection, dispose } = await mounted()
+    const seen: PeerScope[] = []
+    connection.fetch.register({
+      path: '/api/session.export',
+      methods: ['GET'],
+      requestBody: 'buffered',
+      fetch: (request, peer) => {
+        seen.push(peer)
+        return Promise.resolve(Response.json({ ok: true, url: request.url }))
+      },
+    })
+    connection.setIdentityResolver(identityResolver())
+    const admitted = connection.admit({
+      headers: { ...LOOPBACK, 'x-auth-request-email': 'punit@rubysteels.com' },
+    })
+    if (!('peer' in admitted)) throw new Error('expected admission')
+
+    const handler = connection.createSharedFetchHandler('/api', admitted.peer)
+    const response = await handler.fetch(new Request('http://127.0.0.1/api/session.export?sessionId=session-1'))
+
+    expect(response.status).toBe(200)
+    expect(seen).toEqual([admitted.peer])
+    await dispose()
+  })
 })

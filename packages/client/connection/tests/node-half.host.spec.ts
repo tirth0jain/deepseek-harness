@@ -609,7 +609,7 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: '127.0.0.1:3080', cookie }, '/api/goals/create', request), answered.response)
     expect(JSON.parse(String(answered.state.body))).toMatchObject({ result: { ok: true, value: null } })
     // A shell-owned carrier dispatches the shared handler without the bridge and speaks for the operator too.
-    const direct = await connection.createSharedFetchHandler('/api').fetch(new Request('http://127.0.0.1:3080/api/goals/create', {
+    const direct = await connection.createSharedFetchHandler('/api', connection.operator).fetch(new Request('http://127.0.0.1:3080/api/goals/create', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(request),
