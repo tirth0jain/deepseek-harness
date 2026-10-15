@@ -9,6 +9,9 @@
   ],
   "references": [
     {
+      "path": "../../identity/session-scope"
+    },
+    {
       "path": "../../../vendor/cosmokit"
     },
     {

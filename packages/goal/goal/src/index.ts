@@ -13,6 +13,7 @@ import { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import { assertVisibility, callVisibility } from '@deepseek-ai/dsh-session-scope'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
@@ -470,6 +471,15 @@ export class GoalService extends TypertRemoteService {
     if (this.ctx.agents.get(agent.id) !== agent) {
       throw new GoalError(`agent "${agent.id}" is not live in this registry`, 'GOAL_AGENT_NOT_LIVE')
     }
+    // A goal is the objective text a Session is working toward, so it is exactly
+    // as private as that Session. Every Remote on this service reaches its Agent
+    // through here — `get` and `disarm` directly, the rest by way of
+    // `prepareMutation` — which makes this the one place that has to say so.
+    assertVisibility(
+      callVisibility(this.ctx),
+      agent.session.header.cwd,
+      `the goal of Session ${JSON.stringify(agent.session.id)}`,
+    )
   }
 
   /** Read the current durable projection maintained by the registry. */
