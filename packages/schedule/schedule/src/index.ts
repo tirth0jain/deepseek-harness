@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { callVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
@@ -283,13 +284,41 @@ export class ScheduleService extends TypertRemoteService {
    */
   @Remote('catalog')
   async catalog(): Promise<ScheduleCatalogEntry[]> {
+    const maySee = callVisibility(this.ctx)
     const domain = await this.getDomain()
-    return [...domain.table('tasks').entries()]
+    const entries = [...domain.table('tasks').entries()]
       .map(([, task]) => ({
         ...task.record, sessionId: task.sessionId, status: task.status,
         ...(task.lastDelivery === undefined ? {} : { lastDelivery: task.lastDelivery }),
       }))
+    // Every reminder in the deployment used to be listed here regardless of who
+    // asked. A reminder belongs to a Session, so it is visible to exactly the
+    // callers who may see that Session.
+    const visible = maySee === undefined ? undefined : await this.visibleSessionIds(maySee)
+    return entries
+      .filter(entry => visible === undefined || visible.has(String(entry.sessionId)))
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.id.localeCompare(b.id))
+  }
+
+  /**
+   * Identity of every Session whose working directory the caller may see.
+   *
+   * Attached Sessions answer from memory; the rest come from their persisted
+   * headers. Both are needed because a reminder can outlive the Session it was
+   * created in, and a stale reminder to somebody else's Session is exactly the
+   * row this is meant to withhold.
+   * @param maySee - the caller's visibility over a Session's working directory.
+   * @returns identities of the Sessions this caller may see.
+   */
+  private async visibleSessionIds(maySee: PathVisibility): Promise<ReadonlySet<string>> {
+    const visible = new Set<string>()
+    for (const session of this.ctx.sessions.list()) {
+      if (maySee(session.header.cwd)) visible.add(String(session.id))
+    }
+    for (const snapshot of await this.ctx.sessionPersistence.list()) {
+      if (maySee(snapshot.header.cwd)) visible.add(String(snapshot.header.id))
+    }
+    return visible
   }
 
   /**
