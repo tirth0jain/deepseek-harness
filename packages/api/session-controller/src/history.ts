@@ -16,6 +16,7 @@ import type {
   SessionSeqCursor,
 } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
+import type { PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import type {} from '@deepseek-ai/dsh-subagent'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -74,9 +75,14 @@ export class SessionHistoryController {
    * Read one message-aligned history page without activating an Agent.
    * @param request - durable address and backwards-page cursor.
    * @param signal - caller cancellation for persistence reads.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
    * @returns a contiguous event page.
    */
-  async page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage> {
+  async page(
+    request: SessionPageRequest,
+    signal: AbortSignal,
+    maySee?: PathVisibility,
+  ): Promise<SessionPage> {
     validatePageRequest(request)
     const throughSeq: SessionSeqCursor = request.throughSeq === -1
       ? -1
@@ -84,7 +90,7 @@ export class SessionHistoryController {
     const beforeSeq = request.beforeSeq === undefined
       ? undefined
       : SessionLogOffset(request.beforeSeq)
-    using source = await this.sourceFor(request.address, signal, false)
+    using source = await this.sourceFor(request.address, signal, false, maySee)
     signal.throwIfAborted()
     const sourceLog = source.events
     const sourceCursor: SessionSeqCursor = sourceLog.at(-1)?.seq ?? -1
@@ -117,9 +123,14 @@ export class SessionHistoryController {
    * Follow events appended after an initial cursor on one durable address.
    * @param request - durable address and last committed sequence already held by the caller.
    * @param signal - stream cancellation owned by the Remote carrier.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
    * @returns a complete opening snapshot followed by gap-free durable events and opted-in assistant frames.
    */
-  async *follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
+  async *follow(
+    request: SessionFollowRequest,
+    signal: AbortSignal,
+    maySee?: PathVisibility,
+  ): AsyncIterable<SessionFollowFrame> {
     validateHistoryWindow(request)
     const { address } = request
     const target = addressId(address)
@@ -178,7 +189,7 @@ export class SessionHistoryController {
     const onAbort = (): void => { notify() }
     signal.addEventListener('abort', onAbort, { once: true })
     try {
-      using source = await this.sourceFor(address, signal, true)
+      using source = await this.sourceFor(address, signal, true, maySee)
       const events = source.events
       signal.throwIfAborted()
       const cursor = source.cursor
@@ -249,6 +260,7 @@ export class SessionHistoryController {
     address: SessionAddress,
     signal: AbortSignal,
     withProjections: boolean,
+    maySee?: PathVisibility,
   ): Promise<SessionObservation> {
     const sessionId = addressId(address)
     try {
@@ -258,6 +270,13 @@ export class SessionHistoryController {
       })
       if (observation.header.cwd === undefined) {
         observation[Symbol.dispose]()
+        rejectNotFound(address)
+      }
+      if (maySee !== undefined && !maySee(observation.header.cwd)) {
+        observation[Symbol.dispose]()
+        // Refused as absent rather than forbidden: whether somebody else's
+        // Session exists, and what it is called, is itself information this
+        // caller has no claim to.
         rejectNotFound(address)
       }
       try {

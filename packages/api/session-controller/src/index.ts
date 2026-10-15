@@ -624,7 +624,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('page')
   page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage> {
-    return this.history.page(request, signal)
+    return this.history.page(request, signal, callVisibility(this.ctx))
   }
 
   /**
@@ -636,7 +636,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote({ mode: 'stream' })
   follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
-    return this.history.follow(request, signal)
+    return this.history.follow(request, signal, callVisibility(this.ctx))
   }
 
   /**
