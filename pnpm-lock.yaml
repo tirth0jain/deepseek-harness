@@ -2801,6 +2801,9 @@ importers:
       '@deepseek-ai/dsh-session-reference':
         specifier: workspace:*
         version: link:../../context/session-reference
+      '@deepseek-ai/dsh-session-scope':
+        specifier: workspace:*
+        version: link:../../identity/session-scope
       '@deepseek-ai/dsh-session-stats':
         specifier: workspace:*
         version: link:../../session/session-stats
