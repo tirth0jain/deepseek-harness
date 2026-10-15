@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
-import { assertVisibility, apply, type SessionScopeConfig } from '../src/index.ts'
+import { assertVisibility, apply, callRoots, type SessionScopeConfig } from '../src/index.ts'
 
 const ADMIN = 'main.pastrami903@passfwd.com'
 
@@ -134,6 +134,49 @@ describe('session scope service', () => {
   it('reports whether an unidentified request must be refused', async () => {
     expect((await service()).requiresIdentity).toBe(false)
     expect((await service({ ...officeConfig, requireIdentity: true })).requiresIdentity).toBe(true)
+  })
+})
+
+describe('rootsOfPeer and callRoots', () => {
+  it('names the directories one constrained peer owns', async () => {
+    const scope = await service()
+    const punit = peer()
+    scope.remember(punit, 'Punit@Rubysteels.com')
+    expect(scope.rootsOfPeer(punit)).toEqual(['/root/punit'])
+  })
+
+  it('answers undefined for every peer nothing constrains', async () => {
+    const scope = await service()
+    const admin = peer()
+    const stranger = peer()
+    const minted = peer()
+    scope.remember(admin, ADMIN)
+    scope.remember(minted, 'newcomer@rubysteels.com')
+
+    expect(scope.rootsOfPeer(admin)).toBeUndefined()
+    expect(scope.rootsOfPeer(stranger)).toBeUndefined()
+    // A minted root is a root before it exists on disk, so a first-time
+    // identity can be handed one without waiting for a mkdir.
+    expect(scope.rootsOfPeer(minted)).toEqual(['/root/newcomer'])
+  })
+
+  it('answers undefined outside a Remote call', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin((pluginCtx) => { apply(pluginCtx, officeConfig) })
+    await fiber.await()
+    mounted.push(() => fiber.dispose())
+    expect(ctx.get('sessionScope')).toBeDefined()
+    expect(callRoots(ctx)).toBeUndefined()
+  })
+
+  it('reads the roots of the peer a Remote call was admitted as', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin((pluginCtx) => { apply(pluginCtx, officeConfig) })
+    await fiber.await()
+    mounted.push(() => fiber.dispose())
+    const punit = peer()
+    ctx.get('sessionScope')?.remember(punit, 'punit@rubysteels.com')
+    expect(callRoots(ctx.extend({ invocation: { peer: punit } }))).toEqual(['/root/punit'])
   })
 })
 

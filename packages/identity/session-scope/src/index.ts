@@ -124,6 +124,20 @@ export function peerVisibility(ctx: Context, peer: PeerScope | undefined): PathV
   return path => path !== undefined && scopeMayAccess(scope, path)
 }
 
+/**
+ * Read the directory roots the caller of a Remote method owns.
+ *
+ * {@link callVisibility} answers yes/no about one path, which is all an
+ * enumerator needs. An entry point that has to *choose* a path for a caller —
+ * a picker deciding where to open — needs the roots themselves.
+ * @param ctx - the per-call plugin context inside a Remote method.
+ * @returns the caller's absolute roots, or undefined when this deployment does
+ *   not constrain them.
+ */
+export function callRoots(ctx: Context): readonly string[] | undefined {
+  return ctx.get('sessionScope')?.rootsOfPeer(ctx.invocation?.peer)
+}
+
 /** Wire details for a refusal to reach something outside the caller's own directories. */
 export interface SessionScopeRefusalDetails {
   /** What was being reached, named for the operator reading the failure. */
@@ -270,6 +284,18 @@ export class SessionScopeService extends Service implements RequestIdentityResol
     const resolved = resolveScope(identity, this.config)
     if (resolved !== undefined) this.scopes.set(identity, resolved)
     return resolved
+  }
+
+  /**
+   * The directory roots the Peer behind a Remote call owns.
+   * @param peer - Peer from `this.ctx.invocation.peer`.
+   * @returns the roots this caller may reach, or undefined when nothing
+   *   constrains them — an administrator, or a deployment that names nobody.
+   */
+  rootsOfPeer(peer: PeerScope | undefined): readonly string[] | undefined {
+    const scope = this.scopeOfPeer(peer)
+    if (scope === undefined || scope.admin) return undefined
+    return scope.roots
   }
 
   /**

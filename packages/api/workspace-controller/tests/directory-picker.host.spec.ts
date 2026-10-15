@@ -1,7 +1,10 @@
+import { basename, dirname } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { DirectoryPicker, DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
-import type { DirectoryPickerCapability } from '@deepseek-ai/dsh-host-directory-picker'
+import type { DirectoryEntry, DirectoryPickerCapability } from '@deepseek-ai/dsh-host-directory-picker'
+import { apply as applyScope } from '@deepseek-ai/dsh-session-scope'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import { remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import { DirectoryPickerController } from '../src/directory-picker.ts'
 
@@ -163,5 +166,102 @@ describe('directoryPicker browse Remotes', () => {
       .toMatchObject({ code: 'directory-picker/unavailable', details: { capability: 'native' } })
     expect(await refused(picker.createDirectory('/x', 'y')))
       .toMatchObject({ code: 'directory-picker/unavailable', details: { capability: 'native' } })
+  })
+})
+
+/** The ancestry chain the real backend reports: every level from the root down. */
+function ancestry(path: string): DirectoryEntry[] {
+  const chain: DirectoryEntry[] = []
+  let current = path
+  for (;;) {
+    const parent = dirname(current)
+    chain.unshift({ name: parent === current ? current : basename(current), path: current, hidden: false })
+    if (parent === current) return chain
+    current = parent
+  }
+}
+
+/** A browse backend that reports real ancestry, so crumb confinement is visible. */
+const ANCESTRY_STUB: DirectoryPickerCapability = {
+  kind: 'browse',
+  list: async (path) => {
+    const target = path ?? '/home/user'
+    return {
+      path: target,
+      home: '/home/user',
+      crumbs: ancestry(target),
+      entries: [{ name: 'projects', path: `${target}/projects`, hidden: false }],
+      truncated: false,
+    }
+  },
+  createDirectory: async (path, name) => `${path}/${name}`,
+}
+
+describe('directoryPicker browse Remotes under a scoped caller', () => {
+  const PUNIT = 'punit@rubysteels.com'
+
+  /** The picker as one authenticated account reaches it, over its own root. */
+  async function scoped() {
+    await harness(ANCESTRY_STUB)
+    const ctx = roots.at(-1)
+    if (ctx === undefined) throw new Error('harness mounted no context')
+    await ctx.plugin((pluginCtx) => {
+      applyScope(pluginCtx, {
+        header: 'x-auth-request-email',
+        admin: [],
+        users: { [PUNIT]: '/home/user' },
+        provisionRoot: '',
+        requireIdentity: true,
+      })
+    }).await()
+    const peer = { id: 'peer' as PeerScope['id'], ctx: new Context() } as unknown as PeerScope
+    ctx.sessionScope.remember(peer, PUNIT)
+    return ctx.extend({ invocation: { peer } }).get('directoryPickerController') as DirectoryPickerController
+  }
+
+  it('opens the browser at the caller\'s own root instead of the shared home', async () => {
+    const picker = await scoped()
+    const listing = await picker.list(undefined, new AbortController().signal)
+    expect(listing).toMatchObject({
+      path: '/home/user',
+      entries: [{ path: '/home/user/projects' }],
+    })
+  })
+
+  it('refuses a level outside the caller\'s roots without scanning it', async () => {
+    const picker = await scoped()
+    const failure = await refused(picker.list('/home/other', new AbortController().signal))
+    expect(failure.code).toBe('session-scope/forbidden')
+    expect(failure.details).toMatchObject({ path: '/home/other' })
+    expect(await refused(picker.list('/home/user2', new AbortController().signal)))
+      .toMatchObject({ code: 'session-scope/forbidden' })
+  })
+
+  it('cuts the reported ancestry at the caller\'s root', async () => {
+    const picker = await scoped()
+    const root = await picker.list('/home/user', new AbortController().signal)
+    expect(root.crumbs.map(crumb => crumb.path)).toEqual(['/home/user'])
+
+    const deeper = await picker.list('/home/user/projects', new AbortController().signal)
+    expect(deeper.crumbs.map(crumb => crumb.path)).toEqual(['/home/user', '/home/user/projects'])
+  })
+
+  it('refuses creating a directory outside the caller\'s roots', async () => {
+    const picker = await scoped()
+    expect(await refused(picker.createDirectory('/home/other', 'mine')))
+      .toMatchObject({ code: 'session-scope/forbidden', details: { path: '/home/other/mine' } })
+    expect(await refused(picker.createDirectory('/home', 'other')))
+      .toMatchObject({ code: 'session-scope/forbidden', details: { path: '/home/other' } })
+    expect(await picker.createDirectory('/home/user', 'site-a')).toBe('/home/user/site-a')
+  })
+
+  it('leaves an unconstrained caller with the whole host', async () => {
+    const picker = await harness(ANCESTRY_STUB)
+    const signal = new AbortController().signal
+    expect((await picker.list('/home/other', signal)).path).toBe('/home/other')
+    expect((await picker.list(undefined, signal)).path).toBe('/home/user')
+    expect((await picker.list('/home/user', signal)).crumbs.map(crumb => crumb.path))
+      .toEqual(['/', '/home', '/home/user'])
+    expect(await picker.createDirectory('/home/other', 'mine')).toBe('/home/other/mine')
   })
 })

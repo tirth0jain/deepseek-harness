@@ -9991,6 +9991,9 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:*
         version: link:../../session/session-projection
+      '@deepseek-ai/dsh-session-scope':
+        specifier: workspace:*
+        version: link:../../identity/session-scope
       '@deepseek-ai/dsh-subprocess-local':
         specifier: workspace:*
         version: link:../../subprocess/subprocess-local
@@ -11572,6 +11575,9 @@ importers:
       '@deepseek-ai/dsh-session-projection':
         specifier: workspace:*
         version: link:../../session/session-projection
+      '@deepseek-ai/dsh-session-scope':
+        specifier: workspace:*
+        version: link:../../identity/session-scope
       '@deepseek-ai/dsh-storage':
         specifier: workspace:*
         version: link:../../storage/storage

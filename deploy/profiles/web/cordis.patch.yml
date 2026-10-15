@@ -115,10 +115,11 @@
 # /root/sunny) and `Aji@` would mint /root/aji (the directory is /root/ajit).
 # Anyone else at the domain is minted /root/<local-part> on first load.
 #
-# requireIdentity stays false until the header is proven to arrive on this
-# route: Caddy's strict_auth uses copy_headers, which injects the real
-# X-Auth-Request-Email, but a deployment that demanded an identity before
-# verifying it would 403 every visitor at once.
+# requireIdentity is on: Caddy's strict_auth injects the real
+# X-Auth-Request-Email with copy_headers, so every admitted request names its
+# account and a request arriving without one is refused rather than treated as
+# the operator. That also closes the direct-to-192.168.1.203:3080 path, which
+# bypasses the edge entirely.
 #
 # Skills are not scoped. They live under $DSH_HOME/skills, outside every user
 # root, so everyone sees the same catalog.
@@ -132,4 +133,4 @@
       "sunn@rubysteels.com": /root/sunny
       "aji@rubysteels.com": /root/ajit
     provisionRoot: /root
-    requireIdentity: false
+    requireIdentity: true
