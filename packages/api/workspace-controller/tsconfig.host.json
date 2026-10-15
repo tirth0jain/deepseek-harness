@@ -15,6 +15,9 @@
     "src/default-directory.ts"
   ],
   "references": [
+    {
+      "path": "../../identity/session-scope"
+    },
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../core/session" },

@@ -93,12 +93,18 @@ export type PathVisibility = (path: string | undefined) => boolean
  * sessions applies a caller's visibility without knowing how ownership is
  * configured. Must be called from inside a Remote method: `ctx.invocation` is
  * what carries the caller's Peer, and it reads undefined anywhere else.
+ *
+ * Undefined means unconstrained, which is not the same as a predicate that
+ * answers true everywhere. Callers that suppress whole categories of data for
+ * a scoped user — the registry-global archive and pin sets, for instance —
+ * need to tell those apart.
  * @param ctx - the per-call plugin context inside a Remote method.
- * @returns predicate answering whether one `cwd` is visible to this caller.
+ * @returns predicate answering whether one `cwd` is visible to this caller, or
+ *   undefined when this deployment does not constrain them.
  */
-export function callVisibility(ctx: Context): PathVisibility {
+export function callVisibility(ctx: Context): PathVisibility | undefined {
   const scope = ctx.get('sessionScope')?.scopeOfPeer(ctx.invocation?.peer)
-  if (scope === undefined || scope.admin) return () => true
+  if (scope === undefined || scope.admin) return undefined
   return path => path !== undefined && scopeMayAccess(scope, path)
 }
 

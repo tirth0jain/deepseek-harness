@@ -2,6 +2,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { callVisibility } from '@deepseek-ai/dsh-session-scope'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { WorkspaceCommands } from './commands.ts'
 import { DirectoryPickerController } from './directory-picker.ts'
@@ -193,7 +194,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote({ mode: 'stream' })
   follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame> {
-    return this.feed.follow(signal)
+    return this.feed.follow(signal, callVisibility(this.ctx))
   }
 }
 

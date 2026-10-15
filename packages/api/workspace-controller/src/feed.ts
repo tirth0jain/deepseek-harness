@@ -2,6 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { Deque } from '@deepseek-ai/dsh-deque'
+import type { PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import type { DomainChanged } from '@deepseek-ai/dsh-storage-domain'
 import type { Workspace, WorkspaceRecord } from '@deepseek-ai/dsh-workspace'
 import {
@@ -67,27 +68,38 @@ export class WorkspaceFeed {
 
   /**
    * Read the complete current projection synchronously.
-   * @returns all active Workspaces plus archived and pinned Session identities.
+   * @param maySee - the caller's Workspace-path visibility, or undefined when
+   *   this deployment does not scope Workspaces to users.
+   * @returns all visible Workspaces plus archived and pinned Session identities.
    */
-  baseline(): WorkspaceBaseline {
+  baseline(maySee?: PathVisibility): WorkspaceBaseline {
+    const items = this.ctx.workspaceRegistry.list()
+      .filter(workspace => maySee === undefined || maySee(workspace.path))
+      .map(workspaceView)
     return {
-      items: this.ctx.workspaceRegistry.list().map(workspaceView),
-      archivedSessionIds: [...this.ctx.workspaceRegistry.archivedSessionIds],
-      pinnedSessionIds: [...this.ctx.workspaceRegistry.pinnedSessionIds],
+      items,
+      // Archive and pin are registry-global sets: knowing which Sessions
+      // elsewhere are archived is somebody else's business, so a scoped caller
+      // gets neither rather than a filtered guess.
+      archivedSessionIds: maySee === undefined ? [...this.ctx.workspaceRegistry.archivedSessionIds] : [],
+      pinnedSessionIds: maySee === undefined ? [...this.ctx.workspaceRegistry.pinnedSessionIds] : [],
     }
   }
 
   /**
    * Open one generation beginning with a complete baseline.
    * @param signal - generation cancellation.
+   * @param maySee - the caller's Workspace-path visibility, or undefined when
+   *   this deployment does not scope Workspaces to users.
    * @returns baseline followed by ordered Workspace increments.
    */
-  async *follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame> {
+  async *follow(signal: AbortSignal, maySee?: PathVisibility): AsyncIterable<WorkspaceFollowFrame> {
     signal.throwIfAborted()
-    const follower = new WorkspaceFollower()
+    const baseline = this.baseline(maySee)
+    const follower = new WorkspaceFollower(maySee, baseline.items.map(item => String(item.workspaceId)))
     this.followers.add(follower)
     try {
-      yield { type: 'baseline', value: this.baseline() }
+      yield { type: 'baseline', value: baseline }
       yield* follower.read(signal)
     } finally {
       this.followers.delete(follower)
@@ -149,14 +161,62 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 class WorkspaceFollower {
   private readonly frames = new Deque<WorkspaceFollowFrame>()
+  private readonly visible: Set<string>
   private waiting: (() => void) | undefined
   private closed = false
+
+  /**
+   * @param maySee - the caller's Workspace-path visibility, or undefined when unconstrained.
+   * @param initial - Workspace identities this caller's baseline already carried.
+   */
+  constructor(
+    private readonly maySee?: PathVisibility,
+    initial: readonly string[] = [],
+  ) {
+    this.visible = new Set(initial)
+  }
 
   push(frame: WorkspaceFollowFrame): void {
     /* v8 ignore next -- closed followers are removed before later publication can reach them. */
     if (this.closed) return
-    this.frames.pushBack(frame)
+    const admitted = this.admit(frame)
+    if (admitted === undefined) return
+    this.frames.pushBack(admitted)
     this.waiting?.()
+  }
+
+  /**
+   * Apply this follower's visibility to one increment.
+   *
+   * An order frame carries identities only, so it is narrowed to the Workspaces
+   * this follower was actually shown rather than re-tested against a path it
+   * does not have. Archive and pin frames are withheld outright: both sets are
+   * registry-global, and the baseline already tells a scoped caller they are empty.
+   * @param frame - the frame about to be published.
+   * @returns the frame this follower may receive, or undefined to withhold it.
+   */
+  private admit(frame: WorkspaceFollowFrame): WorkspaceFollowFrame | undefined {
+    if (this.maySee === undefined || frame.type === 'baseline') return frame
+    switch (frame.type) {
+      case 'upsert': {
+        const workspaceId = String(frame.workspace.workspaceId)
+        const allowed = this.maySee(frame.workspace.path)
+        if (allowed) this.visible.add(workspaceId)
+        else this.visible.delete(workspaceId)
+        return allowed ? frame : undefined
+      }
+      case 'remove':
+        this.visible.delete(String(frame.workspaceId))
+        return frame
+      case 'order':
+        return {
+          type: 'order',
+          workspaceIds: frame.workspaceIds.filter(id => this.visible.has(String(id))),
+        }
+      case 'archived':
+      case 'pinned':
+        return undefined
+    }
   }
 
   close(): void {
