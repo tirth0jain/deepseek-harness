@@ -34,7 +34,21 @@ step "stopping $UNIT"
 systemctl stop "$UNIT"
 echo "stopped"
 
+step "clean"
+# Stale lib/ output is the failure this guards against. A package that moved
+# left its old build behind, tsdown resolved the package name to that leftover
+# through a hoisted node_modules link, and the build died on a symbol the
+# current source no longer exports. Cleaning costs a few minutes and removes
+# the whole class of problem; skipping it risks a failed build that strands the
+# service, which costs a lot more.
+pnpm run clean
+
 step "pnpm install"
+# Restores what clean took. It does NOT prune a stale hoisted link in
+# node_modules/.pnpm/node_modules for a package that has moved -- that link
+# survives and still resolves to the abandoned directory. If a build ever fails
+# on a symbol that appears nowhere in src/, look for one first:
+#   find . -maxdepth 6 -type l -lname '*<package-dir>*'
 pnpm install
 
 step "build:lib"
