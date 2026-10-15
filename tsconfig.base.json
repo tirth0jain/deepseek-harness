@@ -454,6 +454,7 @@
       "@deepseek-ai/dsh-session-query": ["./packages/session-query/session-query/src"],
       "@deepseek-ai/dsh-session-query-sqlite": ["./packages/session-query/session-query-sqlite/src"],
       "@deepseek-ai/dsh-session-reference": ["./packages/context/session-reference/src"],
+      "@deepseek-ai/dsh-session-scope": ["./packages/identity/session-scope/src"],
       "@deepseek-ai/dsh-session-snapshot": ["./packages/test-support/session-snapshot/src"],
       "@deepseek-ai/dsh-session-stats": ["./packages/session/session-stats/src"],
       "@deepseek-ai/dsh-session-telemetry": ["./packages/session/session-telemetry/src"],
