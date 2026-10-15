@@ -19,9 +19,9 @@
  */
 
 import { mkdirSync } from 'node:fs'
-import type { IncomingHttpHeaders } from 'node:http'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import type { RequestIdentityResolver } from '@deepseek-ai/dsh-client-connection'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import {
   normalizeIdentity,
@@ -73,8 +73,8 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-/** Header bags a carrier may present: node's own, or a Fetch `Headers`. */
-export type IdentityHeaders = IncomingHttpHeaders | Headers
+/** Header bags a carrier may present: a Fetch `Headers`, or node's plain object. */
+export type IdentityHeaders = Headers | Readonly<Record<string, string | readonly string[] | undefined>>
 
 /** Whether any configured rule could ever constrain a caller. */
 function isConfigured(config: SessionScopeConfig): boolean {
@@ -89,7 +89,7 @@ function isConfigured(config: SessionScopeConfig): boolean {
  * One instance serves the whole process. It holds no per-request state beyond
  * the Peer-to-identity map Connection fills in as it admits requests.
  */
-export class SessionScopeService extends Service {
+export class SessionScopeService extends Service implements RequestIdentityResolver {
   private readonly config: ScopingConfig
   private readonly configured: boolean
   /** Peer to identity. Weak so a retired Peer's entry dies with it. */
@@ -226,9 +226,10 @@ export class SessionScopeService extends Service {
     if (typeof (headers as Headers).get === 'function') {
       return (headers as Headers).get(this.config.header) ?? undefined
     }
-    const value = (headers as IncomingHttpHeaders)[this.config.header]
-    if (Array.isArray(value)) return value[0]
-    return value
+    const bag = headers as Readonly<Record<string, string | readonly string[] | undefined>>
+    const value = bag[this.config.header]
+    if (value === undefined) return undefined
+    return typeof value === 'string' ? value : value[0]
   }
 }
 
@@ -245,5 +246,14 @@ export function apply(ctx: Context, config?: SessionScopeConfig): void {
     provisionRoot: config?.provisionRoot ?? '',
     requireIdentity: config?.requireIdentity ?? false,
   }
-  new SessionScopeService(ctx, resolved)
+  const scope = new SessionScopeService(ctx, resolved)
+  // Connection owns admission and knows nothing about users, so the policy is
+  // handed to it rather than imported by it: every admitted request then speaks
+  // for its own identity's Peer.
+  ctx.inject(['connection'], (connectionCtx) => {
+    connectionCtx.effect(
+      () => connectionCtx.connection.setIdentityResolver(scope),
+      'session-scope: request identity resolver',
+    )
+  })
 }

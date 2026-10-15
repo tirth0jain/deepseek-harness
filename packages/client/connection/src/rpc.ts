@@ -121,6 +121,39 @@ export type PeerAdmission =
   | { readonly rejection: 401 | 403 }
 
 /**
+ * Deployment policy that attributes an admitted request to an identity.
+ *
+ * Connection knows nothing about users. A deployment that fronts several of
+ * them installs a resolver, and Connection asks it who each request is and
+ * mints that identity its own Peer. The resolver also owns the
+ * Peer-to-identity map, keeping `PeerScope` free of any record of who a Peer
+ * is — which is what its own contract asks for.
+ */
+export interface RequestIdentityResolver {
+  /**
+   * Read the asserted identity from one request's headers.
+   * @param headers - the request's headers, in either carrier's shape.
+   * @returns the identity, or undefined when the request asserts none.
+   */
+  identityFromHeaders(
+    headers: Headers | Readonly<Record<string, string | readonly string[] | undefined>>,
+  ): string | undefined
+  /**
+   * Whether a request asserting no identity is refused rather than admitted as
+   * the shared operator Peer. True for a deployment whose reachability is not
+   * itself the access policy, since a forgeable or absent header must fail
+   * closed rather than fall back to seeing everything.
+   */
+  readonly requiresIdentity: boolean
+  /**
+   * Record which identity a Peer was admitted as.
+   * @param peer - the Peer Connection minted for this identity.
+   * @param identity - the identity that Peer speaks for.
+   */
+  remember(peer: PeerScope, identity: string): void
+}
+
+/**
  * Handler invoked after Connection has decoded the transport envelope.
  * `peer` is the Peer the request was admitted as: the operator.
  */
@@ -203,6 +236,14 @@ export interface HostConnectionHandle {
    * when a validated `trustedHosts` entry names a non-loopback hostname.
    */
   readonly allowsRemoteAuthorities: boolean
+
+  /**
+   * Install the deployment's request-identity policy, so each identity is
+   * admitted as its own Peer instead of the shared operator.
+   * @param resolver - the policy, or undefined to stop attributing requests.
+   * @returns disposer that restores the previous resolver.
+   */
+  setIdentityResolver(resolver: RequestIdentityResolver | undefined): () => void
 
   /**
    * Compose exact Fetch routes and the shared-channel RPC interceptor.

@@ -26,6 +26,7 @@ export type {
   ConnectionRpcHandler,
   ConnectionRpcHandlerResult,
   ConnectionRequestRejection,
+  RequestIdentityResolver,
   ConnectionRpcResult,
   ConnectionRequestBodyMode,
   ConnectionTrustRequest,

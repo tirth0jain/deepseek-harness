@@ -349,6 +349,7 @@
     { "path": "./packages/session/session-turn-outline" },
     { "path": "./packages/session/session-telemetry" },
     { "path": "./packages/identity/anonymous-user-id" },
+    { "path": "./packages/identity/session-scope" },
     { "path": "./packages/session/session-telemetry-otel" },
     { "path": "./packages/core/system-prompt" },
     { "path": "./packages/core/agent" },
