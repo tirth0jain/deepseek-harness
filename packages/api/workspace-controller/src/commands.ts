@@ -1,6 +1,7 @@
 /** Workspace command implementation and stable Remote failure mapping. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { assertVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import {
   WorkspaceActiveSessionError,
@@ -40,9 +41,13 @@ export class WorkspaceCommands {
   /**
    * Create or resolve one Workspace over an existing directory.
    * @param request - directory path to register.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
    * @returns the Workspace and whether this call created it.
    */
-  create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
+  create(request: WorkspaceCreateRequest, maySee?: PathVisibility): Promise<WorkspaceCreateValue> {
+    // Registering somebody else's directory would put its Sessions in this
+    // caller's sidebar and theirs in this caller's reach.
+    assertVisibility(maySee, request.path, 'the requested Workspace directory')
     return this.enqueue(async () => {
       try {
         const existing = await this.ctx.workspaceRegistry.resolveByPath(request.path)

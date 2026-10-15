@@ -21,6 +21,7 @@ import { buildForkSeed } from '@deepseek-ai/dsh-session/fork'
 import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { assertVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
@@ -106,9 +107,10 @@ export class SessionCommandController {
   /**
    * Create or idempotently adopt one ordinary Session.
    * @param request - requested identity, location, and Agent preset.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
    * @returns the Session identity and resolved preset when configured.
    */
-  async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
+  async create(request: SessionCreateRequest, maySee?: PathVisibility): Promise<SessionCreateValue> {
     if (request.workspaceId !== undefined && request.cwd !== undefined) {
       throw new RemoteError('gateway/bad-request', 'session.create accepts workspaceId or cwd, not both', {})
     }
@@ -123,6 +125,10 @@ export class SessionCommandController {
       }
     }
     const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd
+    // The clamp is load-bearing, not cosmetic: without it a caller could point
+    // a Session at somebody else's directory — by naming it, or by naming a
+    // workspace id that is not theirs — and read it through their own agent.
+    assertVisibility(maySee, cwd, 'the requested working directory')
     let adopted: Agent
     try {
       adopted = await this.agents.ensureSession(

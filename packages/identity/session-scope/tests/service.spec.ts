@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
-import { apply, type SessionScopeConfig } from '../src/index.ts'
+import { assertVisibility, apply, type SessionScopeConfig } from '../src/index.ts'
 
 const ADMIN = 'main.pastrami903@passfwd.com'
 
@@ -134,5 +134,47 @@ describe('session scope service', () => {
   it('reports whether an unidentified request must be refused', async () => {
     expect((await service()).requiresIdentity).toBe(false)
     expect((await service({ ...officeConfig, requireIdentity: true })).requiresIdentity).toBe(true)
+  })
+})
+
+describe('assertVisibility', () => {
+  const punit = (path: string | undefined): boolean =>
+    path !== undefined && (path === '/root/punit' || path.startsWith('/root/punit/'))
+
+  it('lets an unconstrained caller anywhere', () => {
+    expect(() => assertVisibility(undefined, '/root/Ruby', 'the directory')).not.toThrow()
+    expect(() => assertVisibility(undefined, undefined, 'the directory')).not.toThrow()
+  })
+
+  it('lets a caller into their own directory and anything beneath it', () => {
+    expect(() => assertVisibility(punit, '/root/punit', 'the directory')).not.toThrow()
+    expect(() => assertVisibility(punit, '/root/punit/site-survey', 'the directory')).not.toThrow()
+  })
+
+  it('refuses another account\'s directory', () => {
+    expect(() => assertVisibility(punit, '/root/Ruby', 'the working directory'))
+      .toThrowError(/outside the directories this account owns/)
+  })
+
+  it('refuses a sibling that merely shares a prefix', () => {
+    expect(() => assertVisibility(punit, '/root/punit2', 'the directory')).toThrow()
+  })
+
+  it('refuses a path the request never named', () => {
+    // Defaulting to the server's own directory would otherwise adopt whatever
+    // process.cwd() happens to be.
+    expect(() => assertVisibility(punit, undefined, 'the directory')).toThrow()
+  })
+
+  it('names the refused path on the wire', () => {
+    try {
+      assertVisibility(punit, '/root/Ruby', 'the working directory')
+      throw new Error('expected a refusal')
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'session-scope/forbidden',
+        details: { target: 'the working directory', path: '/root/Ruby' },
+      })
+    }
   })
 })

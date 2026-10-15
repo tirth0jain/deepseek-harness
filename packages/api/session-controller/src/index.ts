@@ -370,7 +370,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('create')
   create(request: SessionCreateRequest): Promise<SessionCreateValue> {
-    return this.commands.create(request)
+    return this.commands.create(request, callVisibility(this.ctx))
   }
 
   /**

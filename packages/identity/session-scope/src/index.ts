@@ -22,6 +22,7 @@ import { mkdirSync } from 'node:fs'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { RequestIdentityResolver } from '@deepseek-ai/dsh-client-connection'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import {
   normalizeIdentity,
@@ -106,6 +107,45 @@ export function callVisibility(ctx: Context): PathVisibility | undefined {
   const scope = ctx.get('sessionScope')?.scopeOfPeer(ctx.invocation?.peer)
   if (scope === undefined || scope.admin) return undefined
   return path => path !== undefined && scopeMayAccess(scope, path)
+}
+
+/** Wire details for a refusal to reach something outside the caller's own directories. */
+export interface SessionScopeRefusalDetails {
+  /** What was being reached, named for the operator reading the failure. */
+  readonly target: string
+  /** Absolute path that was refused, or undefined when the request named none. */
+  readonly path: string | undefined
+}
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    'session-scope/forbidden': SessionScopeRefusalDetails
+  }
+}
+
+/**
+ * Refuse a path the caller does not own.
+ *
+ * Every id-addressed entry point funnels through this rather than through a
+ * list filter, because a Session the caller cannot see in the sidebar is still
+ * reachable by identity: `session.page`, `session.fork` and `session.export`
+ * each take a raw Session id.
+ * @param maySee - the caller's visibility, or undefined when unconstrained.
+ * @param path - absolute path the operation would touch.
+ * @param target - human-readable description of what was being reached.
+ * @throws RemoteError when the caller is constrained and the path is not theirs.
+ */
+export function assertVisibility(
+  maySee: PathVisibility | undefined,
+  path: string | undefined,
+  target: string,
+): void {
+  if (maySee === undefined || maySee(path)) return
+  throw new RemoteError(
+    'session-scope/forbidden',
+    `${target} lies outside the directories this account owns`,
+    { target, path },
+  )
 }
 
 /** Whether any configured rule could ever constrain a caller. */

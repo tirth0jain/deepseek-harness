@@ -85,7 +85,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('create')
   create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
-    return this.commands.create(request)
+    return this.commands.create(request, callVisibility(this.ctx))
   }
 
   /**
