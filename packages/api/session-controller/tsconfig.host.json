@@ -55,6 +55,9 @@
       "path": "../../client/connection/tsconfig.host.json"
     },
     {
+      "path": "../../identity/session-scope"
+    },
+    {
       "path": "../../interaction/permission-presets"
     },
     {

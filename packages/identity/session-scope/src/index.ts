@@ -76,6 +76,32 @@ declare module '@deepseek-ai/cordis' {
 /** Header bags a carrier may present: a Fetch `Headers`, or node's plain object. */
 export type IdentityHeaders = Headers | Readonly<Record<string, string | readonly string[] | undefined>>
 
+/**
+ * Answers whether one `cwd` is visible to the caller a predicate was built for.
+ *
+ * A session with no `cwd` is not visible to a constrained caller. Every web
+ * session carries one — a workspace path, or the server's own directory — so
+ * the only sessions this hides are ones belonging to no workspace at all,
+ * which a scoped deployment has no reason to show.
+ */
+export type PathVisibility = (path: string | undefined) => boolean
+
+/**
+ * Build the path-visibility predicate for the Remote call running on `ctx`.
+ *
+ * Returns a predicate rather than the scope itself, so code that enumerates
+ * sessions applies a caller's visibility without knowing how ownership is
+ * configured. Must be called from inside a Remote method: `ctx.invocation` is
+ * what carries the caller's Peer, and it reads undefined anywhere else.
+ * @param ctx - the per-call plugin context inside a Remote method.
+ * @returns predicate answering whether one `cwd` is visible to this caller.
+ */
+export function callVisibility(ctx: Context): PathVisibility {
+  const scope = ctx.get('sessionScope')?.scopeOfPeer(ctx.invocation?.peer)
+  if (scope === undefined || scope.admin) return () => true
+  return path => path !== undefined && scopeMayAccess(scope, path)
+}
+
 /** Whether any configured rule could ever constrain a caller. */
 function isConfigured(config: SessionScopeConfig): boolean {
   return config.admin.length > 0
