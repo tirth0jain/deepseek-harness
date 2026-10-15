@@ -12,7 +12,7 @@ import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativ
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { assertVisibility, callVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
+import { callVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import {
@@ -499,7 +499,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the accepted title and durable event sequence.
    */
   @Remote('rename')
-  rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
+  async rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.rename(request)
   }
 
@@ -512,6 +513,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('fork')
   async fork(request: SessionForkRequest): Promise<SessionForkValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     if (request.allowMigration === false && this.ctx.sessions.get(request.sessionId) === undefined) {
       const stored = await this.ctx.get('sessionPersistence')?.stat(request.sessionId)
       if (stored?.formatStatus === 'migration-required' && this.ctx.sessions.get(request.sessionId) === undefined) {
@@ -531,7 +533,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the new Session identity and whether its source was archived.
    */
   @Remote('handoff')
-  handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+  async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.handoff(request, signal)
   }
 
@@ -542,8 +545,9 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   @Remote('prompt')
-  prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue> {
+  async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue> {
     signal.throwIfAborted()
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.prompt(request)
   }
 
@@ -553,7 +557,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the durable attachment reference and base64-encoded bytes.
    */
   @Remote('attachment')
-  attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
+  async attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.attachment(request)
   }
 
@@ -565,10 +570,12 @@ export class SessionController extends TypertRemoteService {
    * @param signal - cancels the read while the response body is still streaming.
    * @returns the display name, media type, and exact byte stream.
    */
-  downloadAttachment(
+  async downloadAttachment(
     request: SessionAttachmentRequest,
     signal: AbortSignal,
+    maySee?: PathVisibility,
   ): Promise<SessionAttachmentDownload> {
+    await this.assertSessionVisible(request.sessionId, maySee)
     return this.commands.downloadAttachment(request, signal)
   }
 
@@ -578,7 +585,8 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that the queue mutation was applied.
    */
   @Remote('updateQueue')
-  updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+  async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.updateQueue(request)
   }
 
@@ -624,14 +632,33 @@ export class SessionController extends TypertRemoteService {
     maySee: PathVisibility | undefined,
   ): Promise<void> {
     if (maySee === undefined) return
-    const target = `Session ${JSON.stringify(sessionId)}`
     const live = this.ctx.sessions.get(sessionId)
     if (live !== undefined) {
-      assertVisibility(maySee, live.header.cwd, target)
+      this.refuseInvisibleSession(sessionId, live.header.cwd, maySee)
       return
     }
     using observation = await this.ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
-    assertVisibility(maySee, observation.header.cwd, target)
+    this.refuseInvisibleSession(sessionId, observation.header.cwd, maySee)
+  }
+
+  /**
+   * Refuse one Session the caller does not own, given a cwd already in hand.
+   *
+   * Reported missing rather than forbidden: a Session belonging to somebody
+   * else is not a thing this caller gets to learn about. Paths answer
+   * `session-scope/forbidden`; ids answer as if they were never there.
+   * @param sessionId - the Session being reached.
+   * @param cwd - the Session's own directory, or undefined when unknown.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
+   * @throws RemoteError when the caller is constrained and the Session is not theirs.
+   */
+  private refuseInvisibleSession(
+    sessionId: SessionId,
+    cwd: string | undefined,
+    maySee: PathVisibility | undefined,
+  ): void {
+    if (maySee === undefined || (cwd !== undefined && maySee(cwd))) return
+    throw new RemoteError('session/not-found', `Session ${JSON.stringify(sessionId)} not found`, { sessionId })
   }
 
   /**
@@ -640,7 +667,8 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that cancellation was requested.
    */
   @Remote('cancel')
-  cancel(request: SessionCancelRequest): SessionCancelValue {
+  async cancel(request: SessionCancelRequest): Promise<SessionCancelValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.cancel(request)
   }
 
@@ -676,6 +704,13 @@ export class SessionController extends TypertRemoteService {
   @Remote('projections')
   async projections(request: SessionProjectionsRequest, signal: AbortSignal): Promise<SessionProjectionsValue> {
     const { sessionId } = request
+    // Synchronous while the Session is attached: this read is on the sidebar's
+    // hot path, and an await here would both cost a turn and move the snapshot
+    // it is about to take past whatever else settles in the meantime.
+    const maySee = callVisibility(this.ctx)
+    const attached = this.ctx.sessions.get(sessionId)
+    if (attached === undefined) await this.assertSessionVisible(sessionId, maySee)
+    else this.refuseInvisibleSession(sessionId, attached.header.cwd, maySee)
     if (sessionId.length === 0) {
       throw new RemoteError('gateway/bad-request', 'sessionId must not be empty', {})
     }

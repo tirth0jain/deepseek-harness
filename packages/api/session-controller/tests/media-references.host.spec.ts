@@ -6,7 +6,9 @@ import { Context } from '@deepseek-ai/cordis'
 import { FsError, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { apply as applyScope } from '@deepseek-ai/dsh-session-scope'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import { contentDisposition, SessionMediaReferences } from '../src/media-references.ts'
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
@@ -317,7 +319,13 @@ describe('SessionMediaReferences /api/attachment.download', () => {
     expect(response.headers.get('content-type')).toBe('text/markdown')
     expect(response.headers.get('content-length')).toBe('5')
     expect(response.headers.get('content-disposition')).toBe('attachment; filename="quarterly notes.md"; filename*=UTF-8\'\'quarterly%20notes.md')
-    expect(download).toHaveBeenCalledWith({ sessionId: 's1', attachmentId: 'a1' }, expect.any(AbortSignal))
+    // The third argument is the calling Peer's visibility: this route is not a
+    // Remote call, so the byte read cannot read its own invocation.
+    expect(download).toHaveBeenCalledWith(
+      { sessionId: 's1', attachmentId: 'a1' },
+      expect.any(AbortSignal),
+      undefined,
+    )
   })
 
   it('prefers the store media type and answers HEAD without pulling bytes', async () => {
@@ -353,6 +361,110 @@ describe('SessionMediaReferences /api/attachment.download', () => {
   it('reports an unclassified store failure as a server failure', async () => {
     const route = await mountDownload(async () => { throw new Error('store exploded') })
     expect((await route.raw('http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1')).status).toBe(500)
+  })
+})
+
+describe('SessionMediaReferences byte routes under a scoped Peer', () => {
+  let root: string
+  const contexts: Context[] = []
+
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-media-scope-')))
+  })
+
+  afterEach(async () => {
+    await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+    await rm(root, { recursive: true, force: true })
+  })
+
+  /** Both byte routes, mounted with one account's Peer and the other's file. */
+  async function mountScoped(downloadAttachment: (request: unknown, signal: AbortSignal) => Promise<unknown>) {
+    const ctx = new Context()
+    contexts.push(ctx)
+    const handlers = new Map<string, (request: Request, peer?: PeerScope) => Promise<Response>>()
+    ctx.provide('connection', {
+      fetch: {
+        register: (registered: { path: string; fetch: (request: Request, peer?: PeerScope) => Promise<Response> }) => {
+          handlers.set(registered.path, registered.fetch)
+          return () => {}
+        },
+      },
+    } as never)
+    ctx.provide('attachments', { imageLimits: { maxImageBytes: DEFAULT_LIMIT } } as never)
+    ctx.provide('sessionController', { downloadAttachment, downloadAttachmentCalls: 0 } as never)
+    await ctx.plugin(LocalFileSystem, { cwd: root }).await()
+    await ctx.plugin((pluginCtx) => {
+      applyScope(pluginCtx, {
+        header: 'x-auth-request-email',
+        admin: [],
+        users: { 'punit@rubysteels.com': join(root, 'punit'), 'tirth@rubysteels.com': join(root, 'tirth') },
+        provisionRoot: '',
+        requireIdentity: true,
+      })
+    }).await()
+    await ctx.plugin(SessionMediaReferences).await()
+
+    const peer = { id: 'peer' as PeerScope['id'], ctx: new Context() } as unknown as PeerScope
+    ctx.get('sessionScope')?.remember(peer, 'punit@rubysteels.com')
+    return {
+      owner: peer,
+      call: (url: string, peer?: PeerScope) => {
+        const handler = handlers.get(new URL(url).pathname)
+        if (handler === undefined) throw new Error(`route not registered: ${new URL(url).pathname}`)
+        return handler(new Request(url), peer)
+      },
+      file: (path: string, peer?: PeerScope) =>
+        handlers.get('/api/file')!(new Request(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}`), peer),
+    }
+  }
+
+  it('serves the caller\'s own files and refuses every path outside their roots', async () => {
+    await mkdir(join(root, 'punit'), { recursive: true })
+    await mkdir(join(root, 'tirth'), { recursive: true })
+    await writeFile(join(root, 'punit', 'mine.txt'), 'mine')
+    await writeFile(join(root, 'tirth', 'theirs.txt'), 'theirs')
+    const route = await mountScoped(async () => { throw new Error('no attachment expected') })
+
+    const mine = await route.file(join(root, 'punit', 'mine.txt'), route.owner)
+    expect(mine.status).toBe(200)
+    expect(await mine.text()).toBe('mine')
+
+    // Another account's Session log is the reason this route is gated at all.
+    const theirs = await route.file(join(root, 'tirth', 'theirs.txt'), route.owner)
+    expect(theirs.status).toBe(403)
+    expect(await theirs.text()).toBe('forbidden')
+    expect((await route.file('/etc/hostname', route.owner)).status).toBe(403)
+  })
+
+  it('leaves an unconstrained caller reading the whole host', async () => {
+    await mkdir(join(root, 'tirth'), { recursive: true })
+    await writeFile(join(root, 'tirth', 'theirs.txt'), 'theirs')
+    const route = await mountScoped(async () => { throw new Error('no attachment expected') })
+
+    expect((await route.file(join(root, 'tirth', 'theirs.txt'))).status).toBe(200)
+  })
+
+  it('hands the admitted Peer to the attachment owner as its visibility', async () => {
+    const downloadAttachment = vi.fn(async (
+      _request: unknown,
+      _signal: AbortSignal,
+      _maySee?: (path: string) => boolean,
+    ) => ({
+      name: 'notes.txt',
+      mediaType: 'text/plain',
+      length: 2,
+      bytes: chunks(new Uint8Array([1, 2])),
+    }))
+    const route = await mountScoped(downloadAttachment)
+    const response = await route.call(
+      'http://127.0.0.1/api/attachment.download?sessionId=s1&attachmentId=a1',
+      route.owner,
+    )
+    expect(response.status).toBe(200)
+    const maySee = downloadAttachment.mock.calls[0]?.[2]
+    if (maySee === undefined) throw new Error('the byte route handed the owner no visibility')
+    expect(maySee(join(root, 'punit', 'x'))).toBe(true)
+    expect(maySee(join(root, 'tirth', 'x'))).toBe(false)
   })
 })
 
