@@ -250,6 +250,15 @@ export class SessionScopeService extends Service implements RequestIdentityResol
   }
 
   /**
+   * The identity one Peer was admitted as.
+   * @param peer - Peer taken from the carrier or `this.ctx.invocation.peer`.
+   * @returns the normalized identity, or undefined when this Peer was not admitted as one.
+   */
+  identityOfPeer(peer: PeerScope | undefined): string | undefined {
+    return peer === undefined ? undefined : this.peerIdentities.get(peer)
+  }
+
+  /**
    * Resolve one identity's scope, memoized.
    * @param identity - normalized identity.
    * @returns the scope, or undefined when the deployment has no policy for it.

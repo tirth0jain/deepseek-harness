@@ -193,8 +193,38 @@ export class WorkspaceController extends TypertRemoteService {
    * @returns baseline followed by ordered Workspace increments.
    */
   @Remote({ mode: 'stream' })
-  follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame> {
-    return this.feed.follow(signal, callVisibility(this.ctx))
+  async *follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame> {
+    await this.provisionFirstUse()
+    yield* this.feed.follow(signal, callVisibility(this.ctx))
+  }
+
+  /**
+   * Give a first-time identity somewhere to work before its baseline is read.
+   *
+   * Runs at the head of the Workspace stream because that stream is the first
+   * thing a browser asks for, and a baseline carrying no Workspace is an
+   * interface a new user cannot act in. Both steps are idempotent: the root is
+   * created only once per process, and registering an already-registered path
+   * returns the existing Workspace rather than a duplicate.
+   *
+   * A failure is logged and swallowed — being unable to mint a directory is not
+   * a reason to refuse the stream, and an empty baseline still lets the user
+   * create a Workspace themselves.
+   */
+  private async provisionFirstUse(): Promise<void> {
+    const scope = this.ctx.get('sessionScope')
+    if (scope === undefined) return
+    const identity = scope.identityOfPeer(this.ctx.invocation?.peer)
+    if (identity === undefined) return
+    try {
+      const root = scope.ensureRoot(identity)
+      if (root === undefined) return
+      await this.ctx.workspaceRegistry.create(root)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(
+        `workspace-controller: could not provision a Workspace for ${JSON.stringify(identity)}: ${String(error)}`,
+      )
+    }
   }
 }
 
