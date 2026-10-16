@@ -232,18 +232,18 @@ describe('real Loader composition', () => {
     }
   })
 
-  it('rejects every wildcard spelling by address value, not by text', () => {
-    // Every spelling node:net accepts that parses to the unspecified address:
-    // IPv4 any, IPv6 any in long and short forms, IPv4-compatible, and the
-    // IPv4-mapped forms of IPv4 any, with or without a zone.
+  it('accepts every wildcard spelling by address value, not by text', () => {
+    // The fork keeps the wildcard bind upstream rejects: deploy/dsh-web-run
+    // passes --host 0.0.0.0 behind Caddy and the /api trust fence, so every
+    // spelling node:net accepts that parses to the unspecified address is a
+    // valid listener address here — IPv4 any, IPv6 any in long and short
+    // forms, IPv4-compatible, and the IPv4-mapped forms, with or without a zone.
     for (const host of [
       '0.0.0.0', '::', '::0', '0000::', '0::', '0:0:0:0:0:0:0:0', '::0.0.0.0', '::0.0.0.0%lo', '::%lo',
       '::ffff:0.0.0.0', '::ffff:0:0', '::ffff:0000:0000', '0:0:0:0:0:ffff:0:0',
       '0:0:0:0:0:ffff:0.0.0.0', '::ffff:0.0.0.0%eth0',
     ]) {
-      expect(() => HttpServer.Config({ host, port: 0 })).toThrow(
-        /is an unspecified \(wildcard\) address, which is not supported/,
-      )
+      expect(HttpServer.Config({ host, port: 0 }).host).toBe(host)
     }
     for (const host of ['localhost', 'example.com', '*', '[::]', '[fd00::1]', '10.1.2.3/8']) {
       expect(() => HttpServer.Config({ host, port: 0 }))
@@ -251,13 +251,14 @@ describe('real Loader composition', () => {
     }
   })
 
-  it('denies the IPv4-mapped wildcard through the real plugin load, not only the predicate', async () => {
-    // The Loader is nontransactional: a rejected config leaves a FAILED fiber
-    // whose await carries the schema error rather than rejecting loader.await().
-    const denied = await loadComposition(0, false, '::ffff:0.0.0.0')
-    const fiber = webserverFiber(denied)
-    expect(fiber?.state).toBe(FiberState.FAILED)
-    await expect(fiber?.await()).rejects.toThrow(/is an unspecified \(wildcard\) address/)
+  it('admits the IPv4-mapped wildcard through the real plugin load, not only the predicate', { timeout: 60_000 }, async () => {
+    // The same deliberate divergence, asserted through a real Loader tree: the
+    // config parses, the row settles, and the listener binds every interface.
+    const admitted = await loadComposition(0, false, '::ffff:0.0.0.0')
+    const fiber = webserverFiber(admitted)
+    expect(fiber?.state).not.toBe(FiberState.FAILED)
+    expect(admitted.webServer).toBeInstanceOf(HttpServer)
+    expect(admitted.webServer.port).toBeGreaterThan(0)
   })
 
   it('classifies loopback bind addresses from the parsed value, including mapped and zone forms', () => {
