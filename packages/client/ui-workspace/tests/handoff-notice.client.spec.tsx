@@ -25,6 +25,7 @@ const unusedHook = (): never => { throw new Error('The handoff notice consumes n
 const standard: Omit<NoticeProps, 'useHandoffFailures' | 'dismissHandoffFailure' | 't'> = {
   useSessions: unusedHook, useSessionStatus: unusedHook, useSessionRetainInfo: unusedHook, usePanelInfo: unusedHook,
   useWorkspaces: unusedHook, useResource: unusedHook,
+  useRemoteAccess: unusedHook, useSessionAccess: unusedHook, useWorkspaceAccess: unusedHook,
 }
 
 /** The refusal the Host actually throws, through the wrapper the client throws. */

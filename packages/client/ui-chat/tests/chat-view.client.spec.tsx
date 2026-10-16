@@ -3,7 +3,8 @@
 import type { ProcessGroupData } from '../src/client/contract/process-groups.ts'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
-import type { GlobalStandardProps, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import { MessageId } from '@deepseek-ai/dsh-llm/brand'
+import type { GlobalStandardProps, PropsRenderFactories, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useEffect, useMemo } from 'react'
@@ -13,7 +14,7 @@ import type {
   ChatViewSlotProps, CommandNode, CompactionSummaryNode, ContextMessageNode, ConversationNode,
   LegacyConversationSlice, ModelRetryNode, StartedToolCall, SteeringMessageNode,
   ToolCallBlock, ToolResultNode, TurnErrorNode, TurnMaxTokensNode,
-  TranscriptViewMode, UserMessageNode,
+  TranscriptViewMode, UserContentInput, UserMessageNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {
   SessionListState, SessionSnapshot,
@@ -27,7 +28,7 @@ import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controlle
 import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { KeyedSnapshotSelectorHook, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import { EMPTY_CONVERSATION_SNAPSHOT } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
@@ -55,6 +56,7 @@ import type { TurnProcessSpec } from '../src/client/contract/turn-process.ts'
 import { chatSnapshotFixture } from './chat-snapshot-fixture.client.ts'
 import { installTurnNavigatorObserver } from './turn-navigator-fixture.ts'
 import { renderReasoningSlot } from './reasoning-component-fixture.tsx'
+import { createUserContentFixture } from './user-content-component-fixture.tsx'
 import { ConversationGroupStore } from '../../ui-conversation/src/client/conversation/group-store.ts'
 
 function installGroupedSnapshot(
@@ -263,6 +265,13 @@ declare const flowDispatch: ChatViewSlotProps['renderSlot']
 type NodeRenderer = typeof nodeDispatch<'conversation.chat.node'>
 type FlowRenderer = typeof flowDispatch<'conversation.chat.flow'>
 type ImageRenderer = (owner: MessageImagesOwnerProps) => React.ReactNode
+type HarnessStandardProps = ChatViewSlotProps & PropsRenderFactories
+
+function isImageOwner(owner: object): owner is MessageImagesOwnerProps {
+  return 'images' in owner && Array.isArray(owner.images)
+    && 'loadImage' in owner && typeof owner.loadImage === 'function'
+    && 'align' in owner && (owner.align === 'start' || owner.align === 'end')
+}
 type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
   readonly callId: string
   readonly toolName: string
@@ -272,12 +281,9 @@ type ToolOwner = Pick<ChatNodeOwnerProps, 'openFile' | 'inspectCall'> & {
 const renderCommandSlot: React.ComponentProps<typeof CommandNodeView>['renderSlot'] =
   (_key, _owner, opts) => opts?.fallback ?? null
 const renderTurnTailSlot: React.ComponentProps<typeof TurnTailNodeView>['renderSlot'] = () => null
-const assistantSlots: Pick<React.ComponentProps<typeof AssistantNodeView>, 'renderSlot'> = {
-  renderSlot: renderReasoningSlot,
-}
 
 function HarnessChatFlow({ standard, owner, hookContext, renderSlot }: {
-  readonly standard: ChatViewSlotProps
+  readonly standard: HarnessStandardProps
   readonly owner: ChatFlowOwnerProps
   readonly hookContext: ChatFlowHookContext
   readonly renderSlot: ChatFlowSlotProps['renderSlot']
@@ -290,13 +296,14 @@ function HarnessChatFlow({ standard, owner, hookContext, renderSlot }: {
   return <ChatFlow {...shared} {...owner} {...hooks} renderSlot={renderSlot} />
 }
 
-function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, toolOwners, fallback }: {
-  readonly standard: ChatViewSlotProps
+function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, toolOwners, fallback, renderAssistantSlot }: {
+  readonly standard: HarnessStandardProps
   readonly owner: RoutedChatNodeOwner
   readonly hookContext: ChatNodeHookContext
   readonly usePerformanceUsage: React.ComponentProps<typeof TurnTailNodeView>['usePerformanceUsage']
   readonly toolOwners: ToolOwner[]
   readonly fallback: React.ReactNode
+  readonly renderAssistantSlot: React.ComponentProps<typeof AssistantNodeView>['renderSlot']
 }) {
   const hooks = useMemo(() => ({
     useTurnData: CHAT_NODE_INJECT.hooks.turnData(standard, hookContext),
@@ -313,7 +320,7 @@ function HarnessChatNode({ standard, owner, hookContext, usePerformanceUsage, to
     case 'context':
       return <ContextMessageNodeView {...nodeProps} node={owner.node} />
     case 'assistant-step':
-      return <AssistantNodeView {...nodeProps} node={owner.node} {...assistantSlots} />
+      return <AssistantNodeView {...nodeProps} node={owner.node} renderSlot={renderAssistantSlot} />
     case 'command':
       return <CommandNodeView {...nodeProps} node={owner.node} renderSlot={renderCommandSlot} />
     case 'manual-compaction':
@@ -394,7 +401,8 @@ function makeHarness(
     key => grouped?.groupSource(key as GroupKey) ?? absentGroup,
   )
   const openFile = vi.fn<(path: string) => Promise<void>>().mockResolvedValue(undefined)
-  const openSkill = vi.fn<(name: string) => void>()
+  const openUserFile = vi.fn<(path: string) => void>()
+  const renderUserContent = createUserContentFixture({ openFile: openUserFile })
   const loadOlder = vi.fn()
   const loadThrough = vi.fn<(seq: number) => Promise<void>>().mockResolvedValue(undefined)
   // Mutable outline holder: tests swap the value and drive a re-render via set().
@@ -417,11 +425,19 @@ function makeHarness(
   const usePerformanceUsage = bindSnapshotSelector(performanceUsage)
   let nodeSlotOverride: NodeRenderer | undefined
   let imageSlotOverride: ImageRenderer | undefined
+  const renderImages = (name: string, owner: object, options?: { fallback?: React.ReactNode }) => {
+    if ((name !== 'conversation.chat.user.images' && name !== 'conversation.chat.message.images') || !isImageOwner(owner)) {
+      throw new Error(`Unexpected Chat image Slot: ${name}`)
+    }
+    return imageSlotOverride?.(owner) ?? options?.fallback ?? null
+  }
+  const renderAssistantSlot: React.ComponentProps<typeof AssistantNodeView>['renderSlot'] = (name, owner, options) =>
+    name === 'conversation.chat.message.images' ? renderImages(name, owner, options) : renderReasoningSlot(name, owner, options)
   const renderNodeSlot: NodeRenderer = (key, owner, opts) => {
     if (nodeSlotOverride !== undefined) return nodeSlotOverride(key, owner, opts)
     return <HarnessChatNode standard={props} owner={owner}
       hookContext={opts.hookContext} usePerformanceUsage={usePerformanceUsage}
-      toolOwners={toolOwners} fallback={opts.fallback} />
+      toolOwners={toolOwners} fallback={opts.fallback} renderAssistantSlot={renderAssistantSlot} />
   }
   const renderFlowSlot: ChatFlowSlotProps['renderSlot'] = (key: string, owner: object, opts?: {
     fallback?: React.ReactNode
@@ -430,10 +446,11 @@ function makeHarness(
     if (key === 'conversation.chat.node') {
       return renderNodeSlot(key, owner as RoutedChatNodeOwner, opts as Parameters<NodeRenderer>[2])
     }
-    if (key === 'conversation.message.images') {
-      return imageSlotOverride?.(owner as MessageImagesOwnerProps) ?? opts?.fallback ?? null
-    }
     throw new Error(`Undeclared flow child: ${key}`)
+  }
+  const renderFactorySlot: PropsRenderFactories['renderFactorySlot'] = (name, owner) => {
+    if (name !== 'conversation.chat.user.content') throw new Error(`Unexpected Chat Factory: ${name}`)
+    return renderUserContent(owner as UserContentInput, renderImages, props.t)
   }
   const renderSlot: FlowRenderer = (key, owner, opts) => {
     if (key !== 'conversation.chat.flow') throw new Error(`Undeclared ChatView child: ${key}`)
@@ -445,7 +462,8 @@ function makeHarness(
   // SessionProvider seat arrives with the session-scope child declaration;
   // ChatView never invokes it (pass-through stub).
   const SessionProviderStub: ChatViewSlotProps['SessionProvider'] = ({ children }) => <>{children}</>
-  const props: ChatViewSlotProps = {
+  const props: HarnessStandardProps = {
+    renderFactorySlot,
     usePanelInfo: selector => selector({ activePanelId: null }),
     sessionId: SID,
     useSession: bindSnapshotSelector(session.source),
@@ -463,6 +481,7 @@ function makeHarness(
       createSnapshotStore<SessionStatusSnapshot>(new Map()),
     ),
     useWorkspaces: emptyWorkspaces(),
+    ...allowAllAccess,
     useProjection: (key: string) => {
       const inbox = useTestSession(snapshot => snapshot.testInbox)
       return key === 'inbox' ? inbox : outlineValue
@@ -491,7 +510,6 @@ function makeHarness(
     openView,
     completeViewRequest: () => {},
     openFile,
-    openSkill,
     openExternalLink: vi.fn(),
     loadOlder,
     loadThrough,
@@ -522,7 +540,7 @@ function makeHarness(
   }
   return {
     set, setSession: session.set, setChat: chatSource.set, ChatView, props,
-    openFile, openSkill, loadOlder, loadThrough, openView,
+    openFile, openUserFile, loadOlder, loadThrough, openView,
     setOutline: (value: unknown) => { outlineValue = value },
     chatScroll, forkAt, toolOwners,
     setPerformanceUsage: (mode: 'compact' | 'detailed') => { performanceUsage.set(mode) },
@@ -1855,6 +1873,32 @@ describe('ChatView', () => {
     expect(h.forkAt).toHaveBeenCalledWith(3)
   }))
 
+  it('keeps pending file mentions non-interactive until admission enables the reference injector', () => {
+    const pending: InboxState['next-step'][number] = {
+      id: MessageId('pending-file-mention'), role: 'user', source: { kind: 'user' },
+      content: [{ type: 'text', text: 'Read @src/review.ts' }],
+    }
+    const h = makeHarness({}, { testInbox: { 'next-turn': [], 'next-step': [pending] }, running: true })
+    const view = render(<h.ChatView {...h.props} />)
+    const mention = view.getByText('review.ts')
+    expect(mention.closest('[data-pending-steering]')).not.toBeNull()
+    expect(view.queryByRole('button', { name: 'review.ts' })).toBeNull()
+    fireEvent.click(mention)
+    expect(h.openUserFile).not.toHaveBeenCalled()
+    expect(h.openFile).not.toHaveBeenCalled()
+    act(() => {
+      h.setSession({ testInbox: { 'next-turn': [], 'next-step': [] } })
+      h.setChat({ nodes: [{
+        kind: 'steering', messageId: pending.id, seq: 1, time: 1_000,
+        content: pending.content, source: pending.source,
+      }] })
+    })
+    expect(view.container.querySelector('[data-pending-steering]')).toBeNull()
+    fireEvent.click(view.getByRole('button', { name: 'review.ts' }))
+    expect(h.openUserFile).toHaveBeenCalledWith('src/review.ts')
+    expect(h.openFile).not.toHaveBeenCalled()
+  })
+
   it('keeps a later pending occurrence visible when it reuses a durable MessageId', () => {
     const pending = {
       id: 'steer-occurrence-later' as never,
@@ -1964,6 +2008,23 @@ describe('ChatView', () => {
     expect(view.getAllByText('same frame')).toHaveLength(1)
     expect(view.container.querySelector('[data-submission-echo]')).toBeNull()
     expect(renderedFlowKinds(view.container)).toEqual(['user', 'turn-process'])
+  })
+
+  it('matches echoes past an input Node whose payload carries no message source', () => {
+    const base = chatSnapshotFixture({ nodes: [user(1, 'question')] })
+    const snapshot = new ChatSnapshotBuilder().replace({
+      nodes: [...base.nodes.values(), {
+        key: 'plugin-input', id: 'plugin-input', kind: 'plugin-input', target: 'chat', anchorSeq: 2,
+        location: { kind: 'session' }, visibility: 'visible', groupTree: 'input', data: null,
+      }],
+      timeline: base.timeline,
+    })
+    const h = makeHarness({}, { pendingSubmissions: [{
+      requestId: 'pending' as never, placement: 'transcript', time: 1_000, text: 'pending text', attachments: [],
+    }] }, snapshot)
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.getByText('pending text')).toBeTruthy()
+    expect(view.container.querySelector('[data-submission-echo]')).not.toBeNull()
   })
 
   it.each(['ABC', 'ACB', 'BAC', 'BCA', 'CAB', 'CBA'])(
@@ -2301,6 +2362,7 @@ describe('ChatView', () => {
   it('renders every terminal failure inline with neutral quota copy and no transient notice', () => {
     const h = makeHarness({ nodes: [
       user(1, 'try'), turnError(2, 'AUTH'), turnError(3), turnError(4, 'QUOTA'), turnError(5, 'ACCOUNT_QUOTA'),
+      turnError(6, 'INTERRUPTED'),
     ] })
     const view = render(<h.ChatView {...h.props} />)
     const statuses = view.getAllByRole('status')
@@ -2309,6 +2371,7 @@ describe('ChatView', () => {
       '本轮运行失败plugin exploded',
       '本轮运行失败当前请求的额度已用尽QUOTA',
       '本轮运行失败当前请求的额度已用尽ACCOUNT_QUOTA',
+      '任务已停止DSH 进程在本轮完成前退出（例如被强制结束、崩溃或关闭超时），重新启动后本轮已中止。未完成的工具调用结果未知。',
     ])
     // The transient notice is the frame-wide host's job; the failure row keeps
     // neither a recharge affordance nor a toast of its own.
@@ -3218,6 +3281,23 @@ describe('ChatView', () => {
     expect(within(footer()).getByRole('button', { name: /用时/ })).toBeTruthy()
   })
 
+  it('summarizes an interrupted turn as stopped, without elapsed time, and keeps it open', () => {
+    const answer: AssistantMessageNode = {
+      kind: 'assistant', seq: 2, time: 2_000, turn: 1, step: 1, blocks: [{ kind: 'text', text: 'answer' }],
+    }
+    const h = makeHarness({ chat: chatSnapshotFixture({
+      nodes: [user(1, 'hi'), answer, turnError(3, 'INTERRUPTED')],
+      turnTimings: new Map([[1, { startTime: 1_000, endTime: 20_000 }]]),
+      turnEnds: new Map([[1, 3]]),
+      turnEndReasons: new Map([[1, { kind: 'interrupted' }]]),
+    }) })
+    const view = render(<h.ChatView {...h.props} />)
+    const control = turnProcessControl(view.container)
+    expect(control?.textContent).toBe('已停止')
+    expect(control?.disabled).toBe(true)
+    expect(view.getByText('任务已停止')).toBeTruthy()
+  })
+
   it('withholds the usage-details trigger when turn usage is outside the window', () => {
     const settled: AssistantMessageNode = {
       kind: 'assistant', seq: 2, time: 2_000, turn: 1, step: 1, blocks: [{ kind: 'text', text: 'answer' }],
@@ -3337,6 +3417,17 @@ describe('ChatView', () => {
     expect(buttons[0]!.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(buttons[0]!)
     expect(h.forkAt).not.toHaveBeenCalled()
+  })
+
+  it('omits the Turn Tail branch action when the Session access snapshot excludes session/fork', () => {
+    const h = makeHarness({ nodes: [user(1, 'question'), assistant(2, 'answer')], turnEnds: new Map([[1, 3]]) })
+    const useAccess = vi.fn((endpoint: string) => endpoint !== 'session/fork')
+    // Chat Node renderers read the harness's standard props object, so the override goes there.
+    Object.assign(h.props, { useAccess })
+    const view = render(<h.ChatView {...h.props} />)
+    expect(view.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
+    expect(view.queryByRole('button', { name: '在新对话中分支' })).toBeNull()
+    expect(useAccess).toHaveBeenCalledWith('session/fork')
   })
 
   it('renders assistant Markdown across history, streaming, final, and interrupted states while user text stays literal', () => {

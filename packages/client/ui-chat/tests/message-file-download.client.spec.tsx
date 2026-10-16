@@ -16,9 +16,10 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { ChatNodeViewProps } from '../src/client/contract/slots.ts'
+import type { ChatNodeViewProps, UserContentInput } from '../src/client/contract/slots.ts'
 import { UserMessageNodeView } from '../src/client/chat/MessageItem.tsx'
 import { attachmentDownloadUrl } from '../src/client/chat/attachment-url.ts'
+import { createUserContentFixture } from './user-content-component-fixture.tsx'
 import { zh } from '../src/client/locale.ts'
 
 afterEach(cleanup)
@@ -43,13 +44,25 @@ function userFileNode(): ChatConversationViewNode & { readonly kind: 'user' } {
   } as unknown as ChatConversationViewNode & { readonly kind: 'user' }
 }
 
+/**
+ * Render the row through the real user-content Factory, the production path a
+ * Chat view takes, with the user-image Slot stubbed: the file card this suite
+ * asserts lives in that Factory, not in the message row.
+ * @param url - the save URL the row hands the content, or undefined when the page can build none.
+ * @returns the rendered user row.
+ */
 function renderCard(url: string | undefined) {
+  const t = makeTranslate(zh, commonZh)
+  const openFile = vi.fn()
+  const renderUserContent = createUserContentFixture({ openFile })
   const props = {
     node: userFileNode(),
-    t: makeTranslate(zh, commonZh),
-    renderMessageImages: () => null,
-    openFile: vi.fn(),
-    openSkill: vi.fn(),
+    t,
+    loadImage: vi.fn(),
+    renderFactorySlot: (name: string, owner: UserContentInput) => {
+      if (name !== 'conversation.chat.user.content') throw new Error(`Unexpected Chat Factory: ${name}`)
+      return renderUserContent(owner, () => null, t)
+    },
     useChat: (selector: (state: unknown) => unknown) => selector({ order: [], nodes: new Map() }),
     attachmentDownloadUrl: () => url,
   } as unknown as ChatNodeViewProps<'user' | 'steering'>

@@ -1,7 +1,7 @@
 /** Shared configuration forms and their Host describe mirror. */
 import type { Context } from '@deepseek-ai/cordis'
-// Type-only: the ctx.remote merge, the fixed Host facts, and the carrier's
-// `connection/reset` lifecycle event, all through the assembly package.
+// Type-only: the ctx.remote merge and the carrier's `connection/reset`
+// lifecycle event, all through the assembly package.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only pair supplying `$on` and its key face without dragging a build
 // artifact into the Host graph (rationale beside the same pair in
@@ -35,14 +35,9 @@ export const inject = ['remote', 'remote.settings']
  */
 export function apply(ctx: Context): void {
   const schema = new SettingsSchemaService(ctx)
-  // Resolved once here, where `remote` is declared in this plugin's own
-  // `inject`; the binder hands the same answer to every scope it binds.
-  // `canWriteSettings`, not `isLoopback`: a headless deployment reached only
-  // over the network declares its authorities in `trustedHosts`, and those
-  // pages must be able to edit settings — otherwise the document would be
-  // permanently read-only for the only browser that ever sees it.
-  const persistence = ctx.remote.$host.canWriteSettings ? 'host' : 'memory'
-  const mirror = new SettingsDescribeMirror(ctx, persistence)
+  // Persistence policy: every authenticated browser persists through the Host document
+  // (.agents/notes/implemented/bug-fix/2026-09-15-authenticated-browser-host-preferences.md).
+  const mirror = new SettingsDescribeMirror(ctx)
   ctx.effect(() => {
     const disposers = [
       ctx.remote.$on('settings/document-updated', () => { void mirror.load() }),
@@ -55,5 +50,5 @@ export function apply(ctx: Context): void {
     void mirror.ensure()
     return () => { for (const dispose of disposers) dispose() }
   }, 'ui-settings: describe mirror invalidations')
-  new ConfigForms(ctx, { mirror, schema, persistence })
+  new ConfigForms(ctx, { mirror, schema })
 }

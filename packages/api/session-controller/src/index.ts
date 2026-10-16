@@ -6,20 +6,23 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-fs'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
-import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
+import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
+import { assertNever } from '@deepseek-ai/dsh-util-values'
+import type {} from '@deepseek-ai/dsh-api-remote-access'
 import {
   ApiSessionAgentController,
   inspectApiSession,
   type ApiSessionAgentResult,
 } from './agent.ts'
-import { SessionCommandController } from './commands.ts'
+import { SessionCommandController, hasPromptContent } from './commands.ts'
 import { ComposerDraftStore } from './composer-draft.ts'
 import { SessionControlController } from './control.ts'
 import { SessionHistoryController } from './history.ts'
@@ -33,6 +36,7 @@ import { ArchivedSessionGate } from './archived-session-gate.ts'
 import type {
   ModelCatalog,
   SessionWorkspacePathApplication,
+  SessionAddress,
   SessionAttachmentDownload,
   SessionAttachmentRequest,
   SessionAttachmentValue,
@@ -81,6 +85,16 @@ declare module '@deepseek-ai/cordis' {
     /** Host Session business API and Remote namespace owner. */
     sessionController: SessionController
   }
+}
+
+/**
+ * Read the Session resource a history address names: the Session itself, or
+ * the child Session whose transcript a subagent address reads.
+ * @param request - history request carrying the durable address.
+ * @returns the Session whose access the read requires.
+ */
+function addressedSession(request: { readonly address: SessionAddress }): SessionId {
+  return request.address.kind === 'session' ? request.address.sessionId : request.address.childSessionId
 }
 
 /** Session Controller deployment policy. */
@@ -145,6 +159,7 @@ export class SessionController extends TypertRemoteService {
     'fileUploads',
     'fs',
     'llm',
+    'remoteAccess',
     'sessions',
     'sessionProjections',
     'sessionQuery',
@@ -178,6 +193,7 @@ export class SessionController extends TypertRemoteService {
    */
   constructor(ctx: Context, config: Config, internals: SessionControllerInternals = {}) {
     super(ctx, 'sessionController', { namespace: 'session' })
+    ctx.typert.resources.register('session', { field: 'sessionId' })
     const resolved = SessionController.Config(config)
     installModelSelectionProjection(ctx)
     this.agents = new ApiSessionAgentController(ctx)
@@ -348,24 +364,28 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('list')
   async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    return { items: await this.listState.list(signal) }
+    const items = await this.listState.list(signal)
+    return { items: items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
   /**
-   * Search visible Session content without resuming an Agent.
+   * Search visible Session content without resuming an Agent. A non-owner
+   * receives only the hits whose Session `allows()` admits; `hasMore`
+   * describes the bounded result before that filtering.
    * @param request - literal message-content query.
    * @param signal - cancellation for list and search reads.
    * @returns authorized bounded Session search results.
    */
   @Remote('search')
-  search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
-    return this.listState.search(request.query, signal)
+  async search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
+    const result = await this.listState.search(request.query, signal)
+    return { ...result, items: result.items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
   /**
-   * Create or idempotently adopt one ordinary Session.
-   * @param request - requested identity, location, and Agent preset.
-   * @returns the Session identity and resolved preset when configured.
+   * Create one ordinary Session for a new conversation, reusing the named blank Session while it is reusable.
+   * @param request - optional blank Session to reuse, location, and Agent preset.
+   * @returns the created or reused Session identity and its preset when configured.
    */
   @Remote('create')
   create(request: SessionCreateRequest): Promise<SessionCreateValue> {
@@ -541,9 +561,30 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that the Agent accepted the prompt.
    */
   @Remote('prompt')
-  prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue> {
+  async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue> {
     signal.throwIfAborted()
-    return this.commands.prompt(request)
+    if (!hasPromptContent(request.content)) {
+      throw new RemoteError('gateway/bad-request', 'prompt content must include non-whitespace text or an attachment', {})
+    }
+    const clientTimeZone = request.clientTimeZone === undefined
+      ? undefined
+      : canonicalClientTimeZone(request.clientTimeZone)
+    if (request.clientTimeZone !== undefined && clientTimeZone === undefined) {
+      throw new RemoteError(
+        'session/invalid-time-zone',
+        'clientTimeZone must be UTC or a valid IANA Area/Location name',
+        { value: request.clientTimeZone },
+      )
+    }
+    // The caller is recorded only when it is not the owner, so owner messages keep their exact source.
+    const principal = principalOf(this.ctx.invocation)
+    const source: MessageSource = {
+      kind: 'user',
+      rpcId: request.requestId,
+      ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+      ...(principal === undefined ? {} : { principal }),
+    }
+    return this.commands.prompt(request, source)
   }
 
   /**
@@ -621,7 +662,7 @@ export class SessionController extends TypertRemoteService {
    * @param signal - cancellation for persistence reads.
    * @returns one chronological page.
    */
-  @Remote('page')
+  @Remote({ name: 'page', resources: { session: addressedSession } })
   page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage> {
     return this.history.page(request, signal)
   }
@@ -633,7 +674,7 @@ export class SessionController extends TypertRemoteService {
    * @returns a complete opening snapshot followed by gap-free durable event
    *   frames and optional cursorless assistant-stream frames.
    */
-  @Remote({ mode: 'stream' })
+  @Remote({ mode: 'stream', resources: { session: addressedSession } })
   follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
     return this.history.follow(request, signal)
   }
@@ -696,8 +737,23 @@ export class SessionController extends TypertRemoteService {
    * @returns one complete baseline followed by live replacement frames.
    */
   @Remote({ mode: 'stream' })
-  control(signal: AbortSignal): AsyncIterable<SessionControlFrame> {
-    return this.controlState.control(signal)
+  async *control(signal: AbortSignal): AsyncIterable<SessionControlFrame> {
+    for await (const frame of this.controlState.control(signal)) {
+      switch (frame.type) {
+        case 'baseline': {
+          const projections = Object.fromEntries(Object.entries(frame.value.projections)
+            .filter(([sessionId]) => this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId as SessionId })))
+          yield { type: 'baseline', value: { ...frame.value, projections } }
+          break
+        }
+        case 'projection':
+          if (this.ctx.remoteAccess.allows({ kind: 'session', id: frame.sessionId })) yield frame
+          break
+        /* v8 ignore next -- closed control-frame union. */
+        default:
+          assertNever(frame)
+      }
+    }
   }
 
 

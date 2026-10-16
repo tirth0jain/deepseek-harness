@@ -44,7 +44,7 @@ import { normalizeApiKey } from './api-key.ts'
 import {
   contentHasFile, contentHasImage, fileHandleText, projectFilesToText, projectImagesForTextModel, projectToolUpdates,
 } from './content.ts'
-import type { FileAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 
 export * from './attribution.ts'
 export * from './brand.ts'
@@ -240,6 +240,18 @@ export abstract class LlmAdapter {
    */
   imageRequestPricing(_provider: string, _model: string): LlmImageRequestPricing | undefined {
     return undefined
+  }
+
+  /**
+   * Resolve the image dimensions and byte target this adapter sends to the model.
+   * The default preserves normalized images; adapters that resize must override it.
+   * @param _provider - registered provider route.
+   * @param _model - exact model id.
+   * @param image - normalized image whose request projection is being resolved.
+   * @returns the same target used by request serialization, before provider-internal processing.
+   */
+  imageRequestTarget(_provider: string, _model: string, image: ImageAttachmentRef): ImageRequestTarget {
+    return { width: image.width, height: image.height, maxBytes: image.bytes }
   }
 
   /**
@@ -564,7 +576,7 @@ export class LlmRuntime extends TypertRemoteService {
           || detached.some(seen => seen.provider === entry.provider)) {
           throw new LlmError(`configurable provider "${entry.provider}" is already declared`, 'DUPLICATE_DIRECTORY')
         }
-        detached.push({ ...entry, settingsPath: [...entry.settingsPath] })
+        detached.push(detachDirectoryEntry(entry))
       }
       for (const entry of held) this.directory.delete(entry.provider)
       for (const entry of detached) this.directory.set(entry.provider, entry)
@@ -601,7 +613,7 @@ export class LlmRuntime extends TypertRemoteService {
    */
   @Remote
   listConfigurableProviders(): LlmConfigurableProvider[] {
-    return [...this.directory.values()].map(entry => ({ ...entry, settingsPath: [...entry.settingsPath] }))
+    return [...this.directory.values()].map(detachDirectoryEntry)
   }
 
   /**
@@ -728,6 +740,17 @@ export class LlmRuntime extends TypertRemoteService {
    */
   imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined {
     return this.adapters.get(provider)?.adapter.imageRequestPricing(provider, model)
+  }
+
+  /**
+   * Resolve the image projection for an exact registered model route.
+   * @param provider - registered provider route.
+   * @param model - exact model id.
+   * @param image - normalized image reference.
+   * @returns dimensions and byte target used by the adapter's request serializer.
+   */
+  imageRequestTarget(provider: string, model: string, image: ImageAttachmentRef): ImageRequestTarget {
+    return this.registration(provider).adapter.imageRequestTarget(provider, model, image)
   }
 
   /**
@@ -1345,6 +1368,17 @@ function detachedPeak(
     return { days: [...window.days], start: window.start, end: window.end }
   })
   return { multiplier: peak.multiplier, windows }
+}
+
+/** Copy a directory entry, including its arrays, so neither side can mutate the other's copy. */
+function detachDirectoryEntry(entry: LlmConfigurableProvider): LlmConfigurableProvider {
+  const { nativeAuth } = entry
+  return {
+    ...entry,
+    settingsPath: [...entry.settingsPath],
+    ...entry.baseURLEnv === undefined ? {} : { baseURLEnv: [...entry.baseURLEnv] },
+    ...(nativeAuth === undefined ? {} : { nativeAuth: { ...nativeAuth, env: [...nativeAuth.env] } }),
+  }
 }
 
 interface AdapterRegistration {

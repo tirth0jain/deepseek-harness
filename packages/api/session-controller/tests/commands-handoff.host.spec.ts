@@ -20,8 +20,6 @@ import { installSessionReadTestServices } from './test-remote.ts'
 
 function controllerAgents(overrides: Partial<ApiSessionAgentController> = {}): ApiSessionAgentController {
   const stub: Partial<ApiSessionAgentController> = {
-    // Not part of the handoff path; a call here would mean the test drifted.
-    ensureSession: () => Promise.reject(new Error('ensureSession is not used by a handoff')),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForSession: () => undefined,
     presetForObservation: () => undefined,

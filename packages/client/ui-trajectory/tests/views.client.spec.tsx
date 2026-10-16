@@ -7,11 +7,11 @@
  * event ledger with its timing overview, and fiber disposal removes the tab.
  * Timeline projection and inclusive focus edge cases ride along.
  */
-import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
+import type { GlobalStandardProps, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createElement, type ComponentProps, type FC, type ReactNode } from 'react'
-import { bindSnapshotSelector, SlotTestRuntime, stubConfigForm } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector, SlotTestRuntime, stubConfigForm } from '@deepseek-ai/dsh-client-test-runtime'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   EMPTY_CONVERSATION_SNAPSHOT, UiConversation,
@@ -246,6 +246,7 @@ function standaloneProps(
     ),
     useSessionRetainInfo: () => undefined,
     useWorkspaces: emptyWorkspaces(),
+    ...allowAllAccess,
     useConversation: bindSnapshotSelector(createSnapshotStore(conversationSnapshot(trajectory))),
     useInput: bindSnapshotSelector(input),
     inputActions,
@@ -256,7 +257,6 @@ function standaloneProps(
     completeViewRequest: () => {},
     // Image seats the outlet would bake: standalone renders omit the gallery.
     renderSlot: () => null,
-    SessionProvider: ({ children }) => <>{children}</>,
     loadImage: () => Promise.reject(new Error('standalone views load no images')),
     // The locale seat the outlet would inject for the declared namespace.
     t: tZh,
@@ -377,6 +377,7 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
     useSessionStatus,
     useSessionRetainInfo: () => undefined,
     useWorkspaces,
+    ...allowAllAccess,
     useProjection,
     useInput,
     inputActions,
@@ -398,6 +399,7 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
         const trajectory = injected as TrajectoryViewInjected
         return {
           loadOlder: trajectory.loadOlder,
+          loadImage: trajectory.loadImage,
           setActualDuration: trajectory.setActualDuration,
           useDuration: bindSnapshotSelector(trajectory.hooks.duration),
           useModelCosts: bindSnapshotSelector(trajectory.hooks.modelCosts),
@@ -405,7 +407,9 @@ function mount(fixture: Awaited<ReturnType<typeof bench>>) {
         }
       })()
       : injected
-    const viewProps: ConvViewProps = { ...owner, ...standardProps }
+    const viewProps: ConvViewProps & Pick<PropsRenderSlots<'conversation.trajectory.images'>, 'renderSlot'> = {
+      ...owner, ...standardProps, renderSlot: () => null,
+    }
     return (
       <View
         {...viewProps}

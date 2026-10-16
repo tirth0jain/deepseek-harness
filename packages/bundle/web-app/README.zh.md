@@ -46,26 +46,41 @@ dsh --profile web --no-open --port 8080
 
 ### 配置
 
-`--host` 与 `--port` 配置监听器；`--public-url` 指定 GUI 在剥离前缀的代理之后对外公告的公开 HTTP(S) 根，`--trusted-host` 则添加更多被接受的 authority。两者都在[监听、信任与公开部署](#public-deployments)中说明：
+`minimal` agent preset 使用持久 Shell、`read_image` 工具和固定 persona，支持自动历史压缩以及会话空闲时的 `/compact` 命令。它复用 Host token meter，并拥有隔离的压缩后端。[压缩配置与保留策略](../../compaction/compaction-basic/README.zh.md#use-this-package) 沿用现有后端。图片读取复用 Host 文件系统和附件存储，要求模型支持图片输入；不加载文本读取、写入和编辑工具。
+
+`--host` 与 `--port` 配置监听器；`--tls-cert` 与 `--tls-key` 让它直接提供 HTTPS；`--public-url` 指定 GUI 在剥离前缀的代理之后对外公告的公开 HTTP(S) 根，`--trusted-host` 则添加更多被接受的 authority。这些都在[监听、信任与公开部署](#public-deployments)中说明，而这些 flag 设置的 `tls` 字段记录在[载体的配置](../../../docs/subsystems/web-server.zh.md#config)中：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `openBrowser` | `true` | 启动后用默认浏览器打开；SSH 启动会抑制它 |
 | `printUrl` | `true` | 启动时打印 `dsh web:` URL 行 |
-| `surfaceContext` | `true` | 给 agent 提供 GUI 定位上下文，并把 `DSH_WEB_URL` 暴露给其 shell 命令 |
-| `publicUrl` | 未设置 | 对外公告的 HTTP(S) 应用根；否则公告监听器的 loopback URL |
-| `trustedHosts` | `[]` | 允许从网络访问 GUI 的额外主机 |
+| `surfaceContext` | `true` | 把 `DSH_WEB_URL` 暴露给 agent 的 shell 命令 |
+| `publicUrl` | 未设置 | 对外公告的 HTTP(S) 应用根；否则公告绑定地址 URL |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-web-app)列出了本运行时插件接受的字段及其 JSDoc。随发行版交付的组合插入 `schedule` 服务行与 `ui-schedule` 任务页面行，时钟读数与四个提醒工具则属于 `standard`、`cordis` 与 `ptc` 三个 preset。这三个 preset 的 `tool-subagent` 与 `tool-subagent-fork` 两行都 deny 这四个工具，因此被委派子 agent 的作用域不会列出它们。
 
 <a id="public-deployments"></a>
 ### 监听、信任与公开部署
 
-默认情况下 GUI 只在 loopback 上监听，只接受本机的连接；可重复的 `--trusted-host` 会添加其 Host/Origin 栅栏接受的 authority，因此远端浏览器要么经由剥离前缀的代理访问，要么通过以可信主机名呈现的端口转发客户端访问。
+默认情况下 GUI 只在 loopback 上监听，只接受本机的连接。只有 `--host` 会改变监听器：它接受一个具体的本地 IPv4 或 IPv6 地址，或通配的 `0.0.0.0` 以绑定所有网卡。没有 TLS 的非 loopback 监听器以明文 HTTP 提供服务并在启动时告警，即使前面有 HTTPS 的 `--public-url`。Host/Origin 栅栏接受绑定 IP 本身；其他非 loopback authority 需要 `--trusted-host`，因此远端浏览器要么经由剥离前缀的代理访问 GUI，要么通过以可信主机名呈现的端口转发客户端访问。启动令牌交换与签名会话 cookie 为每个 API 方法与 WebSocket 流提供认证。
 
-`--public-url` 公告浏览器使用的 HTTP(S) 根——打印与打开的启动 URL、`DSH_WEB_URL` 与 web 表层定位。公告不授予任何信任：浏览器可见的 authority 还必须用 `--trusted-host` 点名。该 flag 不配置监听器、路由或 cookie 作用域，因为外部链路归代理所有：[在反向代理之后发布 Web UI](../../../docs/user/guide/public-deployments.zh.md)列出了这样的部署必须提供什么。
+将 `--tls-cert` 与 `--tls-key` 一起传入，可让监听器以 HTTPS 而非明文 HTTP 提供服务。两者各自指定一个相对进程工作目录解析的文件：证书文件持有完整链，密钥文件持有未加密的 PEM 私钥。这两个 flag 属于同一项设置——只提供一个属于用法错误，两者都不提供则保持明文 HTTP 默认值。文件缺失、不可读、为空或不是有效的证书与密钥对时启动失败；绝不回退到 HTTP。监听器运行期间不会重新读取这些材料，因此更换证书需要重新加载监听器或重启进程。DSH 不签发、不续期、也不监视任何东西：没有 ACME 客户端、没有自签名回退、也没有重定向监听器。浏览器使用自己的信任库与主机名匹配，因此浏览器不信任的证书，或其 subject alternative name 未覆盖你所打开的 authority 的证书，会在页面加载前失败。默认端口保持 3080，且 `--tls-cert`/`--tls-key` 不跟随 `--public-url`：监听器的证书覆盖浏览器拨号的 authority。TLS 不改变任何授权语义：Connection 仍然认证每个请求并仍然检查 Host/Origin，且只要接收监听器提供 HTTPS，它签发的会话 cookie 就是 `Secure`。
 
-打印的 URL 包含进程凭据，只应与预期用户分享；`printUrl: false` 无论是否配置 `--public-url` 都会抑制该行。
+容器可以绑定其 Pod 地址并公告前置的 ingress：
+
+```sh
+dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-url https://app.example/ --trusted-host app.example
+```
+
+`hostname -i` 可能列出多个地址；`--host` 只接受一个，因此该命令选择第一个。诸如 `fe80::1%eth0` 的 zone ID 不能出现在 URL 中，因此公告根会去掉多余的 loopback zone，而非 loopback zone 则要求显式的 `--public-url`。
+
+没有 `--public-url` 时，诸如 `::ffff:127.0.0.1` 的映射 IPv6 loopback 绑定会公告其 IPv4 形式 `127.0.0.1`，以便浏览器识别为本地可信来源。监听器保持配置的绑定地址。点分四段式的 IPv6 尾部表示该地址自身的低 32 位，与 `listen` 的读取方式完全一致，因此 `::0.0.0.1` 是 IPv6 loopback 并公告 `[::1]`，而 `::127.0.0.1` 是非 loopback 地址，不是 IPv4 loopback。
+
+`--public-url` 公告浏览器使用的 HTTP(S) 根——打印与打开的启动 URL、`DSH_WEB_URL`，以及 agent 运行时上下文中的 Web GUI URL。公告不授予任何信任：浏览器可见的 authority 还必须用 `--trusted-host` 点名。该 flag 不配置监听器、路由或 cookie 作用域，因为外部链路归代理所有：[在反向代理之后发布 Web UI](../../../docs/user/guide/public-deployments.zh.md)列出了这样的部署必须提供什么。
+
+公告 URL 与浏览器信任栅栏都不保护端口本身，因此请把端口限制给可信代理或网络。
+
+打印的 URL 包含进程凭据，只应与预期用户分享；`printUrl: false` 无论是否配置 `--public-url` 都会抑制该行，且该凭据永远不会出现在模型上下文或 `DSH_WEB_URL` 中。
 
 ### 通过 SSH 运行
 
@@ -83,7 +98,7 @@ dsh --profile web --no-open --port 8080
 <details>
 <summary>实现细节——点击展开</summary>
 
-此 bundle 由一层五个文件的补丁和一个运行时胶水插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、公告应用 URL、信任采样、提示词段落、bash 变量和就绪通知。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。 转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
+此 bundle 由一层五个文件的补丁和一个运行时胶水插件组成：`cordis.patch.yml` 承载宿主行和 preset 注册表，每个 `presets/<id>.patch.yml` 插入一条随发行版交付的 preset 声明，按 `dsh.bundle.patch` 列出的顺序应用。存储栈与投影缓存来自 `dsh-base`；Web 叠加层的工作区和消息反馈条目消费共享的 `storageDomain` 服务。补丁重述 base 有意省略的界面专用值，插入 Web 专用宿主条目和浏览器插件列表，再将 Agent 层移到预设后面。胶水插件负责 dist 服务、公告应用 URL、LAN 信任采样、明文 HTTP 暴露警告、bash 变量和就绪通知。`office-to-pdf` 条目为宿主消费者挂载一个延迟创建引擎的 [Office 转换提供方](../../document/office-to-pdf/README.zh.md)，使用此 bundle 的 Desktop 组合也共享该提供方。 转换服务的 Remote 方法负责预览读取授权，Document Preview 负责 Office 查看器和客户端缓存。
 
 ### patch 语义
 
@@ -91,7 +106,7 @@ patch 会替换目标行的整个 `config`，因此每个 Web 行都重述自己
 
 ### 公告应用 URL
 
-启动显示与浏览器交接接收附带启动 token 的公告根；web 表层提示词与 `DSH_WEB_URL` 接收不含凭据的形式。根本身由[监听、信任与公开部署](#public-deployments)定义。
+启动显示与浏览器交接接收附带启动 token 的公告根；agent 的运行时上下文与 `DSH_WEB_URL` 接收不含凭据的形式。根本身由[监听、信任与公开部署](#public-deployments)定义。
 
 ### 就绪宣告
 
@@ -99,21 +114,20 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 ### LAN 信任采样
 
-`resolveLanTrust` 在启动时只采样一次网络：loopback 绑定（`127.0.0.1`）不派生任何 LAN 地址，绑定所有网卡则会加入每个非 internal IPv4 字面量。派生字面量加上显式的 `--trusted-host` 权威标识组成 `/api` 浏览器信任栅栏，打印的 LAN URL 始终与该栅栏一致。
+`lanTrustAddresses` 在启动时只采样一次网络：loopback 绑定（`127.0.0.1`）不派生任何 LAN 地址，绑定所有网卡则会加入每个非 internal IPv4 字面量。派生字面量加上显式的 `--trusted-host` 权威标识组成 `/api` 浏览器信任栅栏，打印的 LAN URL 始终与该栅栏一致。
 
 ### 源码地图
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、公告应用 URL、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接 |
+| [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、公告应用 URL、bash 变量、URL 行、浏览器交接 |
 | [`src/public-url.ts`](src/public-url.ts) | 公告根的校验与尾斜杠归一化；供本地导入的叶子模块，不属于包 API |
-| [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--public-url`、`--trusted-host`、`--no-open`、`--help` |
+| [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--tls-cert`、`--tls-key`、`--public-url`、`--trusted-host`、`--no-open`、`--help` |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 注册表 |
 | [`presets/`](presets) | 每个随发行版交付的 preset（`standard`、`ptc`、`minimal`、`cordis`）各一条 `@deepseek-ai/dsh-agent-preset` 声明，各自一个补丁文件 |
-| [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、回退席位、提示词段落、就绪宣告、公告 URL 发布 |
+| [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist index 锚定、公告 URL 发布与警告、bash 变量、就绪宣告发布 |
 | [`tests/startup.spec.ts`](tests/startup.spec.ts) | 在真实 Loader 树上的命令行解析 |
 | [`tests/public-url.spec.ts`](tests/public-url.spec.ts) | 公告根的解析与归一化 |
-| [`tests/trusted-hosts.spec.ts`](tests/trusted-hosts.spec.ts) | LAN 信任采样 |
 | [`tests/browser-open.spec.ts`](tests/browser-open.spec.ts) | 页面可达后的默认浏览器交接 |
 
 </details>
@@ -136,19 +150,19 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 <a id="model-experience"></a>
 ## 模型体验
 
-### Harness 源码与 Web 表层上下文
+### Web 运行时变量
 
 #### 模型看到什么
 
-当 `surfaceContext` 为 true 时，`harness:source` 段落标明磁盘上的 Harness 实现，但不会声称它就是工作目录；全局段落 `app:web-surface`（first-party 顺序 10100，位于可复用指令之后）则向模型说明 GUI：公告应用 URL（定义见上文「监听、信任与公开部署」）、「this page」指代什么、更新约定（重载接收端始终开启；无刷新重载还需要 `pnpm run dev:web` watcher），以及不要启动替代服务器的指令。`DSH_WEB_URL` 还会连同描述出现在受管 bash 环境中，每次调用时从运行中的服务器解析。当它为 false 时，这两个段落和该变量都不会注册。
+当 `surfaceContext` 为 true 时，`DSH_WEB_URL` 连同描述出现在受管 bash 环境中，每次调用时解析为上文「监听、信任与公开部署」定义的公告应用 URL。为 false 时不注册该变量。GUI 定位、实现 checkout 与当前 GUI URL 由本 bundle 挂载的 [`dsh-harness-dev-context`](../../context/harness-dev-context/README.zh.md) 行提供。
 
 #### Token 影响
 
-每个会话一行源码说明和一段提示词，外加两行受管环境变量；每个进程内保持恒定。
+两行受管环境变量；每个进程内保持恒定。
 
 #### KV Cache 影响
 
-源码与 Web 段落位于第一方可复用指令之后。工具与配置一致时，不同 checkout 路径或应用 URL 不会改变前置前缀；不保证提供方复用缓存。
+无；该插件不贡献系统提示词文本。
 
 ## 已知限制与延期工作
 
