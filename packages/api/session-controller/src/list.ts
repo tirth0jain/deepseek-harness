@@ -39,6 +39,25 @@ const imageLimitsSchema = z.object({
 }) as unknown as z.ZodType<ImageAttachmentLimits>
 
 /**
+ * Whether one committed event injects the history a continuation carried in.
+ *
+ * A handoff queues its recap on the Agent rather than appending it to the
+ * surface, because the Agent loop writes the system prompt at the first step and
+ * only the batch-leading position is migratable. The Session therefore holds a
+ * conversation without having run a turn, and the `blank` bit — whose whole
+ * purpose is to keep an unused New Session row hidden and reusable — must not
+ * describe it: a continuation is neither empty nor reusable, and calling it
+ * blank hides the Session a handoff just created, since it is not the selected
+ * one and search excludes blank rows.
+ * @param event - next committed Session event.
+ * @returns whether the event carries a continued conversation's opening history.
+ */
+function carriedConversation(event: SessionEvent): boolean {
+  return event.type === 'agent/inbox/spliced'
+    && event.data.inserted.some(message => message.source.kind === 'handoff')
+}
+
+/**
  * Advance the Session-list metadata projection by one committed event.
  * @param state - metadata before the event.
  * @param event - next committed Session event.
@@ -48,7 +67,7 @@ export function applySessionListMetadata(
   state: SessionListMetadata,
   event: SessionEvent,
 ): SessionListMetadata {
-  const blank = state.blank && event.type !== 'turn/start'
+  const blank = state.blank && event.type !== 'turn/start' && !carriedConversation(event)
   const lastPromptAt = event.type === 'user/message' && event.data.source.kind === 'user'
     ? event.time
     : state.lastPromptAt
@@ -87,7 +106,9 @@ export class ApiSessionList {
       init: () => ({ blank: true, lastPromptAt: null }),
       apply: applySessionListMetadata,
       wire: { viewSchema: sessionListMetadataSchema, view: state => state },
-      stateVersion: 1,
+      // v2: a continued Session's injected history clears `blank` without a turn,
+      // so a row folded by v1 holds a bit this version must recompute, not reuse.
+      stateVersion: 2,
     })
     ctx.inject(['attachments'], (attachmentCtx) => {
       ctx.sessionProjections.register<'imageLimits', null>({

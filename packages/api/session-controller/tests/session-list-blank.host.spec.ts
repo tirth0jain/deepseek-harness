@@ -3,7 +3,10 @@
  * not "log empty": standalone plugin events — command lifecycle records,
  * plan/mode, permission knob events, session titles — never flip it, so running /plan or /goal on a
  * fresh session keeps it list-hidden and reusable, while the first accepted
- * prompt's turn/start clears it. The host/session-added frame shares the
+ * prompt's turn/start clears it. A continued Session is the one exception: its
+ * history arrives injected rather than appended, so the continuation a handoff
+ * just created holds a conversation with no turn to its name and must be listed
+ * and openable rather than hidden as an unused New Session. The host/session-added frame shares the
  * same predicate function (covered by the workspace spec's frame assertion).
  */
 
@@ -11,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import { boundContextSummary, createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { CommandId } from '@deepseek-ai/dsh-commands/brand'
@@ -70,5 +74,43 @@ describe('summary blank = conversation not started', () => {
     appendStandalone(session)
     session.append('turn/start', { turn: 0 })
     expect(await listBlank(remote, session.id)).toBe(false)
+  })
+
+  it('a continuation\'s injected history clears blank with no turn to clear it', async () => {
+    const { ctx, remote, attach } = await harness()
+    const session = ctx.sessions.create()
+    await attach(session)
+    expect(await listBlank(remote, session.id)).toBe(true)
+
+    session.append('agent/inbox/spliced', {
+      target: 'next-step',
+      start: 0,
+      inserted: [createUserMessage({
+        content: [{ type: 'text', text: 'Condensed history: earlier work.' }],
+        source: {
+          kind: 'handoff',
+          summary: boundContextSummary('Continued from an earlier conversation.'),
+        },
+      })],
+    })
+
+    expect(await listBlank(remote, session.id)).toBe(false)
+  })
+
+  it('a pending message that carries no continued history keeps the session blank', async () => {
+    const { ctx, remote, attach } = await harness()
+    const session = ctx.sessions.create()
+    await attach(session)
+
+    session.append('agent/inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [createUserMessage({
+        content: [{ type: 'text', text: 'queued prompt' }],
+        source: { kind: 'user' },
+      })],
+    })
+
+    expect(await listBlank(remote, session.id)).toBe(true)
   })
 })
