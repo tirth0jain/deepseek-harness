@@ -1,11 +1,16 @@
 /**
- * A handoff continuation is seeded through its Agent, never written straight to
- * the surface.
+ * A handoff continuation's opening history is steered onto its Agent, never
+ * written straight to the surface.
  *
  * The Agent loop writes the system prompt at the first step, so a recap
  * appended to the surface at creation time would precede the head. V4 requires
  * that head to be the surface's first node, and a V3 artifact in that shape can
- * never be migrated — which is how one continuation became unreadable.
+ * never be migrated — which is how one continuation became unreadable. Steering
+ * wakes the idle continuation so that same step claims the recap as the batch it
+ * leads; injection would leave it pending for a prompt that may never come, and
+ * unclaimed pending input is discarded when the Agent is disposed — an orderly
+ * restart, an archive release — which silently emptied a continuation of the
+ * history it was created to carry.
  */
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -41,7 +46,7 @@ async function baseContext(): Promise<Context> {
 }
 
 describe('Session handoff seeding', () => {
-  it('queues the condensed history on the continuation Agent rather than its surface', async () => {
+  it('starts the continuation with the condensed history on its Agent rather than its surface', async () => {
     const ctx = await baseContext()
     ctx.provide('workspaceRegistry', {
       list: () => [],
@@ -64,10 +69,10 @@ describe('Session handoff seeding', () => {
       session: { deriveMessages: () => source.deriveMessages() },
     } as Partial<Agent> as Agent
 
-    const inject = vi.fn()
+    const steer = vi.fn()
     const createOwned = vi.fn(async (options: CreateAgentOptions) => {
       ctx.sessions.create(options.sessionId, options.meta === undefined ? {} : { meta: options.meta })
-      return { id: options.sessionId, inject } as Partial<Agent> as Agent
+      return { id: options.sessionId, steer } as Partial<Agent> as Agent
     })
     const controller = new SessionCommandController(ctx, controllerAgents({
       resolveObservedAgent: () => Promise.resolve({ agent: sourceAgent }),
@@ -76,10 +81,11 @@ describe('Session handoff seeding', () => {
 
     const result = await controller.handoff({ sessionId: source.id }, new AbortController().signal)
 
-    // Queued on the Agent's inbox, which the loop drains at the first step —
-    // behind the system prompt the same step writes.
-    expect(inject).toHaveBeenCalledTimes(1)
-    const recap = inject.mock.calls[0]?.[0] as UserMessage
+    // Steered onto the Agent, not injected: the wake is what makes the first step
+    // claim the recap instead of leaving it pending for a prompt that may never
+    // come, and that step writes the system prompt ahead of it.
+    expect(steer).toHaveBeenCalledTimes(1)
+    const recap = steer.mock.calls[0]?.[0] as UserMessage
     expect(recap.source).toMatchObject({ kind: 'handoff' })
     expect(recap.content.some(block => block.type === 'text' && block.text.includes('earlier work'))).toBe(true)
 

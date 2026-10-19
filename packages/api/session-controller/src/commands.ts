@@ -402,14 +402,17 @@ export class SessionCommandController {
       )
     }
     try {
-      // Injected rather than appended: the loop writes the system prompt at the
-      // first step, and V4 requires that head to be the surface's first node, so
-      // a recap written straight to the surface would leave the artifact
-      // unmigratable. An injected item leads the batch its own turn claims, so
-      // the recap still lands ahead of the prompt that wakes the continuation —
-      // and an idle driver leaves it pending until that prompt arrives, so no
-      // turn ever runs on the recap alone.
-      continuation.inject(createUserMessage({
+      // Steered, never appended: the loop writes the system prompt at the first
+      // step and V4 requires that head to be the surface's first node, so a recap
+      // written straight to the surface would leave the artifact unmigratable.
+      // Steering wakes the idle continuation, so the recap leads the batch its own
+      // first turn claims and lands on the surface behind that head, where it is
+      // durable and the reader can see it. Injected context would instead wait for
+      // a prompt that may never come, and unclaimed pending input is discarded by
+      // whatever disposes the Agent first — an orderly shutdown, an archive
+      // release — taking the carried history with it and leaving the continuation
+      // an empty chat that still reports itself as continued.
+      continuation.steer(createUserMessage({
         content: carriedHistory(conversation),
         source: handoffSource(),
       }))
