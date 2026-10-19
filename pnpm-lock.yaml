@@ -10706,6 +10706,22 @@ importers:
         specifier: workspace:*
         version: link:../../util/home-paths
 
+  packages/identity/session-scope:
+    dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:~
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:*
+        version: link:../../client/connection
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:*
+        version: link:../../typert/protocol
+
   packages/interaction/commands:
     dependencies:
       '@deepseek-ai/dsh-util-crypto':

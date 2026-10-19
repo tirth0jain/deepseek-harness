@@ -17,6 +17,7 @@ import type { BrowserAuth } from './browser-auth.ts'
 import { Peer } from './peer.ts'
 import type {
   PeerAdmission,
+  RequestIdentityResolver,
   ConnectionAdmission,
   ConnectionIndexRequest,
   ConnectionIndexResponse,
@@ -79,6 +80,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
   readonly allowsRemoteAuthorities: boolean
 
   /**
+   * One Peer per admitted identity, so a Remote call's `invocation.peer`
+   * answers "who is calling" without any per-call carrier. Streams outlive the
+   * request that opened them, which is why identity rides here rather than in
+   * request-scoped storage.
+   */
+  private readonly identityPeers = new Map<string, PeerScope>()
+  private identityResolver: RequestIdentityResolver | undefined
+
+  /**
    * Provide the Host half over the active HTTP server.
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by the Host/Origin fence.
@@ -94,8 +104,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
     this.browserPeer = new Peer(ctx, { principal: { kind: 'owner' } })
     ctx.effect(() => async () => {
       this.disposed = true
-      const peers = [this.browserPeer, ...Array.from(this.peers.values(), record => record.peer)]
+      const peers = [
+        this.browserPeer,
+        ...Array.from(this.peers.values(), record => record.peer),
+        ...this.identityPeers.values(),
+      ]
       this.peers.clear()
+      this.identityPeers.clear()
       await Promise.all(peers.map(peer => peer.dispose()))
     }, 'client-connection: Peer scopes')
     this.allowsRemoteAuthorities = trustedHosts.some(isRemoteAuthority)
@@ -130,10 +145,54 @@ export class HostConnectionService extends Service implements HostConnectionHand
     if (!this.isTrusted(request)) return { rejection: 403 }
     if (this.disposed) return { rejection: 401 }
     const secure = this.owner.get('webServer')?.protocol === 'https:'
-    if (this.browserAuth.isAuthenticated(request, secure)) return { peer: this.browserPeer }
-    const id = this.browserAuth.authenticateApi(request, secure)
-    const record = id === undefined ? undefined : this.peers.get(id)
-    return record === undefined ? { rejection: 401 } : { peer: record.peer }
+    let admission: PeerAdmission
+    if (this.browserAuth.isAuthenticated(request, secure)) {
+      admission = { peer: this.browserPeer }
+    } else {
+      const id = this.browserAuth.authenticateApi(request, secure)
+      const record = id === undefined ? undefined : this.peers.get(id)
+      admission = record === undefined ? { rejection: 401 } : { peer: record.peer }
+    }
+    if ('rejection' in admission) return admission
+    const resolver = this.identityResolver
+    if (resolver === undefined) return admission
+    const identity = resolver.identityFromHeaders(request.headers)
+    if (identity === undefined) {
+      return resolver.requiresIdentity ? { rejection: 403 } : admission
+    }
+    return { peer: this.peerForIdentity(identity, resolver) }
+  }
+
+  /**
+   * Install the deployment's request-identity policy.
+   *
+   * Called by whichever plugin owns the policy, so Connection never depends on
+   * it. Without a resolver every admitted request speaks for the Peer its
+   * carrier authenticated, which is the single-user behaviour.
+   * @param resolver - the policy, or undefined to stop attributing requests.
+   * @returns disposer that restores the previous resolver.
+   */
+  setIdentityResolver(resolver: RequestIdentityResolver | undefined): () => void {
+    const previous = this.identityResolver
+    this.identityResolver = resolver
+    return () => {
+      this.identityResolver = previous
+    }
+  }
+
+  /**
+   * Mint the Peer for one identity, or reuse the one already minted.
+   * @param identity - identity the request asserted.
+   * @param resolver - policy that records which identity a Peer speaks for.
+   * @returns that identity's Peer.
+   */
+  private peerForIdentity(identity: string, resolver: RequestIdentityResolver): PeerScope {
+    const existing = this.identityPeers.get(identity)
+    if (existing !== undefined) return existing
+    const peer = new Peer(this.ctx, { principal: { kind: 'owner' } })
+    this.identityPeers.set(identity, peer)
+    resolver.remember(peer, identity)
+    return peer
   }
 
   /** Create one in-process Peer owned by the Context that read this service. */

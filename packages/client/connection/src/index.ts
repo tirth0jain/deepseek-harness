@@ -35,6 +35,7 @@ export type {
   HostConnectionHandle,
   HostConnectionFetch,
   HostConnectionRpc,
+  RequestIdentityResolver,
   RpcMessage,
   ServerResponse,
 } from './rpc.ts'
