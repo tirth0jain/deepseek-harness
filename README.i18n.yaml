@@ -6,8 +6,98 @@
   en: f68c4f080ce55ff2
   zh: 88a76d7f7f0b260e
 /deepseek-harness/developer-preview:
-  en: 4ef4d8a71ac143f0
-  zh: 1bfc3149ba8e5543
+  en: e8e9afaa6720b6b9
+  zh: af70d09ce5429383
+/deepseek-harness/fork-additions:
+  en: 34091714047903bf
+  zh: d255fcef415e39e9
+/deepseek-harness/fork-additions/at-a-glance:
+  en: 8dd18fc9e5236ea2
+  zh: 96a969613a355155
+/deepseek-harness/fork-additions/access-and-deployment:
+  en: 9d7204412c5e3712
+  zh: 698fee4017bf29ae
+/deepseek-harness/fork-additions/access-and-deployment/lan-binding:
+  en: 7e0ea7b635e254a7
+  zh: a06315998a0ac3ba
+/deepseek-harness/fork-additions/access-and-deployment/declared-trusted-hosts-and-settings-write-access:
+  en: b07b1bf393317b0d
+  zh: 56365b646026d176
+/deepseek-harness/fork-additions/access-and-deployment/tokenless-mode:
+  en: aed723d512a2601d
+  zh: f06ebcc1f22417f1
+/deepseek-harness/fork-additions/access-and-deployment/deployment-bundle-and-one-step-rebuild:
+  en: 8f03142ea20e4563
+  zh: 40ddb6e5c0559f1a
+/deepseek-harness/fork-additions/models-and-catalogs:
+  en: 49ce844f84e75687
+  zh: 99d420bff03d3288
+/deepseek-harness/fork-additions/models-and-catalogs/catalog-auto-refresh:
+  en: a0b4dd5fc079b401
+  zh: ce8e3f51956bc4e0
+/deepseek-harness/fork-additions/models-and-catalogs/models-dev-enrichment:
+  en: 550f281fab13946d
+  zh: f1abf968d5646806
+/deepseek-harness/fork-additions/models-and-catalogs/model-exclusions:
+  en: 6d0f02fc5beaea89
+  zh: fdabcfec79fa9926
+/deepseek-harness/fork-additions/models-and-catalogs/per-conversation-session-header:
+  en: 214fae8b4f698a79
+  zh: eafcaaf526c55764
+/deepseek-harness/fork-additions/models-and-catalogs/reasoning-content-compatibility:
+  en: 5141c74d5cf28d59
+  zh: 5e4d414f318b4e7c
+/deepseek-harness/fork-additions/cost-and-usage:
+  en: 469d132fe83d758b
+  zh: 850b75aa6a0fb0ea
+/deepseek-harness/fork-additions/cost-and-usage/published-rates-and-estimated-spend:
+  en: e3021d08b2f70b9f
+  zh: 8e7a2d04d747bc78
+/deepseek-harness/fork-additions/cost-and-usage/per-turn-throughput:
+  en: 2a9d5bc166dc2c0c
+  zh: 77d04d6a801ba3d5
+/deepseek-harness/fork-additions/chat:
+  en: a73361bdcae5e2ac
+  zh: c80e92c12f8e2552
+/deepseek-harness/fork-additions/chat/turn-loading-control:
+  en: 1fa84dac3e8f074e
+  zh: c305644c4506ac9b
+/deepseek-harness/fork-additions/chat/file-downloads:
+  en: 49c5b10f692ba86e
+  zh: c20e10a086220911
+/deepseek-harness/fork-additions/chat/durable-composer-drafts:
+  en: 1ef31fb8a9c248ee
+  zh: bbec32060b1bac4b
+/deepseek-harness/fork-additions/sessions-and-memory:
+  en: f1536737476defc5
+  zh: b1662899d4552270
+/deepseek-harness/fork-additions/sessions-and-memory/continue-in-a-new-chat:
+  en: 553f66a671c29a4b
+  zh: db87c378ca175f06
+/deepseek-harness/fork-additions/sessions-and-memory/continuations-that-are-real-sessions:
+  en: d1a0b48e06f85535
+  zh: 006b43c943acca91
+/deepseek-harness/fork-additions/sessions-and-memory/archiving-releases-memory:
+  en: eb56db5e3a211cac
+  zh: 7d1b276af4b9aae5
+/deepseek-harness/fork-additions/sessions-and-memory/bounded-session-memory:
+  en: 8994cacd0fe65e94
+  zh: 581b9ad19f94939c
+/deepseek-harness/fork-additions/multi-user-scoping:
+  en: 8f75427019e600e4
+  zh: b864fe4cfecf1976
+/deepseek-harness/fork-additions/multi-user-scoping/multi-user-session-scoping:
+  en: c7748085eb3e91ed
+  zh: 31e276ddfd3693fd
+/deepseek-harness/fork-additions/multi-user-scoping/identity-admission:
+  en: 38db2df38069610c
+  zh: d48a6f0aed2ac43b
+/deepseek-harness/fork-additions/web-search:
+  en: d99f0383eb5f9952
+  zh: b7388322e0db95dd
+/deepseek-harness/fork-additions/web-search/bright-data-web-search:
+  en: d49cc8efecc59ef0
+  zh: 42edae2372b8e148
 /deepseek-harness/run:
   en: 4e0248e4c6474fc6
   zh: eb2fb8d78c7d6bc0

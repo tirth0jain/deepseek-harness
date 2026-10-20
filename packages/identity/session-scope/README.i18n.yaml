@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/identity/session-scope/README.md
+/:
+  en: 43a525c2e06dc95d
+  zh: 8844f6dcb4ad86a0
+/deepseek-ai-dsh-session-scope:
+  en: 9cfc63b738e3cb4a
+  zh: 0dd6d1e5886622e7
+/deepseek-ai-dsh-session-scope/summary:
+  en: 8522f998afa0dd90
+  zh: e596679625782c3a
+/deepseek-ai-dsh-session-scope/table-of-contents:
+  en: dc1f3d4ef911a243
+  zh: d1515d7a4d860cd7
+/deepseek-ai-dsh-session-scope/the-model:
+  en: a4bef41fed7b79a9
+  zh: 42c4d4997e7d48b5
+/deepseek-ai-dsh-session-scope/how-identity-reaches-enforcement:
+  en: b3750a85b6ddf954
+  zh: 151404832e57b4ef
+/deepseek-ai-dsh-session-scope/enforcement-points:
+  en: 393e57804b77d277
+  zh: 80fa90c6050b49ff
+/deepseek-ai-dsh-session-scope/provisioning:
+  en: 1d12d4b88ec9eb83
+  zh: 47d36b6e50a9f959
+/deepseek-ai-dsh-session-scope/configuration:
+  en: de07d8b0d8c193d0
+  zh: 99219d9ec94b2f9a
+/deepseek-ai-dsh-session-scope/skills-stay-shared:
+  en: 5279466e73496bd6
+  zh: 5bf59a7178dda280
+/deepseek-ai-dsh-session-scope/what-this-is-not:
+  en: 274e62536cf95703
+  zh: baeb82816cfd419b
+/deepseek-ai-dsh-session-scope/dev-note:
+  en: 8a527b616ead578a
+  zh: 4ddcde7136e8b528
