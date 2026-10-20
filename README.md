@@ -189,6 +189,8 @@ Reasoning efforts are never auto-added. Neither gateway discloses per-model effo
 
 Automatic refresh writes settings, so it needs a settings scope that can write; it is a no-op on a deployment whose settings page is read-only by design.
 
+Stored order is the selector's order: a refresh keeps the deployment's curated list first and appends only ids the listing adds, so a curated position survives every page load. A gateway that serves one model under two ids still surfaces the undeclared alias as an extra bare row — that is the endpoint speaking, not a failed curation.
+
 </details>
 
 <a id="models-dev-enrichment"></a>
