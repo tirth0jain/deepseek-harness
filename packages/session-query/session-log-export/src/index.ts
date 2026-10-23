@@ -160,14 +160,19 @@ async function sessionLogExportResponse(
     )
   }
   if (maySee !== undefined) {
-    // Descendants are not re-tested: a subagent Session is created with its
-    // parent's working directory, so anything reachable from this root is
-    // under the same root.
-    const snapshots = await deps.sessionPersistence.list()
-    const header = snapshots.find(entry => String(entry.header.id) === String(sessionId))?.header
+    // A live Session answers from memory — the flush below is what makes it
+    // durable — so only a cold one pays the persisted-header read. Descendants
+    // are not re-tested: a subagent Session is created with its parent's
+    // working directory, so anything reachable from this root is under it.
+    const live = deps.sessions?.get(sessionId)
+    let cwd = live?.header.cwd
+    if (live === undefined) {
+      const snapshots = await deps.sessionPersistence.list()
+      cwd = snapshots.find(entry => String(entry.header.id) === String(sessionId))?.header.cwd
+    }
     // Answered as absent rather than forbidden, so a refused id is
     // indistinguishable from one that never existed.
-    if (header === undefined || !maySee(header.cwd)) {
+    if (cwd === undefined || !maySee(cwd)) {
       return new Response('session not found', { status: 404 })
     }
   }
