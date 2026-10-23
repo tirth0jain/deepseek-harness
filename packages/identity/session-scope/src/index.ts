@@ -179,7 +179,8 @@ export function assertVisibility(
 
 /** Whether any configured rule could ever constrain a caller. */
 function isConfigured(config: SessionScopeConfig): boolean {
-  return config.admin.length > 0
+  return config.requireIdentity
+    || config.admin.length > 0
     || Object.keys(config.users).length > 0
     || normalizeRoot(config.provisionRoot) !== undefined
 }
@@ -369,6 +370,11 @@ export function apply(ctx: Context, config?: SessionScopeConfig): void {
     requireIdentity: config?.requireIdentity ?? false,
   }
   const scope = new SessionScopeService(ctx, resolved)
+  // A deployment that names nobody constrains nobody, and installing a
+  // resolver anyway would mint a Peer for every distinct header value it sees:
+  // a shared, unauthenticated deployment would grow that map for no decision.
+  // The policy is inert until a profile actually configures it.
+  if (!scope.enabled) return
   // Connection owns admission and knows nothing about users, so the policy is
   // handed to it rather than imported by it: every admitted request then speaks
   // for its own identity's Peer.
