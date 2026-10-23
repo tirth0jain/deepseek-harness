@@ -148,9 +148,11 @@ export class ApiSessionList {
   /**
    * Read every visible attached and persisted Session without activating an Agent.
    * @param signal - optional cancellation for persistence reads and summary generation.
+   * @param maySee - per-caller visibility test over a Session's working directory,
+   *   or undefined when the deployment does not scope Sessions to users.
    * @returns visible Session summaries ordered by activity.
    */
-  async list(signal?: AbortSignal): Promise<SessionSummary[]> {
+  async list(signal?: AbortSignal, maySee?: (path: string | undefined) => boolean): Promise<SessionSummary[]> {
     signal?.throwIfAborted()
     const records = await this.ctx.sessionQuery.listSessions(signal)
     signal?.throwIfAborted()
@@ -159,6 +161,7 @@ export class ApiSessionList {
     let yieldDeadline = performance.now() + this.workSliceMs
     for (const record of records) {
       signal?.throwIfAborted()
+      if (maySee !== undefined && !maySee(record.header.cwd)) continue
       const live = this.ctx.sessions.get(record.header.id)
       if (live !== undefined) {
         items.push(this.summaryFor(live))
@@ -205,9 +208,15 @@ export class ApiSessionList {
    * Search current visible message content without activating any matching Session.
    * @param query - literal message-content query.
    * @param signal - cancellation for list and search reads.
+   * @param maySee - per-caller visibility test over a Session's working directory,
+   *   or undefined when the deployment does not scope Sessions to users.
    * @returns authorized bounded Session search results.
    */
-  async search(query: string, signal: AbortSignal): Promise<SessionSearchValue> {
+  async search(
+    query: string,
+    signal: AbortSignal,
+    maySee?: (path: string | undefined) => boolean,
+  ): Promise<SessionSearchValue> {
     const normalizedQuery = normalizeSearchQuery(query)
     signal.throwIfAborted()
     const provider = this.ctx.get('sessionQuery')
@@ -222,7 +231,8 @@ export class ApiSessionList {
       const visible = await provider.listSessions(signal)
       signal.throwIfAborted()
       const visibleIds = new Set(visible
-        .filter(record => record.header.cwd !== undefined)
+        .filter(record => record.header.cwd !== undefined
+          && (maySee === undefined || maySee(record.header.cwd)))
         .map(record => record.header.id))
       if (visibleIds.size === 0) return { items: [], hasMore: false }
       const authorized: SessionSearchItem[] = []

@@ -75,6 +75,19 @@
     - id: session-log-download
       name: '@deepseek-ai/dsh-session-log-export'
 
+    # Per-user Session and Workspace scoping: one harness, several people, and
+    # a sidebar showing each of them only their own work. Deliberately inert as
+    # shipped -- with no admin, no user map and no provision root it constrains
+    # nobody, and a deployment opts in from its own patch layer.
+    - id: session-scope
+      name: '@deepseek-ai/dsh-session-scope'
+      config:
+        header: x-auth-request-email
+        admin: []
+        users: {}
+        provisionRoot: ''
+        requireIdentity: false
+
     # Session-header "Open In..." split button over the host application
     # resolution (macOS/Windows/Linux; a host with no resolved application
     # renders no button). Two halves: the host routes and the browser surface.

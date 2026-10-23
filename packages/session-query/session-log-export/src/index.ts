@@ -1,6 +1,7 @@
 /** Session-log download command and Host-owned streaming route. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import type { CommandDefinitionId } from '@deepseek-ai/dsh-commands/brand'
 import Schema from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -60,9 +61,37 @@ interface SessionLogConnection {
       readonly path: string
       readonly methods: readonly ('GET' | 'HEAD')[]
       readonly requestBody: 'buffered'
-      readonly fetch: (request: Request) => Promise<Response>
+      /** `peer` is the Peer the request was admitted as; a Fetch route has no `invocation`. */
+      readonly fetch: (request: Request, peer: PeerScope) => Promise<Response>
     }): () => Promise<void>
   }
+}
+
+/** Answers whether one Session `cwd` belongs to the caller; undefined when nothing constrains them. */
+type PathVisibility = (path: string | undefined) => boolean
+
+/** The scoping service's surface this route reads, when the deployment loads it. */
+interface SessionScopePeerLookup {
+  scopeOfPeer(peer: PeerScope | undefined): { readonly admin: boolean } | undefined
+  mayAccess(peer: PeerScope | undefined, path: string): boolean
+}
+
+/**
+ * Resolve one Peer's path visibility through the deployment's scoping service.
+ *
+ * Read with `ctx.get` rather than imported: the plugin is optional, and a
+ * separately-installed copy would answer for a distinct Peer map. Undefined
+ * means this deployment constrains nobody, which is what tells the route to
+ * skip the check rather than refuse everything.
+ * @param ctx - Host context that may carry the scoping service.
+ * @param peer - the Peer this request was admitted as.
+ * @returns predicate answering whether one `cwd` is visible, or undefined.
+ */
+function peerVisibility(ctx: Context, peer: PeerScope | undefined): PathVisibility | undefined {
+  const scope = ctx.get('sessionScope') as SessionScopePeerLookup | undefined
+  const resolved = scope?.scopeOfPeer(peer)
+  if (scope === undefined || resolved === undefined || resolved.admin) return undefined
+  return path => path !== undefined && scope.mayAccess(peer, path)
 }
 
 const REQUESTED: CommandResult = {
@@ -88,11 +117,12 @@ export function apply(ctx: Context, config: Config = {}): void {
     path: SESSION_LOG_EXPORT_PATH,
     methods: ['GET', 'HEAD'],
     requestBody: 'buffered',
-    fetch: async (request) => {
+    fetch: async (request, peer) => {
       const response = await sessionLogExportResponse(
         ctx,
         request,
         config.compressionLevel ?? DEFAULT_SESSION_LOG_COMPRESSION_LEVEL,
+        peerVisibility(ctx, peer),
       )
       if (request.method === 'GET') return response
       await response.body?.cancel()
@@ -109,6 +139,7 @@ async function sessionLogExportResponse(
   ctx: Context,
   request: Request,
   compressionLevel: SessionLogCompressionLevel,
+  maySee?: PathVisibility,
 ): Promise<Response> {
   const url = new URL(request.url)
   const query = Object.fromEntries(url.searchParams)
@@ -127,6 +158,18 @@ async function sessionLogExportResponse(
       'session log export is unavailable: missing session-query, session-persistence, or attachments service',
       { status: 500 },
     )
+  }
+  if (maySee !== undefined) {
+    // Descendants are not re-tested: a subagent Session is created with its
+    // parent's working directory, so anything reachable from this root is
+    // under the same root.
+    const snapshots = await deps.sessionPersistence.list()
+    const header = snapshots.find(entry => String(entry.header.id) === String(sessionId))?.header
+    // Answered as absent rather than forbidden, so a refused id is
+    // indistinguishable from one that never existed.
+    if (header === undefined || !maySee(header.cwd)) {
+      return new Response('session not found', { status: 404 })
+    }
   }
   const ready: SessionLogExportReady = {
     sessionQuery: deps.sessionQuery,

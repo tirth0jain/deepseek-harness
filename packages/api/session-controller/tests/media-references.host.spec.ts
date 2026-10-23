@@ -317,7 +317,11 @@ describe('SessionMediaReferences /api/attachment.download', () => {
     expect(response.headers.get('content-type')).toBe('text/markdown')
     expect(response.headers.get('content-length')).toBe('5')
     expect(response.headers.get('content-disposition')).toBe('attachment; filename="quarterly notes.md"; filename*=UTF-8\'\'quarterly%20notes.md')
-    expect(download).toHaveBeenCalledWith({ sessionId: 's1', attachmentId: 'a1' }, expect.any(AbortSignal))
+    expect(download).toHaveBeenCalledWith(
+      { sessionId: 's1', attachmentId: 'a1' },
+      expect.any(AbortSignal),
+      undefined,
+    )
   })
 
   it('prefers the store media type and answers HEAD without pulling bytes', async () => {

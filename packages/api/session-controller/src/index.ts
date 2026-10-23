@@ -12,6 +12,7 @@ import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativ
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
+import { callVisibility, type PathVisibility } from '@deepseek-ai/dsh-session-scope'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
@@ -364,7 +365,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('list')
   async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue> {
-    const items = await this.listState.list(signal)
+    const items = await this.listState.list(signal, callVisibility(this.ctx))
     return { items: items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
@@ -378,7 +379,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('search')
   async search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
-    const result = await this.listState.search(request.query, signal)
+    const result = await this.listState.search(request.query, signal, callVisibility(this.ctx))
     return { ...result, items: result.items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
@@ -389,7 +390,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('create')
   create(request: SessionCreateRequest): Promise<SessionCreateValue> {
-    return this.commands.create(request)
+    return this.commands.create(request, callVisibility(this.ctx))
   }
 
   /**
@@ -518,7 +519,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the accepted title and durable event sequence.
    */
   @Remote('rename')
-  rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
+  async rename(request: SessionRenameRequest): Promise<SessionRenameValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.rename(request)
   }
 
@@ -531,6 +533,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('fork')
   async fork(request: SessionForkRequest): Promise<SessionForkValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     if (request.allowMigration === false && this.ctx.sessions.get(request.sessionId) === undefined) {
       const stored = await this.ctx.get('sessionPersistence')?.stat(request.sessionId)
       if (stored?.formatStatus === 'migration-required' && this.ctx.sessions.get(request.sessionId) === undefined) {
@@ -550,7 +553,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the new Session identity and whether its source was archived.
    */
   @Remote('handoff')
-  handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+  async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.handoff(request, signal)
   }
 
@@ -563,6 +567,7 @@ export class SessionController extends TypertRemoteService {
   @Remote('prompt')
   async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue> {
     signal.throwIfAborted()
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     if (!hasPromptContent(request.content)) {
       throw new RemoteError('gateway/bad-request', 'prompt content must include non-whitespace text or an attachment', {})
     }
@@ -593,7 +598,8 @@ export class SessionController extends TypertRemoteService {
    * @returns the durable attachment reference and base64-encoded bytes.
    */
   @Remote('attachment')
-  attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
+  async attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.attachment(request)
   }
 
@@ -603,12 +609,15 @@ export class SessionController extends TypertRemoteService {
    * its value carries live bytes, which only the in-process route can consume.
    * @param request - Session and attachment identities used for authorization.
    * @param signal - cancels the read while the response body is still streaming.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
    * @returns the display name, media type, and exact byte stream.
    */
-  downloadAttachment(
+  async downloadAttachment(
     request: SessionAttachmentRequest,
     signal: AbortSignal,
+    maySee?: PathVisibility,
   ): Promise<SessionAttachmentDownload> {
+    await this.assertSessionVisible(request.sessionId, maySee)
     return this.commands.downloadAttachment(request, signal)
   }
 
@@ -618,7 +627,8 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that the queue mutation was applied.
    */
   @Remote('updateQueue')
-  updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+  async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.updateQueue(request)
   }
 
@@ -631,6 +641,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('composerDraft')
   async composerDraft(request: SessionComposerDraftRequest): Promise<SessionComposerDraftValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return { text: await this.composerDrafts.read(request.sessionId) }
   }
 
@@ -643,7 +654,62 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('setComposerDraft')
   async setComposerDraft(request: SessionSetComposerDraftRequest): Promise<void> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     await this.composerDrafts.write(request.sessionId, request.text)
+  }
+
+  /**
+   * Refuse one Session the caller does not own.
+   *
+   * An attached Session answers from memory, which is the path every legitimate
+   * call takes — a draft is only ever saved for a Session the caller has open,
+   * and autosave runs on every keystroke. Only an id naming some other Session
+   * pays for the persisted-header lookup, and none of those are the caller's.
+   * @param sessionId - the Session being reached.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
+   * @throws RemoteError when the caller is constrained and the Session is not theirs.
+   */
+  private async assertSessionVisible(
+    sessionId: SessionId,
+    maySee: PathVisibility | undefined,
+  ): Promise<void> {
+    if (maySee === undefined) return
+    const live = this.ctx.sessions.get(sessionId)
+    if (live !== undefined) {
+      this.refuseInvisibleSession(sessionId, live.header.cwd, maySee)
+      return
+    }
+    let cwd: string | undefined
+    try {
+      using observation = await this.ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' })
+      cwd = observation.header.cwd
+    } catch (error: unknown) {
+      // A Session that is not there keeps answering exactly as it did before
+      // scoping: the command that follows owns that refusal.
+      if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return
+      throw error
+    }
+    this.refuseInvisibleSession(sessionId, cwd, maySee)
+  }
+
+  /**
+   * Refuse one Session the caller does not own, given a cwd already in hand.
+   *
+   * Reported missing rather than forbidden: a Session belonging to somebody
+   * else is not a thing this caller gets to learn about. Paths answer
+   * `session-scope/forbidden`; ids answer as if they were never there.
+   * @param sessionId - the Session being reached.
+   * @param cwd - the Session's own directory, or undefined when unknown.
+   * @param maySee - the caller's visibility, or undefined when unconstrained.
+   * @throws RemoteError when the caller is constrained and the Session is not theirs.
+   */
+  private refuseInvisibleSession(
+    sessionId: SessionId,
+    cwd: string | undefined,
+    maySee: PathVisibility | undefined,
+  ): void {
+    if (maySee === undefined || (cwd !== undefined && maySee(cwd))) return
+    throw new RemoteError('session/not-found', `Session ${JSON.stringify(sessionId)} not found`, { sessionId })
   }
 
   /**
@@ -652,7 +718,8 @@ export class SessionController extends TypertRemoteService {
    * @returns acknowledgement that cancellation was requested.
    */
   @Remote('cancel')
-  cancel(request: SessionCancelRequest): SessionCancelValue {
+  async cancel(request: SessionCancelRequest): Promise<SessionCancelValue> {
+    await this.assertSessionVisible(request.sessionId, callVisibility(this.ctx))
     return this.commands.cancel(request)
   }
 
@@ -664,7 +731,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote({ name: 'page', resources: { session: addressedSession } })
   page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage> {
-    return this.history.page(request, signal)
+    return this.history.page(request, signal, callVisibility(this.ctx))
   }
 
   /**
@@ -676,7 +743,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote({ mode: 'stream', resources: { session: addressedSession } })
   follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
-    return this.history.follow(request, signal)
+    return this.history.follow(request, signal, callVisibility(this.ctx))
   }
 
   /**
@@ -691,6 +758,13 @@ export class SessionController extends TypertRemoteService {
     if (sessionId.length === 0) {
       throw new RemoteError('gateway/bad-request', 'sessionId must not be empty', {})
     }
+    // Synchronous while the Session is attached: this read is on the sidebar's
+    // hot path, and an await here would both cost a turn and move the snapshot
+    // it is about to take past whatever else settles in the meantime.
+    const maySee = callVisibility(this.ctx)
+    const attached = this.ctx.sessions.get(sessionId)
+    if (attached === undefined) await this.assertSessionVisible(sessionId, maySee)
+    else this.refuseInvisibleSession(sessionId, attached.header.cwd, maySee)
     try {
       signal.throwIfAborted()
       const live = this.liveProjections(sessionId)
@@ -738,16 +812,23 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote({ mode: 'stream' })
   async *control(signal: AbortSignal): AsyncIterable<SessionControlFrame> {
+    const maySee = callVisibility(this.ctx)
+    const visible = (sessionId: SessionId): boolean => {
+      if (!this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId })) return false
+      if (maySee === undefined) return true
+      const session = this.ctx.sessions.get(sessionId)
+      return session !== undefined && maySee(session.header.cwd)
+    }
     for await (const frame of this.controlState.control(signal)) {
       switch (frame.type) {
         case 'baseline': {
           const projections = Object.fromEntries(Object.entries(frame.value.projections)
-            .filter(([sessionId]) => this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId as SessionId })))
+            .filter(([sessionId]) => visible(sessionId as SessionId)))
           yield { type: 'baseline', value: { ...frame.value, projections } }
           break
         }
         case 'projection':
-          if (this.ctx.remoteAccess.allows({ kind: 'session', id: frame.sessionId })) yield frame
+          if (visible(frame.sessionId)) yield frame
           break
         /* v8 ignore next -- closed control-frame union. */
         default:

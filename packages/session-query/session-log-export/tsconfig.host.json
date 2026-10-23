@@ -19,6 +19,7 @@
     { "path": "../../interaction/commands" },
     { "path": "../../session/session-format" },
     { "path": "../../session/session-persistence" },
-    { "path": "../session-query" }
+    { "path": "../session-query" },
+    { "path": "../../typert/protocol" }
   ]
 }

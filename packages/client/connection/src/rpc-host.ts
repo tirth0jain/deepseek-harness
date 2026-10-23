@@ -278,7 +278,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
           // Exact routes bypass Gateway access checks, so only the owner reaches them.
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- other packages merge non-owner kinds into PrincipalMap.
           if (peer.principal.kind !== 'owner') return Promise.resolve(new Response('forbidden', { status: 403 }))
-          return route.fetch(request)
+          return route.fetch(request, peer)
         }
         const endpoint = endpointFromPath(channel, pathname)
         const interceptor = this.interceptors.get(channel)

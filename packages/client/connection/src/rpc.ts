@@ -192,8 +192,14 @@ export interface ConnectionFetchRoute {
    * Handle one request after the physical carrier has applied its trust and
    * authentication policy. Only owner Peers reach an exact route; the shared
    * handler answers 403 for every other principal.
+   *
+   * A Fetch route is not a Remote call, so it has no `invocation`: the Peer the
+   * request was admitted as arrives here instead, which is the only way a route
+   * that serves one identity's bytes can learn whose request it holds.
+   * @param request - the incoming Fetch request.
+   * @param peer - the Peer this request was admitted as.
    */
-  readonly fetch: (request: Request) => Promise<Response>
+  readonly fetch: (request: Request, peer: PeerScope) => Promise<Response>
 }
 
 /** Host registry for exact Fetch routes that cannot use JSON Remote invocation. */

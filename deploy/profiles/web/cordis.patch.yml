@@ -104,3 +104,33 @@
     provider: dsh-opencode-go
     model: deepseek-v4.1-flash
     reasoningEffort: high
+
+# ── per-user Session and Workspace scoping ─────────────────────────────────
+# One harness, several people. Each identity sees only the Sessions and
+# Workspaces beneath the root it owns; the owner sees everything.
+#
+# The three existing accounts are mapped explicitly rather than left to
+# provisioning, because their directories predate this feature and the minted
+# slug would not match: `Sunn@` would mint /root/sunn (the directory is
+# /root/sunny) and `Aji@` would mint /root/aji (the directory is /root/ajit).
+# Anyone else at the domain is minted /root/<local-part> on first load.
+#
+# requireIdentity is on: Caddy's strict_auth injects the real
+# X-Auth-Request-Email with copy_headers, so every admitted request names its
+# account and a request arriving without one is refused rather than treated as
+# the operator. That also closes the direct-to-192.168.1.203:3080 path, which
+# bypasses the edge entirely.
+#
+# Skills are not scoped. They live under $DSH_HOME/skills, outside every user
+# root, so everyone sees the same catalog.
+- id: session-scope
+  config:
+    header: x-auth-request-email
+    admin:
+      - main.pastrami903@passfwd.com
+    users:
+      "punit@rubysteels.com": /root/punit
+      "sunn@rubysteels.com": /root/sunny
+      "aji@rubysteels.com": /root/ajit
+    provisionRoot: /root
+    requireIdentity: true

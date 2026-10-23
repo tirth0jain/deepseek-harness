@@ -1,8 +1,9 @@
 /**
  * Authenticated GET/HEAD file and attachment byte reads: `/api/file` serves a
  * composed-filesystem path and `/api/attachment.download` serves bytes the
- * Session log references. Paths and MIME types do not restrict access; the
- * connection service authenticates requests before these handlers.
+ * Session log references. MIME types do not restrict access; the connection
+ * service both authenticates the request and admits it as a Peer, and the
+ * deployment's scoping policy decides which paths and Sessions that Peer owns.
  * @module @deepseek-ai/dsh-api-session-controller/media-references
  */
 
@@ -11,9 +12,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { AttachmentIdType } from '@deepseek-ai/dsh-attachment'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { FsError, type FileSystem } from '@deepseek-ai/dsh-fs'
+import { FsError } from '@deepseek-ai/dsh-fs'
+import { peerVisibility } from '@deepseek-ai/dsh-session-scope'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
+import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import mime from 'mime-types'
 
 const BASE_HEADERS = {
@@ -95,16 +98,26 @@ function byteStream(bytes: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array
   })
 }
 
-async function serveFile(request: Request, fs: FileSystem, maxBytes: number): Promise<Response> {
+async function serveFile(
+  request: Request,
+  ctx: Context,
+  peer: PeerScope | undefined,
+  maxBytes: number,
+): Promise<Response> {
   const fail = (status: number, text: string): Response => refuse(request, status, text)
   const query = new URL(request.url).searchParams
   const path = query.get('path')
   if (path === null || path.length === 0) return fail(400, 'missing path')
   if (path.includes('\0') || !isAbsolute(path)) return fail(400, 'absolute path required')
+  // Nothing here ever restricted what this route could read, so before scoping
+  // an authenticated visitor could read any file the host process could --
+  // every other account's Session log included. The Peer decides now.
+  const maySee = peerVisibility(ctx, peer)
+  if (maySee !== undefined && !maySee(path)) return fail(403, 'forbidden')
   // An explicit `name` overrides only the saved filename, never the path read.
   const override = query.get('name')
   try {
-    const target = await fs.resolve(path, { signal: request.signal })
+    const target = await ctx.fs.resolve(path, { signal: request.signal })
     const mediaType = mime.lookup(target.displayPath) || 'application/octet-stream'
     const headers: Record<string, string> = {
       ...BASE_HEADERS,
@@ -117,7 +130,7 @@ async function serveFile(request: Request, fs: FileSystem, maxBytes: number): Pr
       headers['Content-Security-Policy'] = DOWNLOAD_CSP
     }
     if (request.method === 'HEAD') {
-      const info = await fs.stat(target, request.signal)
+      const info = await ctx.fs.stat(target, request.signal)
       if (info === undefined) return fail(404, 'not found')
       if (info.type !== 'file') return fail(403, 'not a regular file')
       if (info.size !== undefined) {
@@ -126,7 +139,7 @@ async function serveFile(request: Request, fs: FileSystem, maxBytes: number): Pr
       }
       return new Response(null, { headers })
     }
-    const bytes = await fs.readBytes(target, request.signal, maxBytes)
+    const bytes = await ctx.fs.readBytes(target, request.signal, maxBytes)
     headers['Content-Length'] = String(bytes.byteLength)
     return new Response(bytes.slice(), { headers })
   } catch (error: unknown) {
@@ -159,7 +172,7 @@ async function serveFile(request: Request, fs: FileSystem, maxBytes: number): Pr
  * @param ctx - Host context carrying the Session owner.
  * @returns the byte response, or the refusal to answer with.
  */
-async function serveAttachment(request: Request, ctx: Context): Promise<Response> {
+async function serveAttachment(request: Request, ctx: Context, peer: PeerScope | undefined): Promise<Response> {
   const query = new URL(request.url).searchParams
   const sessionId = query.get('sessionId')
   const attachmentId = query.get('attachmentId')
@@ -176,6 +189,9 @@ async function serveAttachment(request: Request, ctx: Context): Promise<Response
         attachmentId: brandString<AttachmentIdType>(attachmentId),
       },
       request.signal,
+      // Not a Remote call: no invocation exists here, so the Peer the request
+      // was admitted as is the only thing that knows whose Session this is.
+      peerVisibility(ctx, peer),
     )
     const headers: Record<string, string> = {
       ...BASE_HEADERS,
@@ -206,13 +222,13 @@ export const SessionMediaReferences = {
       path: '/api/file',
       methods: ['GET', 'HEAD'],
       requestBody: 'buffered',
-      fetch: request => serveFile(request, ctx.fs, maxBytes),
+      fetch: (request, peer) => serveFile(request, ctx, peer, maxBytes),
     }), 'session-controller: /api/file')
     ctx.effect(() => ctx.connection.fetch.register({
       path: '/api/attachment.download',
       methods: ['GET', 'HEAD'],
       requestBody: 'buffered',
-      fetch: request => serveAttachment(request, ctx),
+      fetch: (request, peer) => serveAttachment(request, ctx, peer),
     }), 'session-controller: /api/attachment.download')
   },
 }

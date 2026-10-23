@@ -3,6 +3,7 @@
  * stable wire failure vocabulary over the `ctx.directoryPicker` seam.
  */
 
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
@@ -12,6 +13,7 @@ import type {
 // The seam owns the listing declaration; the generator requires the reference
 // site to name that package rather than this package's re-export of it.
 import type { DirectoryListing } from '@deepseek-ai/dsh-host-directory-picker/types'
+import { assertVisibility, callRoots, callVisibility, isWithin } from '@deepseek-ai/dsh-session-scope'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { RemoteErrorCode } from '@deepseek-ai/dsh-typert-protocol'
 
@@ -63,16 +65,27 @@ export class DirectoryPickerController extends TypertRemoteService {
 
   /**
    * List one directory level for a Remote caller's in-app browser.
-   * @param path - absolute directory to list; absent lists the home directory.
+   *
+   * A scoped caller browses only its own tree: an absent path opens at a root
+   * the caller owns rather than the shared host home, a path outside those
+   * roots is refused before anything is scanned, and the returned ancestry is
+   * cut at the root so the trail cannot be walked back above it.
+   * @param path - absolute directory to list; absent lists the caller's own root.
    * @param signal - caller lifetime; abort stops the backend's scan instead of
    *   letting it outlive a disconnected caller.
    * @returns the level's listing with its ancestry.
    */
   @Remote('list')
   async list(path: string | undefined, signal: AbortSignal): Promise<DirectoryListing> {
+    const roots = callRoots(this.ctx)
+    const target = path ?? roots?.[0]
+    if (target !== undefined) {
+      assertVisibility(callVisibility(this.ctx), target, 'the requested directory')
+    }
     const capability = this.requireCapability('browse', 'list')
     try {
-      return await capability.list(path, signal)
+      const listing = await capability.list(target, signal)
+      return roots === undefined ? listing : confineListing(listing, roots)
     } catch (error: unknown) {
       throw cancellableFailure(error, signal, 'directory listing was aborted')
     }
@@ -80,6 +93,9 @@ export class DirectoryPickerController extends TypertRemoteService {
 
   /**
    * Create one child directory for a Remote caller's in-app browser.
+   *
+   * The created path is checked as well as the parent: a wire can name a
+   * parent its caller does not own, and `mkdir` runs as the host process.
    * @param path - absolute existing parent directory.
    * @param name - single non-blank path segment.
    * @returns the created directory's absolute path.
@@ -94,6 +110,11 @@ export class DirectoryPickerController extends TypertRemoteService {
         { issues: request.error.issues },
       )
     }
+    assertVisibility(
+      callVisibility(this.ctx),
+      join(request.data.path, request.data.name),
+      'the requested directory',
+    )
     const capability = this.requireCapability('browse', 'createDirectory')
     try {
       return await capability.createDirectory(request.data.path, request.data.name)
@@ -116,6 +137,26 @@ export class DirectoryPickerController extends TypertRemoteService {
       )
     }
     return capability as DirectoryPickerCapabilities[Kind]
+  }
+}
+
+/**
+ * Cut one listing's ancestry at the roots its caller owns.
+ *
+ * Every crumb is a jump target in the browser dialog and the trail is the only
+ * way that dialog walks upwards — a parent level is fetched from the second-to-
+ * last crumb — so dropping the crumbs above the caller's own roots is what
+ * makes those roots a ceiling rather than a suggestion. The listed level itself
+ * is already known to be inside them, since a foreign one is refused before the
+ * scan runs.
+ * @param listing - the level the backend produced.
+ * @param roots - absolute roots the caller owns.
+ * @returns the listing with its ancestry confined to those roots.
+ */
+function confineListing(listing: DirectoryListing, roots: readonly string[]): DirectoryListing {
+  return {
+    ...listing,
+    crumbs: listing.crumbs.filter(crumb => roots.some(root => isWithin(root, crumb.path))),
   }
 }
 

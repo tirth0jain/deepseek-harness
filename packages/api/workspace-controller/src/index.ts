@@ -2,6 +2,8 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { callVisibility } from '@deepseek-ai/dsh-session-scope'
+import { WorkspaceId as workspaceIdOf } from '@deepseek-ai/dsh-workspace'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-api-remote-access'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -89,7 +91,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('create')
   create(request: WorkspaceCreateRequest): Promise<WorkspaceCreateValue> {
-    return this.commands.create(request)
+    return this.commands.create(request, callVisibility(this.ctx))
   }
 
   /**
@@ -118,7 +120,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('rename')
   rename(request: WorkspaceRenameRequest): Promise<WorkspaceValue> {
-    return this.commands.rename(request)
+    return this.commands.rename(request, callVisibility(this.ctx))
   }
 
   /**
@@ -128,7 +130,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('delete')
   delete(request: WorkspaceDeleteRequest): Promise<WorkspaceDeleteValue> {
-    return this.commands.delete(request)
+    return this.commands.delete(request, callVisibility(this.ctx))
   }
 
   /**
@@ -138,7 +140,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('insertBefore')
   insertBefore(request: WorkspaceInsertBeforeRequest): Promise<WorkspaceOrderValue> {
-    return this.commands.insertBefore(request)
+    return this.commands.insertBefore(request, callVisibility(this.ctx))
   }
 
   /**
@@ -148,7 +150,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('insertSessionBefore')
   insertSessionBefore(request: WorkspaceInsertSessionBeforeRequest): Promise<WorkspaceValue> {
-    return this.commands.insertSessionBefore(request)
+    return this.commands.insertSessionBefore(request, callVisibility(this.ctx))
   }
 
   /**
@@ -158,7 +160,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('archiveSession')
   archiveSession(request: WorkspaceArchiveSessionRequest): Promise<WorkspaceArchiveValue> {
-    return this.commands.archiveSession(request)
+    return this.commands.archiveSession(request, callVisibility(this.ctx))
   }
 
   /**
@@ -168,7 +170,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('unarchiveSession')
   unarchiveSession(request: WorkspaceUnarchiveSessionRequest): Promise<WorkspaceArchiveValue> {
-    return this.commands.unarchiveSession(request)
+    return this.commands.unarchiveSession(request, callVisibility(this.ctx))
   }
 
   /**
@@ -178,7 +180,7 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('pinSession')
   pinSession(request: WorkspacePinSessionRequest): Promise<WorkspacePinValue> {
-    return this.commands.pinSession(request)
+    return this.commands.pinSession(request, callVisibility(this.ctx))
   }
 
   /**
@@ -188,24 +190,33 @@ export class WorkspaceController extends TypertRemoteService {
    */
   @Remote('unpinSession')
   unpinSession(request: WorkspaceUnpinSessionRequest): Promise<WorkspacePinValue> {
-    return this.commands.unpinSession(request)
+    return this.commands.unpinSession(request, callVisibility(this.ctx))
   }
 
   /**
    * Stream a complete Workspace baseline followed by ordered increments. A
-   * non-owner receives only the Workspaces and Sessions `allows()` admits.
-   * When a delivered Workspace is no longer admitted at its next change or
-   * the next order change, the stream sends a `replace` frame with the
-   * complete filtered state instead of a `remove`, because a Client never
-   * resurrects a removed Workspace; a `remove` frame reports a deletion and
-   * reaches only a Client that received that Workspace.
+   * scoped caller receives only the Workspaces inside the directories it owns,
+   * and a non-owner receives only what `allows()` admits. When a delivered
+   * Workspace is no longer admitted at its next change or the next order
+   * change, the stream sends a `replace` frame with the complete filtered state
+   * instead of a `remove`, because a Client never resurrects a removed
+   * Workspace; a `remove` frame reports a deletion and reaches only a Client
+   * that received that Workspace.
    * @param signal - generation cancellation.
    * @returns baseline followed by ordered Workspace increments.
    */
   @Remote({ mode: 'stream' })
   async *follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame> {
+    await this.provisionFirstUse()
     const access = this.ctx.remoteAccess
-    const visible = (workspaceId: WorkspaceId): boolean => access.allows({ kind: 'workspace', id: workspaceId })
+    const maySee = callVisibility(this.ctx)
+    const pathVisible = (workspaceId: WorkspaceId): boolean => {
+      if (maySee === undefined) return true
+      const workspace = this.ctx.workspaceRegistry.get(workspaceIdOf(workspaceId))
+      return workspace !== undefined && maySee(workspace.path)
+    }
+    const visible = (workspaceId: WorkspaceId): boolean =>
+      pathVisible(workspaceId) && access.allows({ kind: 'workspace', id: workspaceId })
     const sessions = (sessionIds: readonly SessionId[]): SessionId[] =>
       sessionIds.filter(sessionId => access.allows({ kind: 'session', id: sessionId }))
     /** Workspaces this generation has delivered and not yet removed. */
@@ -217,8 +228,11 @@ export class WorkspaceController extends TypertRemoteService {
       for (const item of items) delivered.add(item.workspaceId)
       return {
         items: items.map(item => ({ ...item, sessionIds: sessions(item.sessionIds) })),
-        archivedSessionIds: sessions(value.archivedSessionIds),
-        pinnedSessionIds: sessions(value.pinnedSessionIds),
+        // Archive and pin are registry-global sets: knowing which Sessions
+        // elsewhere are archived is somebody else's business, so a scoped
+        // caller gets neither rather than a filtered guess.
+        archivedSessionIds: maySee === undefined ? sessions(value.archivedSessionIds) : [],
+        pinnedSessionIds: maySee === undefined ? sessions(value.pinnedSessionIds) : [],
       }
     }
     for await (const frame of this.feed.follow(signal)) {
@@ -247,15 +261,46 @@ export class WorkspaceController extends TypertRemoteService {
           }
           break
         case 'archived':
-          yield { type: 'archived', archivedSessionIds: sessions(frame.archivedSessionIds) }
+          // A scoped caller's baseline states these sets are empty, and they
+          // stay empty: the sets are registry-global.
+          if (maySee === undefined) yield { type: 'archived', archivedSessionIds: sessions(frame.archivedSessionIds) }
           break
         case 'pinned':
-          yield { type: 'pinned', pinnedSessionIds: sessions(frame.pinnedSessionIds) }
+          if (maySee === undefined) yield { type: 'pinned', pinnedSessionIds: sessions(frame.pinnedSessionIds) }
           break
         /* v8 ignore next -- closed follow-frame union. */
         default:
           assertNever(frame)
       }
+    }
+  }
+
+  /**
+   * Give a first-time identity somewhere to work before its baseline is read.
+   *
+   * Runs at the head of the Workspace stream because that stream is the first
+   * thing a browser asks for, and a baseline carrying no Workspace is an
+   * interface a new user cannot act in. Both steps are idempotent: the root is
+   * created only once per process, and registering an already-registered path
+   * returns the existing Workspace rather than a duplicate.
+   *
+   * A failure is logged and swallowed — being unable to mint a directory is not
+   * a reason to refuse the stream, and an empty baseline still lets the user
+   * create a Workspace themselves.
+   */
+  private async provisionFirstUse(): Promise<void> {
+    const scope = this.ctx.get('sessionScope')
+    if (scope === undefined) return
+    const identity = scope.identityOfPeer(this.ctx.invocation?.peer)
+    if (identity === undefined) return
+    try {
+      const root = scope.ensureRoot(identity)
+      if (root === undefined) return
+      await this.ctx.workspaceRegistry.create(root)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(
+        `workspace-controller: could not provision a Workspace for ${JSON.stringify(identity)}: ${String(error)}`,
+      )
     }
   }
 }

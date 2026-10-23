@@ -43,6 +43,9 @@
       "path": "../../core/session"
     },
     {
+      "path": "../../identity/session-scope"
+    },
+    {
       "path": "../../context/file-reference"
     },
     {
