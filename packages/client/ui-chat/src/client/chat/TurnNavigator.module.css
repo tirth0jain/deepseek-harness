@@ -198,8 +198,10 @@
   cursor: pointer;
 }
 
-.previewLoad:hover:not(:disabled) {
-  background: var(--dsw-alias-bg-layer-3);
+@media (hover: hover) {
+  .previewLoad:hover:not(:disabled) {
+    background: var(--dsw-alias-bg-layer-3);
+  }
 }
 
 .previewLoad:disabled {

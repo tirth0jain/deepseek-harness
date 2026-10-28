@@ -22,6 +22,9 @@ import {
 import { DEFAULT_MAX_REQUEST_BODY_BYTES } from '../src/http-bridge.ts'
 import { provideBrowserCredentials } from './browser-credentials.ts'
 
+/** The Peer an index render speaks for; this listener reads no field of it. */
+const PAGE_PEER = { principal: { kind: 'owner' } } as Parameters<WebServer['renderIndex']>[1]
+
 /** Structural webServer fake recording both route registries. */
 function fakeHttpServer(
   routes: WebRoute[],
@@ -32,7 +35,7 @@ function fakeHttpServer(
   return {
     host,
     protocol,
-    register(route) {
+    register(route: WebRoute) {
       if (routes.some(candidate => candidate.kind === route.kind && candidate.path === route.path)) {
         throw new Error(`duplicate route ${route.path}`)
       }
@@ -275,7 +278,7 @@ describe('connection node half', () => {
     })
     try {
       const rows: IndexInjection[] = []
-      ctx.emit('webserver/index-inject', rows)
+      ctx.emit('webserver/index-inject', rows, PAGE_PEER)
       expect(rows).toEqual([
         {
           kind: 'global', name: '__DSH_CONNECTION_RECOVERY__', value: {
@@ -289,7 +292,7 @@ describe('connection node half', () => {
       ])
       await dispose()
       const after: IndexInjection[] = []
-      ctx.emit('webserver/index-inject', after)
+      ctx.emit('webserver/index-inject', after, PAGE_PEER)
       expect(after).toEqual([])
     } finally {
       await dispose()

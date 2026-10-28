@@ -32,6 +32,8 @@ function workflow(file: string): Workflow {
 // This is not an Actions interpreter: string case-folding and general coercion differ.
 // Missing context properties use the Actions empty-string value.
 function evaluate(expression: string, context: Record<string, string | boolean>): unknown {
+  // A bare runner label (`ubuntu-24.04`) is a value, not an expression.
+  if (/^[\w.-]+$/.test(expression.trim())) return expression.trim()
   const source = expression.trim().replace(/^\$\{\{|\}\}$/g, '')
     .replace(/\b(?:github|vars|runner)(?:\.[a-zA-Z_][a-zA-Z_0-9]*)+/g,
       key => JSON.stringify(context[key] ?? ''))
@@ -139,8 +141,10 @@ for (const [file, jobIds] of [['release.yml', ['dependencies', 'pack']], ['relea
         it('retains the dependency and pack verification commands', () => {
           const commands = job.steps.flatMap(step => step.run === undefined ? [] : [step.run])
           if (jobId === 'dependencies') {
-            expect(commands).toContain('pnpm run verify-package-dependencies')
-            expect(commands).toContain('pnpm run verify-npm-install-layout')
+            // Both verifications share one step so the lane pays the longer half.
+            const combined = commands.find(command => command.includes('verify-package-dependencies'))
+            expect(combined).toContain('verify-npm-install-layout')
+            expect(combined).toContain('wait "$layout_pid"')
           } else {
             const family = file === 'release.yml' ? 'dsh' : 'vendor'
             const output = family === 'dsh' ? 'dist/npm' : 'dist/npm-vendor'
@@ -164,5 +168,8 @@ for (const [file, jobIds] of [['release.yml', ['dependencies', 'pack']], ['relea
 it.each(['release-publish.yml', 'release-vendor-publish.yml'])('keeps %s manual and entirely hosted', (file) => {
   const publish = workflow(file)
   expect(Object.keys(publish.on)).toEqual(['workflow_dispatch'])
-  for (const job of Object.values(publish.jobs)) expect(job['runs-on']).toBe(hosted)
+  // Release publication routes to the self-hosted pool only for the upstream
+  // repository with an explicit failover variable; with the variable unset —
+  // this fork's setting — every job resolves to a hosted runner.
+  for (const job of Object.values(publish.jobs)) expect(evaluate(job['runs-on'], {})).toBe(hosted)
 })

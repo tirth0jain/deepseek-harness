@@ -19,12 +19,15 @@ import type { HandoffSessionInjected, SessionMenuItemProps } from '../contract/s
  * @returns the row.
  */
 export function HandoffSessionMenuItem({
-  sessionId, useMenuOpenState, useSessionStatus, useSessions, handoffSession, t,
+  sessionId, useMenuOpenState, useSessionStatus, useSessions, useSessionAccess, handoffSession, t,
 }: SessionMenuItemProps<HandoffSessionInjected>) {
+  const allowed = useSessionAccess(sessionId, 'session/handoff')
   const [, setMenuOpen] = useMenuOpenState()
   const statusRunning = useSessionStatus(statuses => statuses.get(sessionId)?.running)
   const listRunning = useSessions(list => list.byId[sessionId]?.running ?? false)
   const running = statusRunning ?? listRunning
+  // A share viewer cannot condense the shared Session or archive its source.
+  if (!allowed) return null
   return (
     <MenuItemButton
       icon={<IconCompactOutlineRegular />}

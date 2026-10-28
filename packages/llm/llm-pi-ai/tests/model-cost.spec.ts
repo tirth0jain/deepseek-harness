@@ -32,9 +32,9 @@ describe('declared model rates', () => {
 
   it('reads the installed catalog rate for a catalog model', async () => {
     const llm = await resolved({ 'opencode-go': { apiKeyEnv: 'PI_TEST_KEY' } })
-    const info = await llm.resolveModelInfo('opencode-go', 'deepseek-v4-flash')
+    const info = await llm.resolveModelInfo('opencode-go', 'deepseek-v4.1-flash')
     // The rate comes from the installed pi-ai catalog, so it tracks whatever
-    // `@earendil-works/pi-ai` ships: 1.0.2 prices this model 0.15/0.6/0.003.
+    // `@earendil-works/pi-ai` ships: 1.3.0 prices this model 0.15/0.6/0.003.
     expect(info.cost).toMatchObject({ input: 0.15, output: 0.6, cacheRead: 0.003 })
   })
 
@@ -95,13 +95,13 @@ describe('declared model rates', () => {
       'opencode-go': {
         apiKeyEnv: 'PI_TEST_KEY',
         modelOverrides: {
-          'deepseek-v4-flash': {
+          'deepseek-v4.1-flash': {
             cost: { peak: { multiplier: 2, windows: [{ days: ['sat'], start: '00:00', end: '23:59' }] } },
           },
         },
       },
     })
-    const info = await llm.resolveModelInfo('opencode-go', 'deepseek-v4-flash')
+    const info = await llm.resolveModelInfo('opencode-go', 'deepseek-v4.1-flash')
     expect(info.cost).toMatchObject({
       input: 0.15,
       output: 0.6,

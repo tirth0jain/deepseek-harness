@@ -16,7 +16,7 @@ import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { ChatNodeViewProps, UserContentInput } from '../src/client/contract/slots.ts'
+import type { UserContentInput } from '../src/client/contract/slots.ts'
 import { UserMessageNodeView } from '../src/client/chat/MessageItem.tsx'
 import { attachmentDownloadUrl } from '../src/client/chat/attachment-url.ts'
 import { createUserContentFixture } from './user-content-component-fixture.tsx'
@@ -65,7 +65,8 @@ function renderCard(url: string | undefined) {
     },
     useChat: (selector: (state: unknown) => unknown) => selector({ order: [], nodes: new Map() }),
     attachmentDownloadUrl: () => url,
-  } as unknown as ChatNodeViewProps<'user' | 'steering'>
+    renderSlotChain: () => null,
+  } as unknown as Parameters<typeof UserMessageNodeView>[0]
   return render(<UserMessageNodeView {...props} />)
 }
 

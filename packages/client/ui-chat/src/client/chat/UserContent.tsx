@@ -1,7 +1,7 @@
 /** Reusable user contents inside a caller-owned message row. */
 import { Fragment } from 'react'
 import type { FactoryComponentPropsOf } from '@deepseek-ai/dsh-client-ui-slots'
-import { JsonBlock } from '@deepseek-ai/dsh-client-ui-primitives'
+import { JsonBlock, UserMessageBubble } from '@deepseek-ai/dsh-client-ui-primitives'
 import { FileAttachmentCard } from './MessageItem.tsx'
 import css from './MessageItem.module.css'
 
@@ -37,12 +37,12 @@ export function UserContent({ content, loadImage, facts, attachmentDownloadUrl, 
             ))}
         </div>
       )}
-      {showBubble && <div className={css.bubble}>
+      {showBubble && <UserMessageBubble data-message-bubble="" data-text-interaction-source="">
         {renderFactorySlot('conversation.user.text', { text, facts, interactive, ellipsis })}
         {extraBlocks.map((block, index) => (
           <JsonBlock key={index} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />
         ))}
-      </div>}
+      </UserMessageBubble>}
       {referenceLabels.length > 0 && (
         <div className={css.referenceSummary}>
           {t('message.referenceSummary', { labels: referenceLabels.join(t('message.referenceSeparator')) })}

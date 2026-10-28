@@ -17,6 +17,7 @@ import {
   type TrajectoryRequestNumber,
   type TrajectoryUsage,
 } from './TrajectoryTable.tsx'
+import type { WatchToolResult } from './watch-tool-result.ts'
 import { TrajectoryToolbar } from './TrajectoryToolbar.tsx'
 import { TrajectoryTimeline } from './TrajectoryTimeline.tsx'
 import {
@@ -93,6 +94,7 @@ export interface TrajectoryViewInjected {
   loadOlder: () => Promise<boolean>
   loadImage: MessageImageLoader
   setActualDuration: (actualDuration: boolean) => void
+  watchToolResult?: WatchToolResult
 }
 
 /**
@@ -211,7 +213,7 @@ function addUsage(
 }
 
 export function TrajectoryView({
-  useSession, useTrajectory, useDuration, useModelCosts, loadOlder, loadImage, setActualDuration,
+  useSession, useTrajectory, useDuration, useModelCosts, watchToolResult, loadOlder, loadImage, setActualDuration,
   viewRequest, completeViewRequest, renderSlot, t, jsonStringWrapping,
 }: ConvViewProps
   & Pick<PropsRenderSlots<'conversation.trajectory.images'>, 'renderSlot'>
@@ -652,6 +654,7 @@ export function TrajectoryView({
       <div className={css.ledger}>
         <TrajectoryTable
           t={t}
+          watchToolResult={watchToolResult}
           stringWrapping={jsonStringWrapping === undefined ? undefined : {
             ...jsonStringWrapping,
             label: t('record.wrapLines'),

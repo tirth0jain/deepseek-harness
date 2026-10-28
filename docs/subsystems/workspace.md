@@ -210,7 +210,12 @@ Host service backing the generated `ctx.remote.directoryPicker` namespace. The s
 
 /**
  * List one directory level for a Remote caller's in-app browser.
- * @param path - absolute directory to list; absent lists the home directory.
+ *
+ * A scoped caller browses only its own tree: an absent path opens at a root
+ * the caller owns rather than the shared host home, a path outside those
+ * roots is refused before anything is scanned, and the returned ancestry is
+ * cut at the root so the trail cannot be walked back above it.
+ * @param path - absolute directory to list; absent lists the caller's own root.
  * @param signal - caller lifetime; abort stops the backend's scan instead of
  *   letting it outlive a disconnected caller.
  * @returns the level's listing with its ancestry.
@@ -219,6 +224,9 @@ Host service backing the generated `ctx.remote.directoryPicker` namespace. The s
 
 /**
  * Create one child directory for a Remote caller's in-app browser.
+ *
+ * The created path is checked as well as the parent: a wire can name a
+ * parent its caller does not own, and `mkdir` runs as the host process.
  * @param path - absolute existing parent directory.
  * @param name - single non-blank path segment.
  * @returns the created directory's absolute path.
@@ -388,12 +396,13 @@ Host service backing the generated `ctx.remote.workspace` namespace.
 
 /**
  * Stream a complete Workspace baseline followed by ordered increments. A
- * non-owner receives only the Workspaces and Sessions `allows()` admits.
- * When a delivered Workspace is no longer admitted at its next change or
- * the next order change, the stream sends a `replace` frame with the
- * complete filtered state instead of a `remove`, because a Client never
- * resurrects a removed Workspace; a `remove` frame reports a deletion and
- * reaches only a Client that received that Workspace.
+ * scoped caller receives only the Workspaces inside the directories it owns,
+ * and a non-owner receives only what `allows()` admits. When a delivered
+ * Workspace is no longer admitted at its next change or the next order
+ * change, the stream sends a `replace` frame with the complete filtered state
+ * instead of a `remove`, because a Client never resurrects a removed
+ * Workspace; a `remove` frame reports a deletion and reaches only a Client
+ * that received that Workspace.
  * @param signal - generation cancellation.
  * @returns baseline followed by ordered Workspace increments.
  */

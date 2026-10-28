@@ -65,8 +65,10 @@ interface SessionEventMap {
    * The rendered system prompt on the model-visible surface. The loop appends
    * the first one as surface node 0 before the step's first `user/message`.
    * A prepared in-history route can append nonempty changes in a continuing
-   * series. An incapable route or new series normalizes text to the first system
-   * node. Normalization empties nonempty later nodes, then rewrites the head if
+   * series. An incapable route, or a new series whose effective text differs,
+   * normalizes text to the first system node; a series start whose latest
+   * surviving node already holds the rendering leaves it in place.
+   * Normalization empties nonempty later nodes, then rewrites the head if
    * needed, through logged per-node replacements. An empty rendering always
    * clears all active system nodes, leaving no older instructions model-visible.
    * Empty later nodes are dormant and project to no message; an empty head with
@@ -578,6 +580,9 @@ declare class Session {
    * the log, the append is committed: observer failures are logged and
    * contained per listener, so they do not change the return value or prevent
    * later listeners from observing the same accepted event.
+   * Independent Sessions append without notifying store observers. Once a store
+   * prepares or enters the instance, writes require a completed creation
+   * announcement and remain disabled after removal.
    *
    * @param type - The event type (key of {@link SessionEventMap}).
    * @param data - The event payload; must be JSON-serializable.
@@ -593,7 +598,9 @@ declare class Session {
    * @returns the logged event — its assigned `seq`/`time` plus the SNAPSHOT of
    *   `data` that entered the log, so reading `event.data` back sees the logged
    *   value, never the caller's still-mutable input.
-   * @throws if `data` or surface metadata is not losslessly JSON-serializable
+   * @throws if a store-owned Session is unentered or its creation announcement
+   *   has not completed, or if `data` or surface
+   *   metadata is not losslessly JSON-serializable
    *   (BigInt, function, symbol, undefined, negative zero, non-finite number,
    *   circular reference, sparse array, or an exotic object such as
    *   Map/Set/Date/class instance), or when the candidate violates the
@@ -678,7 +685,7 @@ Everything else (`turn/*`, `step/*`, `assistant/attempt`, plugin-owned `llm/retr
 
 `ctx.sessions.create(id, { seed, meta })` is the low-level replay/fork primitive. For ordinary live-session forks, `SessionStore` exposes one policy API:
 
-- `fork(source, boundary?, childSessionId?)` accepts a live `Session` object or live `SessionId`, selects source events through the inclusive `SessionSeq` boundary (default: current last event), requires the selected prefix to end outside an open turn, then creates a live child session with deep-cloned seed events, `parentSession`, `isSeeded: true`, the exact `inheritedEventCount`, and inherited `cwd`.
+- `fork(source, boundary?, childSessionId?)` accepts a live `Session` object or live `SessionId`, selects source events through the inclusive `SessionSeq` boundary (default: current last event), closes any open tail, then creates an independent live session with deep-cloned seed events, `isSeeded: true`, the exact `inheritedEventCount`, and inherited `cwd`, without `parentSession`.
 
 An explicit `boundary` lets callers fork from any stable between-turn position, including a previous `turn/end` or a later standalone log-only event, even if the source has newer events or an open current turn. The API rejects a prefix that ends inside an open turn instead of clipping silently. `dsh-subagent-fork-in-process` keeps its completed-prefix clipping because tool-time delegation usually starts while the parent turn is open; ordinary session branching should make the requested boundary explicit.
 
@@ -703,8 +710,9 @@ interface TurnEndReasonMap {
   blocked: { kind: 'blocked' }
   /**
    * The turn failed. `error` is always a structured failure: the `LlmError`
-   * facts verbatim, or `{ message: errorChain(error), code: 'UNKNOWN' }`
-   * flattened from any other error.
+   * facts verbatim, or `{ message: errorChain(error), code }` flattened from
+   * any other error, where `code` is `TOOL_ACTIVATION_FAILED` for a failed
+   * tool condition and `UNKNOWN` otherwise.
    */
   error: { kind: 'error'; error: LlmFailure }
   /** At least one step reached its output-token ceiling, even if a plugin continued the turn. */
@@ -832,14 +840,6 @@ Host service backing the generated `ctx.remote.session` namespace.
 resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult>
 
 /**
- * Inspect one attached or persisted Session without activating its Agent.
- * @param sessionId - durable Session identity.
- * @param signal - optional caller cancellation for persistence reads.
- * @returns the current attached state or persisted header and event prefix.
- */
-inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspection>
-
-/**
  * Read all visible Session rows without resuming an Agent.
  * @param _request - reserved empty list request.
  * @param signal - cancellation for persistence reads and summary generation.
@@ -918,7 +918,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
  * @param request - Session identity and proposed title.
  * @returns the accepted title and durable event sequence.
  */
-@Remote('rename') rename(request: SessionRenameRequest): Promise<SessionRenameValue>
+@Remote('rename') async rename(request: SessionRenameRequest): Promise<SessionRenameValue>
 
 /**
  * Fork one cold-readable exact event prefix into a new Session. An omitted
@@ -936,7 +936,7 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
  * @param signal - cancels the summarization, not the Session it produces.
  * @returns the new Session identity and whether its source was archived.
  */
-@Remote('handoff') handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue>
+@Remote('handoff') async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue>
 
 /**
  * Admit one prompt after explicitly resuming its Session.
@@ -947,11 +947,11 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
 @Remote('prompt') async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue>
 
 /**
- * Read one image proven reachable from the addressed Session log.
- * @param request - Session and attachment identities used for authorization.
+ * Read one image from the attachment store after gateway authorization.
+ * @param request - image reference and gateway permission scope; Session existence is not checked.
  * @returns the durable attachment reference and base64-encoded bytes.
  */
-@Remote('attachment') attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue>
+@Remote('attachment') async attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue>
 
 /**
  * Open one attachment proven reachable from the addressed Session log, for
@@ -959,16 +959,17 @@ workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 
  * its value carries live bytes, which only the in-process route can consume.
  * @param request - Session and attachment identities used for authorization.
  * @param signal - cancels the read while the response body is still streaming.
+ * @param maySee - the caller's visibility, or undefined when unconstrained.
  * @returns the display name, media type, and exact byte stream.
  */
-downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): Promise<SessionAttachmentDownload>
+async downloadAttachment( request: SessionAttachmentDownloadRequest, signal: AbortSignal, maySee?: PathVisibility, ): Promise<SessionAttachmentDownload>
 
 /**
  * Mutate one still-pending queue occurrence, resuming a cold Agent first.
  * @param request - Session, queue item, and requested mutation.
  * @returns acknowledgement that the queue mutation was applied.
  */
-@Remote('updateQueue') updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>
+@Remote('updateQueue') async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>
 
 /**
  * Read the composer draft one Session last stored. A draft is reader input,
@@ -993,15 +994,55 @@ downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): P
  * @param request - Session whose active Agent turn is cancelled.
  * @returns acknowledgement that cancellation was requested.
  */
-@Remote('cancel') cancel(request: SessionCancelRequest): SessionCancelValue
+@Remote('cancel') async cancel(request: SessionCancelRequest): Promise<SessionCancelValue>
 
 /**
  * Read one cold-safe, message-aligned Session history page.
- * @param request - durable address, backward cursor, and page budget.
+ * @param request - durable address, optional fixed cut, backward cursor, and page budget.
  * @param signal - cancellation for persistence reads.
- * @returns one chronological page.
+ * @returns one chronological page with its inclusive cursor.
  */
-@Remote({ name: 'page', resources: { session: addressedSession } }) page(request: SessionPageRequest, signal: AbortSignal): Promise<SessionPage>
+@Remote async events(request: SessionPageRequest, signal: AbortSignal): Promise<SessionEventsPage>
+
+/**
+ * Subscribe to Session events without reading a snapshot.
+ * @param request - Session address.
+ * @param signal - subscription cancellation.
+ * @returns readiness and subsequent events, without a snapshot.
+ */
+@Remote({ mode: 'stream' }) observeEvent(request: SessionObserveEventRequest, signal: AbortSignal): AsyncIterable<SessionEventFrame>
+
+/**
+ * Subscribe to sparse Session projection changes.
+ * @param request - target Session.
+ * @param signal - subscription cancellation.
+ * @returns readiness and sparse projection changes.
+ */
+@Remote({ mode: 'stream' }) observeProjections(request: SessionProjectionsRequest, signal: AbortSignal): AsyncIterable<SessionProjectionFrame>
+
+/**
+ * Read passive Session state.
+ * @param request - target Session.
+ * @param signal - read cancellation.
+ * @returns current passive state.
+ */
+@Remote async state(request: SessionStateRequest, signal: AbortSignal): Promise<SessionState>
+
+/**
+ * Subscribe to complete Session state replacements.
+ * @param request - target Session.
+ * @param signal - subscription cancellation.
+ * @returns complete passive state replacements.
+ */
+@Remote({ mode: 'stream' }) observeState(request: SessionStateRequest, signal: AbortSignal): AsyncIterable<SessionState>
+
+/**
+ * Wait for Session quiescence or pending input with bounded assistant output.
+ * @param request - Session, wait bounds and output window.
+ * @param signal - caller cancellation.
+ * @returns stopping state and bounded assistant output.
+ */
+@Remote async wait(request: SessionWaitRequest, signal: AbortSignal): Promise<SessionWaitValue>
 
 /**
  * Follow one Session log from its opening or resume cursor.
@@ -1010,7 +1051,7 @@ downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): P
  * @returns a complete opening snapshot followed by gap-free durable event
  *   frames and optional cursorless assistant-stream frames.
  */
-@Remote({ mode: 'stream', resources: { session: addressedSession } }) follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame>
+@Remote({ mode: 'stream' }) follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame>
 
 /**
  * Read exact projections, returning cached hints only when migration is required.
@@ -1028,7 +1069,7 @@ downloadAttachment( request: SessionAttachmentRequest, signal: AbortSignal, ): P
 @Remote({ mode: 'stream' }) async *control(signal: AbortSignal): AsyncIterable<SessionControlFrame>
 ```
 
-Types: [SessionId](core.md) · [SessionInspection](persistence.md) · [SessionSearchRequest](session-query.md)
+Types: [SessionId](core.md) · [SessionSearchRequest](session-query.md)
 
 Source: [`packages/api/session-controller/src/index.ts`](../../packages/api/session-controller/src/index.ts)
 
@@ -1087,7 +1128,7 @@ create(id?: SessionId, options?: CreateSessionOptions): Session
  *   `eventState`, every seed event is either independently owned or any
  *   shared value is deeply frozen; {@link Session.fromRestore} validates and
  *   adopts those values without copying or freezing them.
- * @returns the constructed session, NOT yet in the store.
+ * @returns the store-owned session, not yet entered and read-only until announced.
  * @throws if a session with `id` already exists, metadata is not a plain
  *   lossless-JSON record with valid scalar fields, or `meta.cwd` is a
  *   non-absolute path.
@@ -1095,8 +1136,9 @@ create(id?: SessionId, options?: CreateSessionOptions): Session
 prepare(id?: SessionId, options?: PrepareSessionOptions): Session
 
 /**
- * Enter a {@link prepare}d session into the store: install the module-private
- * append publication hooks and add it to the store. Returns the DETACH
+ * Enter a session into the store: install the module-private
+ * append publication hooks and add it to the store. Writes remain disabled
+ * until {@link announce} completes successfully. Returns the DETACH
  * disposer (hooks + store removal). Does NOT emit `session/created` —
  * the caller yields this disposer inside its effect and THEN calls
  * {@link announce}, so a throwing `session/created` listener rolls the attach
@@ -1110,7 +1152,7 @@ prepare(id?: SessionId, options?: PrepareSessionOptions): Session
  * the two back-to-back so they never trip this, but the public API cannot
  * assume that.
  *
- * @param session - a {@link prepare}d session not yet in the store.
+ * @param session - an unentered session; independent instances become store-owned.
  * @returns the detach disposer (publication hooks + store removal). When called from
  *   a synchronous `session/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
@@ -1121,7 +1163,9 @@ enter(session: Session): () => void
 /** Emit `session/created` exactly once for an {@link enter}ed session (with
  * the carrier {@link enter} captured). Separate from {@link enter} so the
  * caller can yield the detach disposer first (rollback safety — see
- * {@link enter}).
+ * {@link enter}). The Session remains read-only throughout synchronous
+ * dispatch; successful completion enables appends. A failed announcement
+ * leaves it read-only and cannot be retried.
  * @param session - the entered session to announce to listeners.
  * @throws if the session is not live or its announcement already began,
  *   including a reentrant call from a creation listener. */
@@ -1156,7 +1200,7 @@ get(id: SessionId): Session | undefined
 list(): Session[]
 
 /**
- * Create a live child session from an exact prefix of a live source.
+ * Create an independent live session from an exact prefix of a live source.
  * `boundary` is an inclusive source event seq; omitted means the source's
  * current last event. An open tail receives synthetic tool results and
  * step/turn closers with the forked cause. Closed steps and turns remain
@@ -1177,6 +1221,87 @@ fork(source: SessionForkSource, boundary?: SessionSeq, childSessionId?: SessionI
 Types: [CreateSessionOptions](persistence.md) · [PrepareSessionOptions](persistence.md) · [SessionId](core.md)
 
 Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/index.ts)
+
+<a id="ctxsessionscope--sessionscopeservice"></a>
+
+### `ctx.sessionScope` — `SessionScopeService`
+
+Resolve proxy-asserted identities to the filesystem roots they own.
+
+One instance serves the whole process. It holds no per-request state beyond the Peer-to-identity map Connection fills in as it admits requests.
+
+```ts cordis-catalog
+/**
+ * Read the asserted identity from one request's headers.
+ * @param headers - node request headers or a Fetch `Headers` bag.
+ * @returns the normalized identity, or undefined when the header is absent or empty.
+ */
+identityFromHeaders(headers: IdentityHeaders): string | undefined
+
+/**
+ * Record which identity a Peer was admitted as.
+ * @param peer - Peer Connection minted for this identity.
+ * @param identity - normalized identity the Peer speaks for.
+ */
+remember(peer: PeerScope, identity: string): void
+
+/**
+ * Resolve the scope of the Peer behind a Remote call.
+ * @param peer - Peer from `this.ctx.invocation.peer`, or undefined outside a Remote call.
+ * @returns the caller's scope, or undefined when no policy constrains this caller.
+ */
+scopeOfPeer(peer: PeerScope | undefined): ResolvedScope | undefined
+
+/**
+ * The identity one Peer was admitted as.
+ * @param peer - Peer taken from the carrier or `this.ctx.invocation.peer`.
+ * @returns the normalized identity, or undefined when this Peer was not admitted as one.
+ */
+identityOfPeer(peer: PeerScope | undefined): string | undefined
+
+/**
+ * Resolve one identity's scope, memoized.
+ * @param identity - normalized identity.
+ * @returns the scope, or undefined when the deployment has no policy for it.
+ */
+scopeFor(identity: string | undefined): ResolvedScope | undefined
+
+/**
+ * The directory roots the Peer behind a Remote call owns.
+ * @param peer - Peer from `this.ctx.invocation.peer`.
+ * @returns the roots this caller may reach, or undefined when nothing
+ *   constrains them — an administrator, or a deployment that names nobody.
+ */
+rootsOfPeer(peer: PeerScope | undefined): readonly string[] | undefined
+
+/**
+ * Decide whether the Peer behind a Remote call may see one path.
+ * @param peer - Peer from `this.ctx.invocation.peer`.
+ * @param path - absolute `cwd` of a session or workspace.
+ * @returns true when the path is visible to this caller.
+ */
+mayAccess(peer: PeerScope | undefined, path: string): boolean
+
+/**
+ * Keep only the paths the Peer behind a Remote call may see.
+ * @param peer - Peer from `this.ctx.invocation.peer`.
+ * @param paths - candidate absolute paths.
+ * @returns the visible subset, in input order.
+ */
+visiblePaths(peer: PeerScope | undefined, paths: readonly string[]): string[]
+
+/**
+ * Create the root minted for a first-time identity, once.
+ *
+ * Only an identity whose scope carries a `provisionRoot` is minted; an
+ * explicit or administrative identity already has somewhere to work.
+ * @param identity - normalized identity.
+ * @returns the created (or already existing) root, or undefined when nothing is minted.
+ */
+ensureRoot(identity: string | undefined): string | undefined
+```
+
+Source: [`packages/identity/session-scope/src/index.ts`](../../packages/identity/session-scope/src/index.ts)
 
 <a id="api-session-events"></a>
 
@@ -1287,12 +1412,14 @@ Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/sess
 
 #### `session/created` — emit
 
-Creation announcement during session publication. A synchronous throw vetoes and rolls back with a paired disposal; detach requested during dispatch is deferred. A returned-promise rejection is logged but cannot retroactively veto this synchronous boundary. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only sessions entered through that agent's context.
+Read-only creation announcement after store entry. New events reject until every synchronous listener has returned successfully. A synchronous throw vetoes creation and rolls back with a paired disposal; detach requested during dispatch is deferred. A returned-promise rejection is logged but cannot retroactively veto this synchronous boundary. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only sessions entered through that agent's context.
 
 ```ts cordis-catalog
 /**
- * Creation announcement during session publication. A synchronous throw vetoes and rolls
- * back with a paired disposal; detach requested during dispatch is deferred.
+ * Read-only creation announcement after store entry.
+ * New events reject until every synchronous listener has returned successfully.
+ * A synchronous throw vetoes creation and rolls back with a paired disposal;
+ * detach requested during dispatch is deferred.
  * A returned-promise rejection is logged but cannot retroactively veto this
  * synchronous boundary.
  * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners

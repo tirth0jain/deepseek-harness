@@ -61,7 +61,7 @@ async function harness() {
   }
   await ctx.plugin((pluginCtx) => { applyScope(pluginCtx, config) }).await()
 
-  const controller = createSessionTestController(ctx, {
+  const controller = await createSessionTestController(ctx, {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
     cwd: root,
   })
@@ -81,7 +81,7 @@ async function harness() {
 function as(ctx: Context, identity: string): SessionController {
   const peer = { id: 'peer' as PeerScope['id'], ctx: new Context() } as unknown as PeerScope
   ;(ctx.get('sessionScope') as { remember(peer: PeerScope, identity: string): void }).remember(peer, identity)
-  return ctx.extend({ invocation: { peer } }).get('sessionController') as SessionController
+  return ctx.extend({ invocation: { peer } }).get('sessionController') as unknown as SessionController
 }
 
 describe('SessionController under a scoped caller', () => {
@@ -100,7 +100,7 @@ describe('SessionController under a scoped caller', () => {
     await expect(tirth.handoff({ sessionId: id }, signal)).rejects.toMatchObject({ code: 'session/not-found' })
     await expect(tirth.cancel({ sessionId: id })).rejects.toMatchObject({ code: 'session/not-found' })
     await expect(tirth.updateQueue(wrong)).rejects.toMatchObject({ code: 'session/not-found' })
-    await expect(tirth.attachment({ sessionId: id, attachmentId: 'a1' as never }))
+    await expect(tirth.attachment({ sessionId: id, attachment: { attachmentId: 'a1' } as never }))
       .rejects.toMatchObject({ code: 'session/not-found' })
     await expect(tirth.projections({ sessionId: id }, signal))
       .rejects.toMatchObject({ code: 'session/not-found' })

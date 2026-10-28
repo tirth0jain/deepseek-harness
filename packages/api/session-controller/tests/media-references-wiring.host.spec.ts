@@ -38,7 +38,7 @@ async function mountRealController(): Promise<Map<string, (request: Request) => 
     },
   } as never)
   await ctx.plugin(LocalFileSystem, { cwd: '/tmp' })
-  createSessionTestController(ctx, defaults)
+  await createSessionTestController(ctx, defaults)
   return handlers
 }
 
@@ -63,7 +63,12 @@ describe('Session Controller download route wiring', () => {
       await writeFile(path, 'a,b\n1,2\n')
       const handlers = await mountRealController()
       const file = handlers.get('/api/file')!
-      const download = await file(new Request(
+      const follow = async (request: Request): Promise<Response> => {
+        const first = await file(request)
+        const location = first.headers.get('location')
+        return location === null ? first : file(new Request(new URL(location, request.url).href))
+      }
+      const download = await follow(new Request(
         `http://127.0.0.1/api/file?path=${encodeURIComponent(path)}&download=1`,
       ))
       expect(download.status).toBe(200)
@@ -72,7 +77,7 @@ describe('Session Controller download route wiring', () => {
         .toBe('attachment; filename="report.csv"; filename*=UTF-8\'\'report.csv')
       expect(download.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'; allow-downloads")
       // The same path without the request stays a display read, policy included.
-      const inline = await file(new Request(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}`))
+      const inline = await follow(new Request(`http://127.0.0.1/api/file?path=${encodeURIComponent(path)}`))
       expect(inline.headers.get('content-disposition')).toBeNull()
       expect(inline.headers.get('content-security-policy')).toBe("sandbox; default-src 'none'")
     } finally {

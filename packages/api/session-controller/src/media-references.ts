@@ -20,11 +20,13 @@ import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 import mime from 'mime-types'
 
 const BASE_HEADERS = {
-  'Cache-Control': 'private, no-store',
   'X-Content-Type-Options': 'nosniff',
   // HTML and SVG files may be opened directly on the authenticated API origin.
   'Content-Security-Policy': "sandbox; default-src 'none'",
 }
+const NO_STORE = { ...BASE_HEADERS, 'Cache-Control': 'private, no-store' }
+// A versioned URL names one file version, so its response never changes.
+const VERSIONED = { ...BASE_HEADERS, 'Cache-Control': 'private, max-age=31536000, immutable' }
 
 /**
  * The policy a download response carries: the display policy, plus permission
@@ -118,10 +120,21 @@ async function serveFile(
   const override = query.get('name')
   try {
     const target = await ctx.fs.resolve(path, { signal: request.signal })
-    const mediaType = mime.lookup(target.displayPath) || 'application/octet-stream'
+    const info = await ctx.fs.stat(target, request.signal)
+    if (info === undefined) return fail(404, 'not found')
+    if (info.type !== 'file') return fail(403, 'not a regular file')
+    if (info.size !== undefined && info.size > maxBytes) return fail(413, 'file exceeds byte limit')
+    if (query.get('v') !== info.version) {
+      // Relative to the request URL, so deployment prefixes and the Desktop scheme are kept.
+      const next = new URLSearchParams({ path, v: info.version })
+      const requestedName = query.get('name')
+      if (requestedName !== null) next.set('name', requestedName)
+      if (wantsDownload(query.get('download'))) next.set('download', '1')
+      return new Response(null, { status: 302, headers: { ...NO_STORE, Location: `?${next.toString()}` } })
+    }
     const headers: Record<string, string> = {
-      ...BASE_HEADERS,
-      'Content-Type': mediaType,
+      ...VERSIONED,
+      'Content-Type': mime.lookup(target.displayPath) || 'application/octet-stream',
     }
     if (wantsDownload(query.get('download'))) {
       headers['Content-Disposition'] = contentDisposition(
@@ -130,13 +143,7 @@ async function serveFile(
       headers['Content-Security-Policy'] = DOWNLOAD_CSP
     }
     if (request.method === 'HEAD') {
-      const info = await ctx.fs.stat(target, request.signal)
-      if (info === undefined) return fail(404, 'not found')
-      if (info.type !== 'file') return fail(403, 'not a regular file')
-      if (info.size !== undefined) {
-        if (info.size > maxBytes) return fail(413, 'file exceeds byte limit')
-        headers['Content-Length'] = String(info.size)
-      }
+      if (info.size !== undefined) headers['Content-Length'] = String(info.size)
       return new Response(null, { headers })
     }
     const bytes = await ctx.fs.readBytes(target, request.signal, maxBytes)
