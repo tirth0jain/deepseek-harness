@@ -29,6 +29,15 @@ git rev-parse --short HEAD
 git status --porcelain | head -20
 echo "node $(node --version) / pnpm $(pnpm --version)"
 
+step "client stamp"
+# Settings -> General shows the release version only when the client bundles
+# carry DSH_CLIENT_VERSION. scripts/build.ts derives it from the checkout, but
+# this script builds through build:lib/build:web directly, so stamp it here;
+# without it the row hides itself and the GUI looks versionless.
+export DSH_CLIENT_VERSION="$(node -p "require('./package.json').version")"
+export DSH_CLIENT_COMMIT_HASH="$(git rev-parse HEAD)"
+echo "stamp: $DSH_CLIENT_VERSION @ $DSH_CLIENT_COMMIT_HASH"
+
 step "stopping $UNIT"
 # Stopping first is the point of this script: it is what makes the rebuild safe.
 systemctl stop "$UNIT"
