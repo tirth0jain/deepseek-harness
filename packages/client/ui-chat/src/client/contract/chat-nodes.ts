@@ -103,11 +103,7 @@ export interface TurnTailChatData {
   readonly ttftMs?: number
   /** Turn throughput over the summed LLM span of its sampled steps. */
   readonly tokensPerSecond?: number
-  /**
-   * Decode-window throughput (first token → final message); folded live and
-   * rehydrated from the browser memo for restored Turns, so it is absent only
-   * when no live reading was ever seen (see `decode-memo.ts`).
-   */
+  /** Decode-window throughput (first token → final message); restored Turns read it back from the durable stream record. */
   readonly decodeTokensPerSecond?: number
   /** Exact per-Turn accounting; absent when the loaded evidence is incomplete. */
   readonly tokenUsage?: TurnTokenUsage

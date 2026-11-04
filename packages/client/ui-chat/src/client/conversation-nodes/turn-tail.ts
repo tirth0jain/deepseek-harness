@@ -9,7 +9,6 @@ import type {
   AssistantChatData, FinalAssistantChatData, TurnTailChatData,
 } from '../contract/chat-nodes.ts'
 import { deriveTurnMetrics } from '../contract/turn-metrics.ts'
-import { recallDecodeRate, rememberDecodeRate } from './decode-memo.ts'
 import { CHAT_SYNTHETIC_SEQ_OFFSETS, chatNode } from './common.ts'
 
 declare module '../contract/chat-nodes.ts' {
@@ -93,14 +92,6 @@ function tailData(context: ConversationNodeContext<TurnTailState>): TurnTailChat
   const tokenUsage = context.start?.event.type === 'turn/start'
     ? deriveTurnTokenUsage(context.matches.map(match => match.event).filter(isSessionEvent))
     : undefined
-  // The decode window exists only for steps this client streamed live (the
-  // session format persists no chunk timings), so the live reading is
-  // memoized in the browser and rehydrated from there on restore. A turn
-  // picked up mid-stream after a reload reads high for that turn alone; the
-  // pill's span rate beside it stays honest.
-  const liveDecodeRate = metrics?.decodeTokensPerSecond
-  if (liveDecodeRate !== undefined) rememberDecodeRate(end.event.data.turn, end.event.time, liveDecodeRate)
-  const decodeRate = liveDecodeRate ?? recallDecodeRate(end.event.data.turn, end.event.time)
   return {
     turn: end.event.data.turn,
     seq: end.event.seq,
@@ -109,7 +100,7 @@ function tailData(context: ConversationNodeContext<TurnTailState>): TurnTailChat
     branchUnavailable: closing === null || latestTranscriptSeq !== closing.finalNode.seq,
     ...metrics?.ttftMs === undefined ? {} : { ttftMs: metrics.ttftMs },
     ...metrics?.tokensPerSecond === undefined ? {} : { tokensPerSecond: metrics.tokensPerSecond },
-    ...decodeRate === undefined ? {} : { decodeTokensPerSecond: decodeRate },
+    ...metrics?.decodeTokensPerSecond === undefined ? {} : { decodeTokensPerSecond: metrics.decodeTokensPerSecond },
     ...tokenUsage === undefined ? {} : { tokenUsage },
   }
 }

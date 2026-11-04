@@ -4,6 +4,7 @@ import type {
   ConversationNodeContext, ConversationNodeDefinition,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
+import { assistantStreamFirstTokenTime } from '@deepseek-ai/dsh-llm/assistant-stream'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type { AssistantChatData } from '../contract/chat-nodes.ts'
@@ -173,6 +174,10 @@ function settleMessage(
     visibleBlocks: countVisibleBlocks(blocks),
     final: match,
     usage: event.data.usage,
+    // Live streaming observes the first token from deltas; a reopened Turn
+    // reads the same instant back from the durable stream record, so the
+    // decode window survives reloads (mirrors the trajectory view).
+    firstTokenTime: state.firstTokenTime ?? assistantStreamFirstTokenTime(event.data.stream),
   }
 }
 

@@ -1358,7 +1358,7 @@ describe('built-in conversation node Definitions', () => {
     expect(replacement?.data).toMatchObject({ blocks: [{ kind: 'text', text: 'Replacement reply' }] })
   })
 
-  it('keeps LLM throughput but omits ttft after live settlement and after reopening the same history', () => {
+  it('keeps throughput, ttft, and the decode rate after live settlement and after reopening the same history', () => {
     const attemptId = LlmAttemptId('settled-chat-timing')
     const starts = [
       at(1, 'turn/start', { turn: 1 }, { time: 1_000 }),
@@ -1398,16 +1398,19 @@ describe('built-in conversation node Definitions', () => {
     for (const current of [value, reopened]) {
       const view = snapshot(current)
       const assistant = (node(view, 'assistant-step')?.data as AssistantChatData).finalNode
+      // The reopened Turn reads the first-token instant back from the durable
+      // stream record, so both paths time the same window.
       expect(assistant?.timing).toEqual({
-        stepStartTime: 1_010, firstTokenTime: null, completedTime: 1_050,
+        stepStartTime: 1_010, firstTokenTime: 1_030, completedTime: 1_050,
       })
       const tail = node(view, 'turn-tail')?.data as TurnTailChatData
       expect(tail.turn).toBe(1)
-      // No live delta was observed, so the first-token reading stays absent…
-      expect(tail.ttftMs).toBeUndefined()
-      // …but the recorded span (10 tokens over 40ms) still yields a rate, which
-      // is what keeps a reopened Turn's throughput on screen.
+      expect(tail.ttftMs).toBe(20)
+      // The recorded span (10 tokens over 40ms) still yields the headline rate…
       expect(tail.tokensPerSecond).toBe(250)
+      // …and the decode window (10 tokens over the final 20ms) rides the same
+      // stream record, so a reopened Turn keeps its decode reading too.
+      expect(tail.decodeTokensPerSecond).toBe(500)
     }
   })
 
@@ -1525,8 +1528,10 @@ describe('built-in conversation node Definitions', () => {
     const finalizedPacked = snapshot(assembler(finalizedInputs))
     const finalNode = (node(finalizedPacked, 'assistant-step')?.data as AssistantChatData).finalNode
     expect(finalNode).toMatchObject({
+      // Blocks come from the settled message, never a replay of the embedded
+      // stream; the stream record still donates its first-token instant.
       blocks: [{ kind: 'text', text: 'done' }],
-      timing: { firstTokenTime: null },
+      timing: { firstTokenTime: 1_700_000_000_027 },
     })
 
     const namedToolHistory = [
@@ -1553,7 +1558,7 @@ describe('built-in conversation node Definitions', () => {
     const namedTool = (node(namedToolPacked, 'assistant-step')?.data as AssistantChatData).finalNode
     expect(namedTool).toMatchObject({
       blocks: [{ kind: 'tool-call', callId: 'call-2', name: 'read', argsRaw: '' }],
-      timing: { firstTokenTime: null },
+      timing: { firstTokenTime: 4_000 },
     })
   })
 
