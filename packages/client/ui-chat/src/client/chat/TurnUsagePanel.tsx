@@ -32,6 +32,8 @@ export interface TurnTimePanelProps {
   runMs: number
   /** Turn throughput, a pill segment and dialog row when known. */
   tokensPerSecond?: number | undefined
+  /** Decode-window throughput (first token → final message); live-only, so restored Turns omit it. */
+  decodeTokensPerSecond?: number | undefined
   /** Turn first-step TTFT in ms, a dialog row when known. */
   ttftMs?: number | undefined
   /** The owning view's locale seat, passed down as a plain prop. */
@@ -193,7 +195,7 @@ function formatRunDurationText(ms: number, t: ChatViewSlotProps['t']): string {
  * @param props - Turn timing facts and locale seat.
  * @returns The clock-and-duration trigger and, while open, its portaled dialog anchored above the trigger.
  */
-export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePanelProps) {
+export function TurnTimePanel({ runMs, tokensPerSecond, decodeTokensPerSecond, ttftMs, t }: TurnTimePanelProps) {
   const { open, setOpen, rootRef, panelRef, pos } = useStatDialog()
   return (
     <span ref={rootRef} className={css.root}>
@@ -211,6 +213,12 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
             <>
               <span className={css.sep} aria-hidden>·</span>
               {t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}
+            </>
+          )}
+          {decodeTokensPerSecond !== undefined && (
+            <>
+              <span className={css.sep} aria-hidden>·</span>
+              {t('message.decodeTokensPerSecond', { tps: formatTokensPerSecond(decodeTokensPerSecond) })}
             </>
           )}
         </span>
@@ -237,6 +245,12 @@ export function TurnTimePanel({ runMs, tokensPerSecond, ttftMs, t }: TurnTimePan
               <>
                 <dt>{t('message.turnTime.speed')}</dt>
                 <dd>{t('message.tokensPerSecond', { tps: formatTokensPerSecond(tokensPerSecond) })}</dd>
+              </>
+            )}
+            {decodeTokensPerSecond !== undefined && (
+              <>
+                <dt>{t('message.turnTime.decodeSpeed')}</dt>
+                <dd>{t('message.tokensPerSecond', { tps: formatTokensPerSecond(decodeTokensPerSecond) })}</dd>
               </>
             )}
             {ttftMs !== undefined && (

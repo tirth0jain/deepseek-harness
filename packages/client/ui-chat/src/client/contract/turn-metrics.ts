@@ -10,6 +10,13 @@ export interface TurnMetrics {
   ttftMs?: number
   /** Throughput over steps carrying both an LLM span and provider usage. */
   tokensPerSecond?: number
+  /**
+   * Throughput over the decode window (first token → final message) of steps
+   * that recorded one. Live-only: the window rides `firstTokenTime`, observed
+   * from stream deltas and never persisted, so restored Turns fall back to the
+   * span-based {@link tokensPerSecond} alone.
+   */
+  decodeTokensPerSecond?: number
 }
 
 /** One assistant step's derivable latency facts; null marks an unrecorded part. */
@@ -62,6 +69,9 @@ interface TurnFold {
   llmMs: number
   outputTokens: number
   sampled: boolean
+  decodeMs: number
+  decodeTokens: number
+  decodeSampled: boolean
 }
 
 /**
@@ -77,6 +87,9 @@ interface TurnFold {
  * live stream deltas, and the session format persists no timing, so a
  * decode-window rate would disappear for every restored Turn. The span also
  * excludes the tool execution between steps, which is not generation time.
+ * The decode-window rate is still folded as a live-only companion
+ * (`decodeTokensPerSecond`) from the steps that carry a first-token time; it
+ * simply drops out once the Turn is restored from disk.
  * @param nodes - Snapshot nodes of the loaded window.
  * @returns Turn number → available metrics; turns with none are absent.
  */
@@ -87,7 +100,11 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
     const reading = assistantStepReading(node)
     let fold = folds.get(node.turn)
     if (fold === undefined) {
-      fold = { firstStep: node.step, firstStepTtftMs: reading.ttftMs, llmMs: 0, outputTokens: 0, sampled: false }
+      fold = {
+        firstStep: node.step, firstStepTtftMs: reading.ttftMs,
+        llmMs: 0, outputTokens: 0, sampled: false,
+        decodeMs: 0, decodeTokens: 0, decodeSampled: false,
+      }
       folds.set(node.turn, fold)
     } else if (node.step < fold.firstStep) {
       fold.firstStep = node.step
@@ -98,6 +115,11 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
       fold.outputTokens += reading.outputTokens
       fold.sampled = true
     }
+    if (reading.decodeMs !== null && reading.decodeMs > 0 && reading.outputTokens !== null) {
+      fold.decodeMs += reading.decodeMs
+      fold.decodeTokens += reading.outputTokens
+      fold.decodeSampled = true
+    }
   }
   const metrics = new Map<number, TurnMetrics>()
   for (const [turn, fold] of folds) {
@@ -107,7 +129,11 @@ export function deriveTurnMetrics(nodes: readonly ConversationNode[]): Map<numbe
     if (fold.sampled && fold.llmMs > 0 && fold.outputTokens > 0) {
       entry.tokensPerSecond = fold.outputTokens / (fold.llmMs / 1000)
     }
-    if (entry.ttftMs !== undefined || entry.tokensPerSecond !== undefined) metrics.set(turn, entry)
+    if (fold.decodeSampled && fold.decodeMs > 0 && fold.decodeTokens > 0) {
+      entry.decodeTokensPerSecond = fold.decodeTokens / (fold.decodeMs / 1000)
+    }
+    if (entry.ttftMs !== undefined || entry.tokensPerSecond !== undefined
+      || entry.decodeTokensPerSecond !== undefined) metrics.set(turn, entry)
   }
   return metrics
 }

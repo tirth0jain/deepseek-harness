@@ -85,7 +85,10 @@ describe('deriveTurnMetrics', () => {
       }),
     ]
     // 100 tokens over 5s of LLM span (2s + 3s), tool gaps excluded by construction.
-    expect(deriveTurnMetrics(nodes).get(1)).toEqual({ ttftMs: 1_200, tokensPerSecond: 20 })
+    // Both steps streamed live, so the decode window (1.8s + 1.8s) folds too.
+    expect(deriveTurnMetrics(nodes).get(1)).toEqual({
+      ttftMs: 1_200, tokensPerSecond: 20, decodeTokensPerSecond: 100 / 3.6,
+    })
   })
 
   it('emits ttft without throughput when no step carries usage', () => {
@@ -131,6 +134,31 @@ describe('deriveTurnMetrics', () => {
     expect(deriveTurnMetrics(nodes).get(1)).toEqual({ ttftMs: 100 })
   })
 
+  it('folds the decode window only from steps the client streamed live', () => {
+    const nodes: ConversationNode[] = [
+      // Restored step: span and usage survive a reload, the decode window does not.
+      assistant({
+        seq: 2, turn: 1, step: 1,
+        timing: { stepStartTime: 1_000, firstTokenTime: null, completedTime: 4_000 },
+        usage: { outputTokens: 40 },
+      }),
+      // Live step: the stream observed the first token, so its window folds.
+      assistant({
+        seq: 4, turn: 1, step: 2,
+        timing: { stepStartTime: 10_000, firstTokenTime: 10_400, completedTime: 12_400 },
+        usage: { outputTokens: 60 },
+      }),
+    ]
+    const metrics = deriveTurnMetrics(nodes).get(1)
+    // Span rate covers both steps (3s + 2.4s); the decode rate covers only the
+    // live step (60 tokens over its 2s window). No ttft: the lowest step never
+    // streamed, so it records none.
+    expect(metrics).toEqual({
+      tokensPerSecond: 100 / 5.4,
+      decodeTokensPerSecond: 60 / 2,
+    })
+  })
+
   it('keeps turns independent and ignores non-assistant nodes', () => {
     const nodes: ConversationNode[] = [
       user(1),
@@ -147,8 +175,12 @@ describe('deriveTurnMetrics', () => {
       }),
     ]
     const metrics = deriveTurnMetrics(nodes)
-    expect(metrics.get(1)).toEqual({ ttftMs: 400, tokensPerSecond: 10 })
-    expect(metrics.get(2)).toEqual({ ttftMs: 100, tokensPerSecond: 50 })
+    expect(metrics.get(1)).toEqual({
+      ttftMs: 400, tokensPerSecond: 10, decodeTokensPerSecond: 10 / 0.6,
+    })
+    expect(metrics.get(2)).toEqual({
+      ttftMs: 100, tokensPerSecond: 50, decodeTokensPerSecond: 100 / 1.9,
+    })
   })
 })
 

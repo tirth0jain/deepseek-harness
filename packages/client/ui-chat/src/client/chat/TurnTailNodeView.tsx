@@ -70,6 +70,7 @@ export const TurnTailNodeView = memo(function TurnTailNodeView({
         <TurnTimePanel
           runMs={runMs}
           tokensPerSecond={data.tokensPerSecond}
+          decodeTokensPerSecond={data.decodeTokensPerSecond}
           ttftMs={data.ttftMs}
           t={t}
         />
