@@ -108,8 +108,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       props: FileTreeInput
       locale: 'sidebarFiles'
       slots: {
-        /** Independent content beside each row's main action; the seat carries the tree's locale. */
-        accessory: { scope: 'root'; props: { readonly entry: TreeEntry; readonly t: FactoryComponentPropsOf<'sidebar.files.tree'>['t'] } }
+        /** Independent content beside each row's main action; the factory's locale seat supplies `t`. */
+        accessory: { scope: 'root'; props: { readonly entry: TreeEntry } }
       }
     }
   }
@@ -206,7 +206,7 @@ function Entry({ node, tree }: { node: TreeNode; tree: TreeContext }): ReactNode
             {expanded ? <IconFolderOpenRegular className={css.icon} /> : <IconFolderCloseRegular className={css.icon} />}
             {label}
           </button>
-          <div className={css.accessory}><Accessory entry={entry} t={tree.t} /></div>
+          <div className={css.accessory}><Accessory entry={entry} /></div>
         </div>
         {expanded && <ul className={css.level}><Level path={entry.path} tree={tree} /></ul>}
       </li>
@@ -224,7 +224,7 @@ function Entry({ node, tree }: { node: TreeNode; tree: TreeContext }): ReactNode
             <FileTypeIcon kind={classifyFileType(entry.name)} size={16} className={css.fileIcon} />
             {label}
           </button>
-          <div className={css.accessory}><Accessory entry={entry} t={tree.t} /></div>
+          <div className={css.accessory}><Accessory entry={entry} /></div>
         </div>
       </li>
     )
@@ -238,7 +238,7 @@ function Entry({ node, tree }: { node: TreeNode; tree: TreeContext }): ReactNode
           {file && <FileTypeIcon kind={classifyFileType(entry.name)} size={16} className={css.fileIcon} />}
           {label}
         </span>
-        <div className={css.accessory}><Accessory entry={entry} t={tree.t} /></div>
+        <div className={css.accessory}><Accessory entry={entry} /></div>
       </div>
     </li>
   )

@@ -375,6 +375,12 @@ export interface ChatViewInjected {
   resolveFilePath: (path: string) => string
   /** Dispatch one gesture to the Conversation plugin registry. */
   dispatchInteraction: (gesture: TextInteractionGesture) => string | null
+  /**
+   * Resolve prose links for one closing Turn: the owner names the Turn, the
+   * service resolves against the Session's file space. Undefined renders no
+   * link affordance at all.
+   */
+  fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
   hooks: {
     /** Live plugin IDs; removed plugins dismiss their active surface. */
     interactionIds: ObservableSnapshot<readonly string[]>

@@ -221,6 +221,8 @@ describe('FilesBody', () => {
     await act(() => script.settle({ ok: true, value: { entries: [], truncated: false } }))
     expect(view.container.querySelector('[data-files-row="empty"]')?.textContent).toBe(zh.empty)
   })
+
+  it('shows a failed level under its directory in terms of the directory', async () => {
     const { view, script } = mountBody()
     await act(() => script.watches.ready(ROOT))
     await act(() => script.settle({

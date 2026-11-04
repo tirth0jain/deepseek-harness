@@ -17,10 +17,16 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply, inject } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { WorkspaceBrowserInjected, WorkspacePickerInjected } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import {
+  type ArchiveSessionInjected, menuOpenStateFactory, type PinSessionInjected,
+  type RowToastInjected, type SessionArchiveConfirmInjected, type SessionRenameDialogInjected,
+  type WorkspaceViewStoreHandle,
 } from '../src/client/contract/slots.ts'
 import { HandoffNotice, type HandoffNoticeInjected } from '../src/client/HandoffNotice.tsx'
 import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
 import { RowActionToast } from '../src/client/session-actions/RowActionToast.tsx'
+import { ArchiveSessionRowButton, SessionArchiveConfirmDialog } from '../src/client/session-actions/ArchiveSession.tsx'
+import { PinSessionRowButton } from '../src/client/session-actions/PinSession.tsx'
+import { SessionRenameDialog } from '../src/client/session-actions/RenameSession.tsx'
 import type { ArchiveToastInjected, ToastDisplayInjected } from '../src/client/contract/toast.ts'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 import { FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
@@ -303,6 +309,7 @@ describe('ui-workspace apply', () => {
     expect(after.slots.entries('conversation.hero.workspace')[0]!.component).toBe(WorkspacePicker)
     // The row actions follow the browser's own declaration, whenever it lands.
     expect(after.slots.entries(ROW_ACTION)).toHaveLength(2)
+    expect(after.slots.entries(MENU_ITEM)).toHaveLength(0)
     expect(after.slots.entries('shell.overlay')).toHaveLength(4)
   })
 
@@ -325,6 +332,9 @@ describe('ui-workspace apply', () => {
       ['archive', 100, ArchiveSessionRowButton, 'workspace'],
       ['pin', 200, PinSessionRowButton, 'workspace'],
     ])
+    // The built-in menu rows contribute through ctx.contextMenus now; the
+    // legacy Slot stays empty for external React entries.
+    expect(rows(MENU_ITEM)).toEqual([])
     expect(rows('shell.overlay')).toEqual([
       ['workspace.session-rename', undefined, SessionRenameDialog, 'workspace'],
       ['workspace.session-archive', undefined, SessionArchiveConfirmDialog, 'workspace'],
@@ -362,7 +372,7 @@ describe('ui-workspace apply', () => {
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const sessionId = sid('handoff-row')
     const target = { kind: 'session' as const, value: { sessionId, displayTitle: 'handoff-row' } }
-    const items = (): { id: string; disabled?: boolean }[] => {
+    const items = (): { id: string; disabled?: boolean | undefined }[] => {
       const menu = b.ctx.contextMenus.resolve(target)
       return menu.source.getSnapshot().map(item => ({ id: item.id, disabled: item.disabled }))
     }
@@ -713,8 +723,8 @@ describe('ui-workspace apply', () => {
     // The handoff row drives the navigation service, which condenses the
     // source, opens the continuation, and leaves the source archived.
     const handoffSession = vi.spyOn(b.ctx.uiWorkspace, 'handoffSession')
-    const handoff = faceOf(entry(b.slots, MENU_ITEM, 'handoff')) as HandoffSessionInjected
-    handoff.handoffSession('session' as never)
+    const menu = b.ctx.contextMenus.resolve({ kind: 'session', value: { sessionId: 'session' as never, displayTitle: '' } })
+    menu.select('session.handoff/handoff')
     await handoffSession.mock.results[0]!.value
     expect(b.handoff).toHaveBeenCalledWith({ sessionId: 'session', inheritTitle: true })
     expect(b.retain).toHaveBeenCalledWith('continued', { source: 'mainView' })
@@ -724,7 +734,7 @@ describe('ui-workspace apply', () => {
     const notice = faceOf(entry(b.slots, 'shell.overlay', 'handoff-notice')) as HandoffNoticeInjected
     expect(notice.hooks.handoffFailures.getSnapshot()).toEqual([])
     handoffSession.mockRejectedValueOnce(new Error('no compaction backend'))
-    handoff.handoffSession('session' as never)
+    menu.select('session.handoff/handoff')
     await vi.waitFor(() => { expect(notice.hooks.handoffFailures.getSnapshot()).toHaveLength(1) })
     const failure = notice.hooks.handoffFailures.getSnapshot()[0]!
     expect(failure.message).toBe('no compaction backend')

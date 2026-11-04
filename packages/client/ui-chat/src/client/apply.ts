@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type {
   ChatFlowDataInjected, ChatFlowInjected, ChatModelCostState, ChatNodeInjected, ChatScrollPosition,
-  ChatViewInjected, QuotaNoticeInjected, QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps,} from './contract/slots.ts'
+  ChatViewInjected, QuotaNoticeInjected, QuotaNoticeState, StatsPillsInjected, TurnTailOwnerProps } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
@@ -296,6 +296,7 @@ export function apply(ctx: Context): void {
             interactionIds: ctx.uiConversation.interactions,
           },
           dispatchInteraction: gesture => ctx.uiConversation.interactions.dispatch(sessionId, gesture),
+          fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
           // Files open in the right Sidebar, not in a desktop application: the
           // content stays in the product, beside the conversation that produced
           // it. A relative path resolves from the Session's working directory

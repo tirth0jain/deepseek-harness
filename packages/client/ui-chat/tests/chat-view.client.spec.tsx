@@ -2,7 +2,6 @@
 import { contextMenuHook } from '@deepseek-ai/dsh-client-test-runtime'
 
 import type { ProcessGroupData } from '../src/client/contract/process-groups.ts'
-import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
 import { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { GlobalStandardProps, PropsRenderFactories, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
@@ -10,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useEffect, useMemo } from 'react'
 import { useMarkdownDelegate, type MarkdownMenuTarget } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { ContextMenuTriggerProps } from '@deepseek-ai/dsh-client-ui-context-menu/client'
+import type { TurnTailOwnerProps } from '../src/client/contract/slots.ts'
 import type {
   AssistantMessageNode, ChatFlowHookContext, ChatFlowOwnerProps, ChatFlowSlotProps,
   ChatNode, ChatNodeHookContext, ChatNodeOwnerProps, ChatSnapshot, UserBeforeOwnerProps,
@@ -776,14 +777,14 @@ describe('Chat node rendering', () => {
     let directory = '/workspace'
     h.props.useContextMenu = contextMenuHook(opened)
     h.props.resolveFilePath = path => `${directory}/${path}`
-    h.props.fileMentions = (owner, getFileTriggerProps) => ({
+    h.props.fileMentions = (owner: TurnTailOwnerProps, getFileTriggerProps?: (path: string) => ContextMenuTriggerProps) => ({
       resolve: (value) => {
         if (value !== 'report.html') return undefined
         return {
           open: () => { void h.openFile(`for-seq-${String(owner.seq)}/site/report.html`) },
           label: '打开 site/report.html',
           title: 'site/report.html',
-          contextMenuProps: getFileTriggerProps('site/report.html'),
+          contextMenuProps: getFileTriggerProps!('site/report.html'),
         }
       },
     })
@@ -4777,8 +4778,6 @@ const fileDrag = { prepare: vi.fn(async () => ({ start: () => true, release: () 
 it('formats Portuguese elapsed minutes with numeric units', () => {
   expect(formatRunDuration(90_000, key => pt[key])).toBe('1m 30s')
 })
-
-head
 
 it('does not infer menu targets from links or data attributes inside a plugin flow slot', () => {
   const h = makeHarness()

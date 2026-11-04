@@ -29,7 +29,8 @@ function bench() {
   }
   ctx.provide('remoteAccess', { source: (_kind: string, _id: string, action: string) => access(action) } as never)
   const actions = { pinSession: vi.fn(), unpinSession: vi.fn(), archiveSession: vi.fn(), unarchiveSession: vi.fn(),
-    forkSession: vi.fn(), requestSessionRename: vi.fn(), copySessionId: vi.fn(async () => {}) }
+    forkSession: vi.fn(), requestSessionRename: vi.fn(), copySessionId: vi.fn(async () => {}),
+    handoffSession: vi.fn() }
   const fiber = ctx.plugin({ apply: (plugin: Context) => { registerSessionMenus(plugin, actions) } })
   const target = { kind: 'session' as const, value: { sessionId: SessionId('background'), displayTitle: 'Background' } }
   const open = () => registry.resolve(target)

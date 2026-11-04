@@ -826,6 +826,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the credential\'s Peer, or the rejection status.',
       },
       {
+        signature: 'setIdentityResolver(resolver: RequestIdentityResolver | undefined): () => void',
+        description: 'Install the deployment\'s request-identity policy, so each identity is admitted as its own Peer instead of the shared browser Peer.',
+        parameters: [{ name: 'resolver', description: 'the policy, or undefined to stop attributing requests.' }],
+        returns: 'disposer that restores the previous resolver.',
+      },
+      {
         signature: 'createPeer(options: { readonly principal: Principal; readonly interactions?: \'answer\' | \'none\' }): PeerScope',
         description: 'Create an independent in-process Peer, disposed with the Context that read `ctx.connection`.',
         parameters: [{ name: 'options', description: 'fixed principal and optional interaction participation (default `answer`).' }],
@@ -1145,13 +1151,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'list\') async list(path: string | undefined, signal: AbortSignal): Promise<DirectoryListing>',
-        description: 'List one directory level for a Remote caller\'s in-app browser.',
-        parameters: [{ name: 'path', description: 'absolute directory to list; absent lists the home directory.' }, { name: 'signal', description: 'caller lifetime; abort stops the backend\'s scan instead of letting it outlive a disconnected caller.' }],
+        description: 'List one directory level for a Remote caller\'s in-app browser.\n\nA scoped caller browses only its own tree: an absent path opens at a root the caller owns rather than the shared host home, a path outside those roots is refused before anything is scanned, and the returned ancestry is cut at the root so the trail cannot be walked back above it.',
+        parameters: [{ name: 'path', description: 'absolute directory to list; absent lists the caller\'s own root.' }, { name: 'signal', description: 'caller lifetime; abort stops the backend\'s scan instead of letting it outlive a disconnected caller.' }],
         returns: 'the level\'s listing with its ancestry.',
       },
       {
         signature: '@Remote(\'createDirectory\') async createDirectory(path: string, name: string): Promise<string>',
-        description: 'Create one child directory for a Remote caller\'s in-app browser.',
+        description: 'Create one child directory for a Remote caller\'s in-app browser.\n\nThe created path is checked as well as the parent: a wire can name a parent its caller does not own, and `mkdir` runs as the host process.',
         parameters: [{ name: 'path', description: 'absolute existing parent directory.' }, { name: 'name', description: 'single non-blank path segment.' }],
         returns: 'the created directory\'s absolute path.',
       },
@@ -2737,7 +2743,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['RemoteError when the path is invalid, the query is cancelled, or native discovery fails.'],
       },
       {
-        signature: '@Remote(\'rename\') rename(request: SessionRenameRequest): Promise<SessionRenameValue>',
+        signature: '@Remote(\'rename\') async rename(request: SessionRenameRequest): Promise<SessionRenameValue>',
         description: 'Rename one Session after explicitly resuming it.',
         parameters: [{ name: 'request', description: 'Session identity and proposed title.' }],
         returns: 'the accepted title and durable event sequence.',
@@ -2749,31 +2755,55 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the new Session identity.',
       },
       {
+        signature: '@Remote(\'handoff\') async handoff(request: SessionHandoffRequest, signal: AbortSignal): Promise<SessionHandoffValue>',
+        description: 'Continue one Session in a new one holding only its condensed history, and archive the source.',
+        parameters: [{ name: 'request', description: 'the Session to continue elsewhere.' }, { name: 'signal', description: 'cancels the summarization, not the Session it produces.' }],
+        returns: 'the new Session identity and whether its source was archived.',
+      },
+      {
         signature: '@Remote(\'prompt\') async prompt(request: SessionPromptRequest, signal: AbortSignal): Promise<SessionPromptValue>',
         description: 'Admit one prompt after explicitly resuming its Session.',
         parameters: [{ name: 'request', description: 'Session identity, prompt content, source metadata, and delivery mode.' }, { name: 'signal', description: 'caller cancellation before prompt admission begins.' }],
         returns: 'acknowledgement that the Agent accepted the prompt.',
       },
       {
-        signature: '@Remote(\'attachment\') attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue>',
+        signature: '@Remote(\'attachment\') async attachment(request: SessionAttachmentRequest): Promise<SessionAttachmentValue>',
         description: 'Read one image from the attachment store after gateway authorization.',
         parameters: [{ name: 'request', description: 'image reference and gateway permission scope; Session existence is not checked.' }],
         returns: 'the durable attachment reference and base64-encoded bytes.',
       },
       {
-        signature: '@Remote(\'updateQueue\') updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>',
+        signature: 'async downloadAttachment( request: SessionAttachmentDownloadRequest, signal: AbortSignal, maySee?: PathVisibility, ): Promise<SessionAttachmentDownload>',
+        description: 'Open one attachment proven reachable from the addressed Session log, for the authenticated byte route to stream back to the browser. Not a Remote: its value carries live bytes, which only the in-process route can consume.',
+        parameters: [{ name: 'request', description: 'Session and attachment identities used for authorization.' }, { name: 'signal', description: 'cancels the read while the response body is still streaming.' }, { name: 'maySee', description: 'the caller\'s visibility, or undefined when unconstrained.' }],
+        returns: 'the display name, media type, and exact byte stream.',
+      },
+      {
+        signature: '@Remote(\'updateQueue\') async updateQueue(request: SessionUpdateQueueRequest): Promise<SessionUpdateQueueValue>',
         description: 'Mutate one still-pending queue occurrence, resuming a cold Agent first.',
         parameters: [{ name: 'request', description: 'Session, queue item, and requested mutation.' }],
         returns: 'acknowledgement that the queue mutation was applied.',
       },
       {
-        signature: '@Remote(\'cancel\') cancel(request: SessionCancelRequest): SessionCancelValue',
+        signature: '@Remote(\'composerDraft\') async composerDraft(request: SessionComposerDraftRequest): Promise<SessionComposerDraftValue>',
+        description: 'Read the composer draft one Session last stored. A draft is reader input, not Session history: it never enters the log, and it survives a restart in its own storage domain so an unsent prompt is not lost with the process.',
+        parameters: [{ name: 'request', description: 'Session whose draft is read.' }],
+        returns: 'the stored draft text, empty when nothing is stored.',
+      },
+      {
+        signature: '@Remote(\'setComposerDraft\') async setComposerDraft(request: SessionSetComposerDraftRequest): Promise<void>',
+        description: 'Store the composer draft of one Session. Writing an empty draft clears the record, so a sent prompt leaves nothing behind.',
+        parameters: [{ name: 'request', description: 'Session and its complete draft text.' }],
+        returns: 'completion after durability, or after a logged no-op when the deployment mounts no storage.',
+      },
+      {
+        signature: '@Remote(\'cancel\') async cancel(request: SessionCancelRequest): Promise<SessionCancelValue>',
         description: 'Cancel one active Agent turn without dropping its pending inbox.',
         parameters: [{ name: 'request', description: 'Session whose active Agent turn is cancelled.' }],
         returns: 'acknowledgement that cancellation was requested.',
       },
       {
-        signature: '@Remote events(request: SessionPageRequest, signal: AbortSignal): Promise<SessionEventsPage>',
+        signature: '@Remote async events(request: SessionPageRequest, signal: AbortSignal): Promise<SessionEventsPage>',
         description: 'Read one cold-safe, message-aligned Session history page.',
         parameters: [{ name: 'request', description: 'durable address, optional fixed cut, backward cursor, and page budget.' }, { name: 'signal', description: 'cancellation for persistence reads.' }],
         returns: 'one chronological page with its inclusive cursor.',
@@ -2791,7 +2821,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'readiness followed by one projection change frame per committed event.',
       },
       {
-        signature: '@Remote state(request: SessionStateRequest, signal: AbortSignal): Promise<SessionState>',
+        signature: '@Remote async state(request: SessionStateRequest, signal: AbortSignal): Promise<SessionState>',
         description: 'Read passive Session state.',
         parameters: [{ name: 'request', description: 'target Session.' }, { name: 'signal', description: 'read cancellation.' }],
         returns: 'current passive state.',
@@ -2803,7 +2833,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'complete passive state replacements.',
       },
       {
-        signature: '@Remote wait(request: SessionWaitRequest, signal: AbortSignal): Promise<SessionWaitValue>',
+        signature: '@Remote async wait(request: SessionWaitRequest, signal: AbortSignal): Promise<SessionWaitValue>',
         description: 'Wait for Session quiescence or pending input with bounded assistant output.',
         parameters: [{ name: 'request', description: 'Session, wait bounds and output window.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'stopping state and bounded assistant output.',
@@ -2815,7 +2845,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a complete opening snapshot followed by gap-free durable event frames and optional cursorless assistant-stream frames.',
       },
       {
-        signature: '@Remote(\'projections\') projections(request: SessionProjectionsRequest, signal: AbortSignal): Promise<SessionProjectionsValue>',
+        signature: '@Remote(\'projections\') async projections(request: SessionProjectionsRequest, signal: AbortSignal): Promise<SessionProjectionsValue>',
         description: 'Read exact projections, returning cached hints only when migration is required.',
         parameters: [{ name: 'request', description: 'Session whose current values are required.' }, { name: 'signal', description: 'cancellation for the Session read.' }],
         returns: 'a sequenced baseline, cached hints when migration is deferred, or null when absent.',
@@ -2909,6 +2939,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
         returns: 'one snapshot per stored session.',
+      },
+      {
+        signature: 'release(id: SessionId): void',
+        description: 'Drop any decoded log this instance retains for one session.\n\nA backend may memoize a decoded log — the largest per-session cost this layer has — so that a repeat read skips decoding it. Releasing gives that back for a session the caller has put away, at the price of decoding again on the next read. Open handles are untouched: they own their own state, and a session being written or read right now keeps it.\n\nThe default retains nothing, so a backend that memoizes nothing has nothing to implement; one that memoizes must override this or it will hold a log the caller believes it gave back.',
+        parameters: [{ name: 'id', description: 'the session whose retained decode should be dropped.' }],
       },
     ],
   },
@@ -3032,6 +3067,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Observe one exact live or prepared Session without a persistence listing preflight.',
         parameters: [{ name: 'sessionId', description: 'logical Session identity.' }, { name: 'options', description: 'cancellation and projection selection for this read.' }],
         returns: 'a caller-owned observation lease.',
+      },
+      {
+        signature: 'releaseSession(sessionId: SessionId): boolean',
+        description: 'Drop one Session\'s retained cold preparation, if it has one.\n\nThe observation cache is what keeps a Session this process has only read resident — one fully materialized event graph per prepared id — so this is how a caller that has put a Session away stops paying for it. The next observation re-reads persistence, which is a latency cost and not a correctness one. An entry an active lease still holds is left to that lease, so a Session being read right now is never dropped mid-read.',
+        parameters: [{ name: 'sessionId', description: 'Session whose retained preparation should be dropped.' }],
+        returns: 'whether a retained preparation was dropped.',
       },
       {
         signature: 'abstract searchSessions( request: SessionSearchRequest, exec?: SessionSearchExecContext, ): Promise<SessionSearchPage<SessionSearchHit>>',
@@ -3211,6 +3252,66 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Create an independent live session from an exact prefix of a live source. `boundary` is an inclusive source event seq; omitted means the source\'s current last event. An open tail receives synthetic tool results and step/turn closers with the forked cause. Closed steps and turns remain unchanged, including any failed tool calls already missing results. `inheritedEventCount` counts only copied source events, excluding these closers.',
         parameters: [{ name: 'source', description: 'Live source session object or id.' }, { name: 'boundary', description: 'Inclusive source event seq to fork through; omitted means the source\'s current last event, and omitted on an empty source forks an empty child.' }, { name: 'childSessionId', description: 'Optional child session id; omitted delegates to `SessionStore`\'s id policy.' }],
         returns: 'The created live child session.',
+      },
+    ],
+  },
+  {
+    key: 'sessionScope',
+    summary: 'Resolve proxy-asserted identities to the filesystem roots they own.',
+    description: 'Resolve proxy-asserted identities to the filesystem roots they own.\n\nOne instance serves the whole process. It holds no per-request state beyond the Peer-to-identity map Connection fills in as it admits requests.',
+    methods: [
+      {
+        signature: 'identityFromHeaders(headers: IdentityHeaders): string | undefined',
+        description: 'Read the asserted identity from one request\'s headers.',
+        parameters: [{ name: 'headers', description: 'node request headers or a Fetch `Headers` bag.' }],
+        returns: 'the normalized identity, or undefined when the header is absent or empty.',
+      },
+      {
+        signature: 'remember(peer: PeerScope, identity: string): void',
+        description: 'Record which identity a Peer was admitted as.',
+        parameters: [{ name: 'peer', description: 'Peer Connection minted for this identity.' }, { name: 'identity', description: 'normalized identity the Peer speaks for.' }],
+      },
+      {
+        signature: 'scopeOfPeer(peer: PeerScope | undefined): ResolvedScope | undefined',
+        description: 'Resolve the scope of the Peer behind a Remote call.',
+        parameters: [{ name: 'peer', description: 'Peer from `this.ctx.invocation.peer`, or undefined outside a Remote call.' }],
+        returns: 'the caller\'s scope, or undefined when no policy constrains this caller.',
+      },
+      {
+        signature: 'identityOfPeer(peer: PeerScope | undefined): string | undefined',
+        description: 'The identity one Peer was admitted as.',
+        parameters: [{ name: 'peer', description: 'Peer taken from the carrier or `this.ctx.invocation.peer`.' }],
+        returns: 'the normalized identity, or undefined when this Peer was not admitted as one.',
+      },
+      {
+        signature: 'scopeFor(identity: string | undefined): ResolvedScope | undefined',
+        description: 'Resolve one identity\'s scope, memoized.',
+        parameters: [{ name: 'identity', description: 'normalized identity.' }],
+        returns: 'the scope, or undefined when the deployment has no policy for it.',
+      },
+      {
+        signature: 'rootsOfPeer(peer: PeerScope | undefined): readonly string[] | undefined',
+        description: 'The directory roots the Peer behind a Remote call owns.',
+        parameters: [{ name: 'peer', description: 'Peer from `this.ctx.invocation.peer`.' }],
+        returns: 'the roots this caller may reach, or undefined when nothing constrains them — an administrator, or a deployment that names nobody.',
+      },
+      {
+        signature: 'mayAccess(peer: PeerScope | undefined, path: string): boolean',
+        description: 'Decide whether the Peer behind a Remote call may see one path.',
+        parameters: [{ name: 'peer', description: 'Peer from `this.ctx.invocation.peer`.' }, { name: 'path', description: 'absolute `cwd` of a session or workspace.' }],
+        returns: 'true when the path is visible to this caller.',
+      },
+      {
+        signature: 'visiblePaths(peer: PeerScope | undefined, paths: readonly string[]): string[]',
+        description: 'Keep only the paths the Peer behind a Remote call may see.',
+        parameters: [{ name: 'peer', description: 'Peer from `this.ctx.invocation.peer`.' }, { name: 'paths', description: 'candidate absolute paths.' }],
+        returns: 'the visible subset, in input order.',
+      },
+      {
+        signature: 'ensureRoot(identity: string | undefined): string | undefined',
+        description: 'Create the root minted for a first-time identity, once.\n\nOnly an identity whose scope carries a `provisionRoot` is minted; an explicit or administrative identity already has somewhere to work.',
+        parameters: [{ name: 'identity', description: 'normalized identity.' }],
+        returns: 'the created (or already existing) root, or undefined when nothing is minted.',
       },
     ],
   },
@@ -4551,7 +4652,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote({ mode: \'stream\' }) async *follow(signal: AbortSignal): AsyncIterable<WorkspaceFollowFrame>',
-        description: 'Stream a complete Workspace baseline followed by ordered increments. A non-owner receives only the Workspaces and Sessions `allows()` admits. When a delivered Workspace is no longer admitted at its next change or the next order change, the stream sends a `replace` frame with the complete filtered state instead of a `remove`, because a Client never resurrects a removed Workspace; a `remove` frame reports a deletion and reaches only a Client that received that Workspace.',
+        description: 'Stream a complete Workspace baseline followed by ordered increments. A scoped caller receives only the Workspaces inside the directories it owns, and a non-owner receives only what `allows()` admits. When a delivered Workspace is no longer admitted at its next change or the next order change, the stream sends a `replace` frame with the complete filtered state instead of a `remove`, because a Client never resurrects a removed Workspace; a `remove` frame reports a deletion and reaches only a Client that received that Workspace.',
         parameters: [{ name: 'signal', description: 'generation cancellation.' }],
         returns: 'baseline followed by ordered Workspace increments.',
       },
@@ -5388,6 +5489,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'request', description: 'the session about to be archived.' }, { name: 'next', description: 'delegate to the remaining providers.' }],
   },
   {
+    name: 'workspace/session-archived',
+    mode: 'emit',
+    signature: '\'workspace/session-archived\'(sessionId: SessionId): void',
+    summary: 'One session was archived durably.',
+    description: 'One session was archived durably.\n\nArchiving is a registry flag, not a lifecycle: this registry never touches a session\'s log or its Agent, and the session stays readable. The announcement exists so whoever owns those resources can give them back, which is what makes archiving a way to stop paying for a session rather than only a way to hide it. A listener must therefore tolerate the session being read or resumed again immediately afterwards.\n\nIt follows both the durable write and any `stopActivity` request, so a listener that releases an Agent never races a stop that is still settling that same session.',
+    parameters: [{ name: 'sessionId', description: 'the archived session.' }],
+  },
+  {
     name: 'workspace/session-stop',
     mode: 'parallel',
     signature: '\'workspace/session-stop\'(request: SessionActivityRequest): Promise<void> | void',
@@ -5933,7 +6042,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionFetchRoute',
-    declaration: 'export interface ConnectionFetchRoute {\n    readonly path: string;\n    readonly methods: readonly ConnectionFetchMethod[];\n    readonly requestBody: ConnectionRequestBodyMode;\n    readonly fetch: (request: Request) => Promise<Response>;\n}',
+    declaration: 'export interface ConnectionFetchRoute {\n    readonly path: string;\n    readonly methods: readonly ConnectionFetchMethod[];\n    readonly requestBody: ConnectionRequestBodyMode;\n    readonly fetch: (request: Request, peer: PeerScope) => Promise<Response>;\n}',
   },
   {
     name: 'ConnectionIndexRequest',
@@ -6660,6 +6769,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface HostConnectionRpc {\n    handle(channel: string, handler: ConnectionRpcHandler): () => Promise<void>;\n    intercept(channel: \'/api\', matches: ConnectionRpcEndpointMatcher, handler: ConnectionRpcHandler): () => Promise<void>;\n}',
   },
   {
+    name: 'IdentityHeaders',
+    declaration: 'export type IdentityHeaders = Headers | Readonly<Record<string, string | readonly string[] | undefined>>;',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -6944,6 +7057,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface LlmModelContext {\n    contextWindow: number;\n}',
   },
   {
+    name: 'LlmModelCost',
+    declaration: 'export interface LlmModelCost {\n    input: number;\n    output: number;\n    cacheRead?: number;\n    cacheWrite?: number;\n    peak?: LlmModelCostPeak;\n}',
+  },
+  {
+    name: 'LlmModelCostPeak',
+    declaration: 'export interface LlmModelCostPeak {\n    readonly multiplier: number;\n    readonly windows: readonly LlmModelCostPeakWindow[];\n}',
+  },
+  {
+    name: 'LlmModelCostPeakWindow',
+    declaration: 'export interface LlmModelCostPeakWindow {\n    readonly days: readonly LlmModelCostWeekday[];\n    readonly start: string;\n    readonly end: string;\n}',
+  },
+  {
+    name: 'LlmModelCostWeekday',
+    declaration: 'export type LlmModelCostWeekday = \'mon\' | \'tue\' | \'wed\' | \'thu\' | \'fri\' | \'sat\' | \'sun\';',
+  },
+  {
     name: 'LlmModelDiscoveryRequest',
     declaration: 'export interface LlmModelDiscoveryRequest {\n    provider?: string;\n    baseURL?: string;\n    api?: string;\n    apiKey?: string;\n}',
   },
@@ -6977,11 +7106,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'LlmResolvedModelInfo',
-    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    systemPromptUpdate?: SystemPromptUpdate;\n    toolUpdate?: ToolUpdate;\n}',
+    declaration: 'export interface LlmResolvedModelInfo extends LlmModelInfo {\n    context?: LlmModelContext;\n    defaultMaxTokens?: number;\n    reasoning?: LlmModelReasoningInfo;\n    cost?: LlmModelCost;\n    systemPromptUpdate?: SystemPromptUpdate;\n    toolUpdate?: ToolUpdate;\n}',
   },
   {
     name: 'LlmRuntime',
-    declaration: 'export class LlmRuntime extends TypertRemoteService {\n    constructor(ctx: Context);\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    @Remote\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    @Remote\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    @Remote(\'discoverModels\')\n    async remoteDiscoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined;\n    imageRequestTarget(provider: string, model: string, image: ImageAttachmentRef): ImageRequestTarget;\n    fileRequestText(ref: FileAttachmentRef): string;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortSignal): Promise<LlmCallConfig>;\n    async prepareCall(conf /* …truncated — full shape in source */',
+    declaration: 'export class LlmRuntime extends TypertRemoteService {\n    static Config: z<Config>;\n    constructor(ctx: Context, public config: Config = {});\n    registerAdapter(providers: string[], adapter: LlmAdapter): AdapterRegistrationHandle;\n    @Remote\n    listProviders(): LlmProviderInfo[];\n    registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): DirectoryRegistrationHandle;\n    @Remote\n    listConfigurableProviders(): LlmConfigurableProvider[];\n    registerModelDiscovery(settingsNs: string, discover: (request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<readonly LlmDiscoveredModel[]>): () => void;\n    async discoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    @Remote(\'discoverModels\')\n    async remoteDiscoverModels(settingsNs: string, request: LlmModelDiscoveryRequest, signal: AbortSignal): Promise<LlmDiscoveredModel[]>;\n    providerRetryPolicy(provider: string): ResolvedRetryPolicy;\n    imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined;\n    imageRequestTarget(provider: string, model: string, image: ImageAttachmentRef): ImageRequestTarget;\n    fileRequestText(ref: FileAttachmentRef): string;\n    async listModels(provider: string): Promise<LlmModelInfo[]>;\n    async resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<LlmResolvedModelInfo>;\n    async resolveCallConfig(config: LlmCallConfig, signal?: AbortS /* …truncated — full shape in source */',
   },
   {
     name: 'LocalAtInput',
@@ -7249,7 +7378,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelCatalogModel',
-    declaration: 'export interface ModelCatalogModel {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n    readonly reasoning?: ModelReasoning;\n    readonly badge?: LlmModelBadge;\n}',
+    declaration: 'export interface ModelCatalogModel {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n    readonly reasoning?: ModelReasoning;\n    readonly cost?: LlmModelCost;\n    readonly badge?: LlmModelBadge;\n}',
   },
   {
     name: 'ModelMessageSource',
@@ -7406,6 +7535,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PatchHunk',
     declaration: 'export interface PatchHunk {\n    lineNumber: number;\n    context?: string;\n    oldLines: string[];\n    newLines: string[];\n    isEndOfFile: boolean;\n}',
+  },
+  {
+    name: 'PathVisibility',
+    declaration: 'export type PathVisibility = (path: string | undefined) => boolean;',
   },
   {
     name: 'PeerAdmission',
@@ -7908,6 +8041,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type RequestHeaderReason = \'initial\' | \'resume\' | \'change\' | \'series\';',
   },
   {
+    name: 'RequestIdentityResolver',
+    declaration: 'export interface RequestIdentityResolver {\n    identityFromHeaders(headers: ConnectionTrustRequest[\'headers\']): string | undefined;\n    readonly requiresIdentity: boolean;\n    remember(peer: PeerScope, identity: string): void;\n}',
+  },
+  {
     name: 'RequestImageAttachment',
     declaration: 'export interface RequestImageAttachment {\n    variantId: ImageVariantId;\n    attachment: ImageAttachmentRef;\n    data: Uint8Array;\n    mediaType: ImageMediaType;\n    bytes: number;\n    width: number;\n    height: number;\n    depth: \'uchar\';\n    space: \'srgb\';\n    hasAlpha: boolean;\n}',
   },
@@ -7942,6 +8079,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResolvedRetryPolicy',
     declaration: 'export type ResolvedRetryPolicy = ResolvedNormalRetryPolicy | ResolvedAlwaysRetryPolicy;',
+  },
+  {
+    name: 'ResolvedScope',
+    declaration: 'export interface ResolvedScope {\n    readonly identity: string;\n    readonly admin: boolean;\n    readonly roots: readonly string[];\n    readonly provisionRoot?: string;\n}',
   },
   {
     name: 'ResolvedSubagentStartRequest',
@@ -8228,6 +8369,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type SessionAssistantStreamFrame = {\n    readonly type: \'start\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly startedAfterSeq: SessionSeqCursor;\n    readonly turn: number;\n    readonly step: number;\n} | {\n    readonly type: \'chunk\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly index: number;\n    readonly time: number;\n    readonly chunk: JsonValue;\n} | {\n    readonly type: \'end\';\n    readonly attemptId: LlmAttemptId;\n    readonly revision: number;\n    readonly index: number;\n    readonly outcome: {\n        readonly kind: \'committed\';\n        readonly eventType: \'assistant/message\' | \'assistant/attempt\';\n        readonly seq: number;\n    } | {\n        readonly kind: \'abandoned\';\n    };\n};',
   },
   {
+    name: 'SessionAttachmentDownload',
+    declaration: 'export interface SessionAttachmentDownload {\n    readonly name: string;\n    readonly mediaType: string | undefined;\n    readonly length: number;\n    readonly bytes: AsyncIterable<Uint8Array>;\n}',
+  },
+  {
+    name: 'SessionAttachmentDownloadRequest',
+    declaration: 'export interface SessionAttachmentDownloadRequest {\n    readonly sessionId: SessionId;\n    readonly attachmentId: AttachmentIdType;\n}',
+  },
+  {
     name: 'SessionAttachmentRequest',
     declaration: 'export interface SessionAttachmentRequest {\n    readonly sessionId: SessionId;\n    readonly attachment: ImageAttachmentRef;\n}',
   },
@@ -8254,6 +8403,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionChangeRequestsListener',
     declaration: 'export type SessionChangeRequestsListener = (changeRequests: readonly SessionChangeRequest[]) => void;',
+  },
+  {
+    name: 'SessionComposerDraftRequest',
+    declaration: 'export interface SessionComposerDraftRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionComposerDraftValue',
+    declaration: 'export interface SessionComposerDraftValue {\n    readonly text: string;\n}',
   },
   {
     name: 'SessionControlBaseline',
@@ -8410,6 +8567,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHandleReadResult',
     declaration: 'export interface SessionHandleReadResult {\n    readonly eventState: SessionSeedEventState;\n    readonly events: readonly SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionHandoffRequest',
+    declaration: 'export interface SessionHandoffRequest {\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'SessionHandoffValue',
+    declaration: 'export interface SessionHandoffValue {\n    readonly sessionId: SessionId;\n    readonly archived: boolean;\n}',
   },
   {
     name: 'SessionHeader',
@@ -8698,6 +8863,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionSeqCursor',
     declaration: 'export type SessionSeqCursor = SessionSeq | -1;',
+  },
+  {
+    name: 'SessionSetComposerDraftRequest',
+    declaration: 'export interface SessionSetComposerDraftRequest {\n    readonly sessionId: SessionId;\n    readonly text: string;\n}',
   },
   {
     name: 'SessionStartInput',
