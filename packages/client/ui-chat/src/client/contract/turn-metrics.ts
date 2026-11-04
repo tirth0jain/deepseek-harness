@@ -12,9 +12,10 @@ export interface TurnMetrics {
   tokensPerSecond?: number
   /**
    * Throughput over the decode window (first token → final message) of steps
-   * that recorded one. Live-only: the window rides `firstTokenTime`, observed
-   * from stream deltas and never persisted, so restored Turns fall back to the
-   * span-based {@link tokensPerSecond} alone.
+   * that recorded one. The window rides `firstTokenTime`, observed from live
+   * stream deltas and never persisted, so this fold produces it only for
+   * Turns this client streamed; the turn tail memoizes the live reading in
+   * the browser and rehydrates it on restore (see `decode-memo.ts`).
    */
   decodeTokensPerSecond?: number
 }
@@ -84,12 +85,12 @@ interface TurnFold {
  *
  * The span is used rather than the narrower first-token-to-final window
  * because only the span survives a reload: `firstTokenTime` is observed from
- * live stream deltas, and the session format persists no timing, so a
- * decode-window rate would disappear for every restored Turn. The span also
- * excludes the tool execution between steps, which is not generation time.
- * The decode-window rate is still folded as a live-only companion
- * (`decodeTokensPerSecond`) from the steps that carry a first-token time; it
- * simply drops out once the Turn is restored from disk.
+ * live stream deltas, and the session format persists no timing, so the fold
+ * itself yields a decode-window rate only for Turns streamed by this client.
+ * The span also excludes the tool execution between steps, which is not
+ * generation time. The decode-window rate is still folded as a companion
+ * (`decodeTokensPerSecond`) from the steps that carry a first-token time; the
+ * turn tail memoizes it in the browser so a reloaded page can show it again.
  * @param nodes - Snapshot nodes of the loaded window.
  * @returns Turn number → available metrics; turns with none are absent.
  */

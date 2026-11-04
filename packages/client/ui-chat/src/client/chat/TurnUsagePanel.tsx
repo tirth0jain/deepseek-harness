@@ -32,7 +32,7 @@ export interface TurnTimePanelProps {
   runMs: number
   /** Turn throughput, a pill segment and dialog row when known. */
   tokensPerSecond?: number | undefined
-  /** Decode-window throughput (first token → final message); live-only, so restored Turns omit it. */
+  /** Decode-window throughput (first token → final message); restored Turns show it when this browser memoized the live reading. */
   decodeTokensPerSecond?: number | undefined
   /** Turn first-step TTFT in ms, a dialog row when known. */
   ttftMs?: number | undefined
