@@ -125,6 +125,9 @@
     },
     {
       "path": "../../core/tool-executor-ptc"
+    },
+    {
+      "path": "../ui-context-menu"
     }
   ],
   "exclude": [

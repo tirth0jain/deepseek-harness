@@ -51,8 +51,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
   nodeKey, groupPart, useChatNode, useChatNodeProcess, usePresentation,
   cwd, openFile, inspectCall, forkAt,
   loadImage, attachmentDownloadUrl, fileMentions, costOf, useStore, actions, renderSlot, t,
-  useChatNodeBottom, deferCollapse, useGroupAction,
-}: ChatNodeSeatProps) {
+  useChatNodeBottom, deferCollapse, useGroupAction,}: ChatNodeSeatProps) {
   const bottom = useChatNodeBottom(nodeKey)
   const node = useChatNode(nodeKey)
   const routedNode = node as ChatNode | undefined
@@ -145,8 +144,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       turnProcess,
     }, [
     node, groupPart, cwd, openFile, inspectCall, forkAt,
-    loadImage, attachmentDownloadUrl, fileMentions, costOf, turnProcess,
-  ])
+    loadImage, attachmentDownloadUrl, fileMentions, costOf, turnProcess,  ])
   if (routedNode === undefined || owner === null) return null
   // Runtime dispatch owns the correlation: every Node's discriminant is the
   // keyed-slot entry passed alongside that same Node. TypeScript does not

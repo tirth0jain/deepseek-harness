@@ -869,7 +869,7 @@ describe('Client Typert API', () => {
     const ctx = await bench(call)
     const agentCtx = ctx.extend({ fixtureId: 'agent-2' }) as FixtureContext
     ctx.typert.contexts.registerClient('fixture', {
-      identity: candidate => (candidate as Context & { fixtureId?: string }).fixtureId,
+      identity: candidate => 'fixtureId' in candidate ? (candidate as Context & { fixtureId?: string }).fixtureId : undefined,
       resolve: id => id === 'agent-2' ? agentCtx : undefined,
     })
     const assembly = ctx.plugin(Object.assign(
@@ -900,7 +900,7 @@ describe('Client Typert API', () => {
     const ctx = await bench(call)
     const agentCtx = ctx.extend({ fixtureId: 'agent-2' }) as FixtureContext
     ctx.typert.contexts.registerClient('fixture', {
-      identity: candidate => (candidate as Context & { fixtureId?: string }).fixtureId,
+      identity: candidate => 'fixtureId' in candidate ? (candidate as Context & { fixtureId?: string }).fixtureId : undefined,
       resolve: id => id === 'agent-2' ? agentCtx : undefined,
     })
     const assembly = ctx.plugin(Object.assign(
@@ -946,7 +946,7 @@ describe('Client Typert API', () => {
     const ctx = await bench(call)
     const agentCtx = ctx.extend({ fixtureId: 'agent-remounted' }) as FixtureContext
     ctx.typert.contexts.registerClient('fixture', {
-      identity: candidate => (candidate as Context & { fixtureId?: string }).fixtureId,
+      identity: candidate => 'fixtureId' in candidate ? (candidate as Context & { fixtureId?: string }).fixtureId : undefined,
       resolve: id => id === 'agent-remounted' ? agentCtx : undefined,
     })
     const direct = directDescriptor()
