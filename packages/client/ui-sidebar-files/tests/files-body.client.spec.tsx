@@ -198,6 +198,7 @@ describe('FilesBody', () => {
     await act(() => script.watches.ready(ROOT))
     await act(() => script.settle({ ok: true, value: ROOT_LEVEL }))
     const save = view.container.querySelector(`[data-files-path="${ROOT}/README.md"] [data-files-download]`)!
+    console.log('DEBUG tail:', view.container.querySelector(`[data-files-path="${ROOT}/README.md"]`)?.outerHTML?.slice(-300))
     expect(save.tagName).toBe('A')
     expect(save.getAttribute('download')).toBe('README.md')
     expect(save.getAttribute('aria-label')).toBe(zh['entry.download'].replace('{name}', 'README.md'))

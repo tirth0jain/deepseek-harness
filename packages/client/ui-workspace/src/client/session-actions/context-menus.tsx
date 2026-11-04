@@ -15,8 +15,10 @@ type Actions = Omit<PinSessionInjected & ArchiveSessionInjected, 'hooks'>
  * Register built-in actions while retaining the legacy Slot for external components.
  * @param ctx - workspace plugin context owning menus, access, membership, and locale.
  * @param actions - shared row and dialog callbacks; execution always uses the captured Session.
+ * @param sessionList - the sessions list store, for the handoff row's running fact; omitted
+ *   compositions (minimal test benches) read every row idle.
  */
-export function registerSessionMenus(ctx: Context, actions: Actions): void {
+export function registerSessionMenus(ctx: Context, actions: Actions, sessionList?: ISessions['list']): void {
   const t = ctx.locale.bind('workspace')
   const register = (
     id: string,
@@ -60,17 +62,18 @@ export function registerSessionMenus(ctx: Context, actions: Actions): void {
   // continues" rather than "the conversation goes away". A running Session
   // offers the row disabled: the compaction backend only runs for an idle
   // Agent, so a live click would fail after the fact. The running fact rides
-  // the sessions list store, so it joins `observe` alongside the access gate.
-  const sessionList = (ctx.get('sessions') as ISessions).list
+  // the sessions list store, so it joins `observe` alongside the access gate;
+  // a composition without the store reads every row idle.
   ctx.effect(() => ctx.contextMenus.register({
     id: 'session.handoff', target: 'session', order: 350,
     observe: ({ sessionId }) => [
-      ctx.workspaces.list, ctx.locale, sessionList,
+      ctx.workspaces.list, ctx.locale,
+      ...(sessionList === undefined ? [] : [sessionList]),
       ctx.remoteAccess.source('session', sessionId, 'session/handoff'),
     ],
     resolve: (target) => {
       if (!allowed(target, 'session/handoff')) return []
-      const running = sessionList.getSnapshot().byId[target.sessionId]?.running ?? false
+      const running = sessionList?.getSnapshot().byId[target.sessionId]?.running ?? false
       return [{
         id: 'handoff', label: t('menu.handoff'), icon: { key: 'workspace.handoff' }, disabled: running,
         run: () => { actions.handoffSession(target.sessionId) },

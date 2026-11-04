@@ -376,14 +376,18 @@ describe('ui-workspace apply', () => {
       const menu = b.ctx.contextMenus.resolve(target)
       return menu.source.getSnapshot().map(item => ({ id: item.id, disabled: item.disabled }))
     }
-    // Idle: the row sits between fork (300) and copy-ID (450).
+    // Idle: the row sits between fork (300) and copy-ID (450). Item ids carry
+    // their registration's id as the `registration/item` pair.
     b.setSessions(sessionState([summary(sessionId, 1)]))
-    expect(items().map(item => item.id)).toEqual(['pin', 'rename', 'fork', 'handoff', 'copy', 'archive'])
-    expect(items().find(item => item.id === 'handoff')?.disabled).toBe(false)
+    expect(items().map(item => item.id)).toEqual([
+      'session.pin/pin', 'session.rename/rename', 'session.fork/fork',
+      'session.handoff/handoff', 'session.id/copy', 'session.archive/archive',
+    ])
+    expect(items().find(item => item.id === 'session.handoff/handoff')?.disabled).toBe(false)
     // Running: the compaction backend only runs for an idle Agent, so the
     // row reads disabled rather than letting the click fail after the fact.
     b.setSessions(sessionState([{ ...summary(sessionId, 1), running: true }]))
-    expect(items().find(item => item.id === 'handoff')?.disabled).toBe(true)
+    expect(items().find(item => item.id === 'session.handoff/handoff')?.disabled).toBe(true)
   })
 
   it.each([true, false])('copies an ID directly without loading its Session (clipboard accepted: %s)', async (accepted) => {
@@ -734,7 +738,9 @@ describe('ui-workspace apply', () => {
     const notice = faceOf(entry(b.slots, 'shell.overlay', 'handoff-notice')) as HandoffNoticeInjected
     expect(notice.hooks.handoffFailures.getSnapshot()).toEqual([])
     handoffSession.mockRejectedValueOnce(new Error('no compaction backend'))
-    menu.select('session.handoff/handoff')
+    // A resolved menu occurrence selects once; a second action re-resolves.
+    b.ctx.contextMenus.resolve({ kind: 'session', value: { sessionId: 'session' as never, displayTitle: '' } })
+      .select('session.handoff/handoff')
     await vi.waitFor(() => { expect(notice.hooks.handoffFailures.getSnapshot()).toHaveLength(1) })
     const failure = notice.hooks.handoffFailures.getSnapshot()[0]!
     expect(failure.message).toBe('no compaction backend')

@@ -47,6 +47,7 @@ it('preserves built-in order, groups, icons, command identities, and captured ac
     ['session.pin/pin', 'Pin session', true, undefined, undefined, undefined],
     ['session.rename/rename', 'Rename', true, 'session.rename', undefined, undefined],
     ['session.fork/fork', 'Fork session', true, 'session.fork', undefined, undefined],
+    ['session.handoff/handoff', 'Continue in a new chat (condense this one)', true, undefined, undefined, undefined],
     ['session.id/copy', 'Copy Session ID', true, undefined, true, undefined],
     ['session.archive/archive', 'Archive session', true, 'session.archive', true, true],
   ])
@@ -80,13 +81,13 @@ it('reacts to permission and locale updates, prevents withdrawn actions, and dis
   b.access('session/fork').set(false)
   b.access('workspace/archiveSession').set(false)
   b.access('workspace/pinSession').set(false)
-  expect(menu.source.getSnapshot().map(item => item.id)).toEqual(['session.id/copy'])
+  expect(menu.source.getSnapshot().map(item => item.id)).toEqual(['session.handoff/handoff', 'session.id/copy'])
   menu.select('session.rename/rename')
   expect(b.actions.requestSessionRename).not.toHaveBeenCalled()
   b.locale.setLocale('zh')
-  expect(menu.source.getSnapshot()[0]?.label).toBe('复制 Session ID')
+  expect(menu.source.getSnapshot().find(item => item.id === 'session.id/copy')?.label).toBe('复制 Session ID')
   b.access('session/rename').set(true)
-  expect(menu.source.getSnapshot()[0]?.label).toBe('重命名')
+  expect(menu.source.getSnapshot().find(item => item.id === 'session.rename/rename')?.label).toBe('重命名')
   await b.fiber.dispose()
   expect(menu.source.getSnapshot()).toEqual([])
   b.access('session/rename').set(false)
