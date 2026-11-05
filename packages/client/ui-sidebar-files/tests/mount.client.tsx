@@ -17,6 +17,7 @@ import { contextMenuHook, makeTranslate } from '@deepseek-ai/dsh-client-test-run
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SidebarRightTabActions, SidebarRightTabInfo } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
 import { TreeFixture } from './tree-fixture.client.tsx'
+import type { Accessory } from './tree-fixture.client.tsx'
 import type { FileTreeInput } from '../src/client/FileTree.tsx'
 import type { FactoryComponentPropsOf } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PaneId, TabId } from '@deepseek-ai/dsh-client-ui-dockkit'

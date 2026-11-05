@@ -26,6 +26,7 @@ const standard: Omit<NoticeProps, 'useHandoffFailures' | 'dismissHandoffFailure'
   useSessions: unusedHook, useSessionStatus: unusedHook, useSessionRetainInfo: unusedHook, usePanelInfo: unusedHook,
   useWorkspaces: unusedHook, useResource: unusedHook,
   useRemoteAccess: unusedHook, useSessionAccess: unusedHook, useWorkspaceAccess: unusedHook,
+  useContextMenu: unusedHook,
 }
 
 /** The refusal the Host actually throws, through the wrapper the client throws. */
